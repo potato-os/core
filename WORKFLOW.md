@@ -22,11 +22,15 @@ This is the single source of truth for how we plan, execute, and close work.
 1. Create an issue (succinct and outcome-focused).
 2. Add labels (`type:*` + `area:*`).
 3. Add issue to the `Potato OS` project and set `Status=Todo`.
-4. Move to `In Progress` when coding starts.
-5. Open PR linked to the issue.
-6. Move to `In Review` when PR is ready.
-7. Merge PR (squash preferred).
-8. Close issue and set project item to `Done`.
+4. Assign issue owner before any branch work starts.
+5. Create branch from `main` using:
+   - `feat/issue-<id>-<short-slug>` for features
+   - `fix/issue-<id>-<short-slug>` for bugs
+6. Move issue to `In Progress` once branch is created.
+7. Open PR linked to the issue.
+8. Move to `In Review` when PR is ready.
+9. Merge PR (squash preferred).
+10. Close issue and set project item to `Done`.
 
 ## Ticket Quality Standard (Required)
 
@@ -45,6 +49,25 @@ All feature tickets are implemented TDD-first:
 2. Implement minimal code to pass.
 3. Refactor with tests green.
 4. Include test commands/output in PR description.
+5. Keep commit history readable:
+   - tests-first commit (or clearly isolated test diff),
+   - implementation commit,
+   - docs/runbook updates commit.
+
+## PR Readiness Checklist
+
+Before moving `In Progress` -> `In Review`, PR description must include:
+- `Closes #<issue-id>` (or equivalent linked issue statement)
+- status/risk notes and rollback guidance
+- exact commands run
+- summarized test output for unit/API/UI layers touched
+- any workflow/runbook changes made from lessons learned
+
+## Post-Merge Closeout
+
+- verify the project item moved to `Done`
+- verify issue is closed by merge
+- capture any process improvements in `WORKFLOW.md` in the same change set (when applicable)
 
 ## Starter Issue Template
 
