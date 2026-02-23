@@ -240,6 +240,21 @@ def test_chat_ui_supports_theme_system_prompt_setting_and_enter_to_send():
     assert "!event.shiftKey" in CHAT_HTML
 
 
+def test_chat_ui_seed_mode_settings_contract():
+    assert 'id="generationMode"' in CHAT_HTML
+    assert '<option value="random">Random</option>' in CHAT_HTML
+    assert '<option value="deterministic">Deterministic</option>' in CHAT_HTML
+    assert 'id="seed"' in CHAT_HTML
+    assert "generation_mode: \"random\"" in CHAT_HTML
+    assert "seed: 42" in CHAT_HTML
+    assert "function normalizeGenerationMode(" in CHAT_HTML
+    assert "function normalizeSeedValue(" in CHAT_HTML
+    assert "function updateSeedFieldState(" in CHAT_HTML
+    assert "function resolveSeedForRequest(" in CHAT_HTML
+    assert "seedField.disabled = generationMode !== \"deterministic\";" in CHAT_HTML
+    assert "reqBody.seed = resolvedSeed;" in CHAT_HTML
+
+
 def test_chat_ui_keeps_theme_toggle_clear_of_status_badge():
     assert ".chat-header {" in CHAT_HTML
     assert "padding: 2px 6px;" in CHAT_HTML

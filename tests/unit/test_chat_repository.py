@@ -147,6 +147,22 @@ def test_fake_content_uses_random_choice_for_reply(monkeypatch: pytest.MonkeyPat
     assert "RANDOM_POTATO_REPLY" in content
 
 
+def test_fake_content_is_deterministic_when_seed_is_provided(monkeypatch: pytest.MonkeyPatch):
+    def _random_choice_should_not_run(_items):
+        raise AssertionError("global random.choice should not be used for seeded fake replies")
+
+    monkeypatch.setattr(chat_repository.random, "choice", _random_choice_should_not_run)
+    payload = {
+        "seed": 42,
+        "messages": [{"role": "user", "content": "same prompt every time"}],
+    }
+
+    first = chat_repository._fake_content(payload)
+    second = chat_repository._fake_content(payload)
+
+    assert first == second
+
+
 def test_fake_default_timing_targets_about_five_tokens_per_second(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("POTATO_TEST_MODE", raising=False)
     monkeypatch.delenv("POTATO_FAKE_PREFILL_DELAY_MS", raising=False)

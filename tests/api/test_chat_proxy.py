@@ -113,6 +113,65 @@ def test_chat_proxies_multimodal_payload_when_ready(client, runtime, monkeypatch
     )
 
 
+def test_chat_proxies_seed_when_present(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    request_payload = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "hello"}],
+        "seed": 42,
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                },
+            )
+        )
+
+        response = client.post("/v1/chat/completions", json=request_payload)
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert forwarded["seed"] == 42
+
+
+def test_chat_does_not_force_seed_when_absent(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    request_payload = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-2",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                },
+            )
+        )
+
+        response = client.post("/v1/chat/completions", json=request_payload)
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert "seed" not in forwarded
+
+
 async def _healthy_true(_runtime):
     return True
 

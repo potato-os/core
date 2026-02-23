@@ -207,12 +207,25 @@ def _fake_content(payload: dict[str, Any]) -> str:
     last_user = _extract_last_user_text(payload)
     if not last_user:
         last_user = "hello from the starch dimension"
-    reply = random.choice(FAKE_PARODY_REPLIES)
+    seed = _coerce_seed(payload.get("seed"))
+    if seed is None:
+        reply = random.choice(FAKE_PARODY_REPLIES)
+    else:
+        reply = random.Random(seed).choice(FAKE_PARODY_REPLIES)
     return (
         "[fake-llama.cpp] "
         f"{reply} "
         f"Last user message (dramatically reenacted): {last_user}"
     )
+
+
+def _coerce_seed(raw_seed: Any) -> int | None:
+    try:
+        if raw_seed is None:
+            return None
+        return int(raw_seed)
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_last_user_text(payload: dict[str, Any]) -> str:

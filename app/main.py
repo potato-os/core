@@ -1758,6 +1758,15 @@ CHAT_HTML = """<!doctype html>
               <option value="false">false</option>
             </select>
           </label>
+          <label>Generation Mode
+            <select id="generationMode">
+              <option value="random">Random</option>
+              <option value="deterministic">Deterministic</option>
+            </select>
+          </label>
+          <label>Seed
+            <input id="seed" type="number" step="1">
+          </label>
           <label>Temperature
             <input id="temperature" type="number" step="0.1" min="0" max="2">
           </label>
@@ -1843,6 +1852,8 @@ CHAT_HTML = """<!doctype html>
       presence_penalty: 1.5,
       max_tokens: 16384,
       stream: true,
+      generation_mode: "random",
+      seed: 42,
       theme: "dark",
       system_prompt: "",
     };
@@ -1891,7 +1902,12 @@ CHAT_HTML = """<!doctype html>
       const raw = localStorage.getItem(settingsKey);
       if (!raw) return { ...defaultSettings };
       try {
-        return { ...defaultSettings, ...JSON.parse(raw) };
+        const parsed = { ...defaultSettings, ...JSON.parse(raw) };
+        return {
+          ...parsed,
+          generation_mode: normalizeGenerationMode(parsed.generation_mode),
+          seed: normalizeSeedValue(parsed.seed, defaultSettings.seed),
+        };
       } catch (_err) {
         return { ...defaultSettings };
       }
@@ -1904,6 +1920,30 @@ CHAT_HTML = """<!doctype html>
     function parseNumber(id, fallback) {
       const parsed = Number(document.getElementById(id).value);
       return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    function normalizeGenerationMode(rawMode) {
+      return rawMode === "deterministic" ? "deterministic" : "random";
+    }
+
+    function normalizeSeedValue(rawSeed, fallback = defaultSettings.seed) {
+      const parsed = Number(rawSeed);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.trunc(parsed);
+    }
+
+    function updateSeedFieldState(generationMode) {
+      const seedField = document.getElementById("seed");
+      if (!seedField) return;
+      seedField.disabled = generationMode !== "deterministic";
+    }
+
+    function resolveSeedForRequest(settings) {
+      const mode = normalizeGenerationMode(settings?.generation_mode);
+      if (mode !== "deterministic") {
+        return null;
+      }
+      return normalizeSeedValue(settings?.seed, defaultSettings.seed);
     }
 
     function formatBytes(rawBytes) {
@@ -2096,6 +2136,8 @@ CHAT_HTML = """<!doctype html>
     }
 
     function collectSettings() {
+      const generationMode = normalizeGenerationMode(document.getElementById("generationMode").value);
+      const seed = normalizeSeedValue(document.getElementById("seed").value, defaultSettings.seed);
       return {
         temperature: parseNumber("temperature", defaultSettings.temperature),
         top_p: parseNumber("top_p", defaultSettings.top_p),
@@ -2104,6 +2146,8 @@ CHAT_HTML = """<!doctype html>
         presence_penalty: parseNumber("presence_penalty", defaultSettings.presence_penalty),
         max_tokens: parseNumber("max_tokens", defaultSettings.max_tokens),
         stream: document.getElementById("stream").value === "true",
+        generation_mode: generationMode,
+        seed,
         theme: document.documentElement.getAttribute("data-theme") || defaultSettings.theme,
         system_prompt: document.getElementById("systemPrompt").value.trim(),
       };
@@ -2412,6 +2456,8 @@ CHAT_HTML = """<!doctype html>
 
     function bindSettings() {
       const settings = loadSettings();
+      const normalizedGenerationMode = normalizeGenerationMode(settings.generation_mode);
+      const normalizedSeed = normalizeSeedValue(settings.seed, defaultSettings.seed);
 
       document.getElementById("temperature").value = String(settings.temperature);
       document.getElementById("top_p").value = String(settings.top_p);
@@ -2420,12 +2466,20 @@ CHAT_HTML = """<!doctype html>
       document.getElementById("presence_penalty").value = String(settings.presence_penalty);
       document.getElementById("max_tokens").value = String(settings.max_tokens);
       document.getElementById("stream").value = String(settings.stream);
+      document.getElementById("generationMode").value = normalizedGenerationMode;
+      document.getElementById("seed").value = String(normalizedSeed);
       document.getElementById("systemPrompt").value = settings.system_prompt;
+      updateSeedFieldState(normalizedGenerationMode);
 
       applyTheme(settings.theme);
 
       document.querySelectorAll("details input, details select, details textarea").forEach((el) => {
         el.addEventListener("change", persistSettingsFromInputs);
+      });
+      document.getElementById("generationMode").addEventListener("change", (event) => {
+        const generationMode = normalizeGenerationMode(event.target?.value);
+        updateSeedFieldState(generationMode);
+        persistSettingsFromInputs();
       });
     }
 
@@ -3141,6 +3195,10 @@ CHAT_HTML = """<!doctype html>
           max_tokens: settings.max_tokens,
           stream: settings.stream,
         };
+        const resolvedSeed = resolveSeedForRequest(settings);
+        if (resolvedSeed !== null) {
+          reqBody.seed = resolvedSeed;
+        }
 
         if (settings.system_prompt) {
           reqBody.messages.push({ role: "system", content: settings.system_prompt });
