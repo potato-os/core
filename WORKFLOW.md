@@ -63,13 +63,13 @@ Before moving `In Progress` -> `In Review`, PR description must include:
 - summarized test output for unit/API/UI layers touched
 - any workflow/runbook changes made from lessons learned
 
-## Real Pi Manual QA (Required For Pi-Impacting Work)
+## Real Pi By-Hand QA (Required For Pi-Impacting Work)
 
-If a ticket changes runtime behavior on device (API behavior, model orchestration, install scripts, nginx/systemd, or UI behavior tied to live backend), PRs must include manual QA on a real Pi performed by the human tester (project owner).
+If a ticket changes runtime behavior on device (API behavior, model orchestration, install scripts, nginx/systemd, or UI behavior tied to live backend), PRs must include by-hand QA on a real Pi.
 
-- Manual QA is the gate: do not move to `In Review` until manual QA is completed, unless explicitly labeled `blocked`.
+- By-hand QA is the gate: do not move to `In Review` until by-hand QA is completed, unless explicitly labeled `blocked`.
 - PR description must include:
-  - who performed manual QA,
+  - who performed by-hand QA,
   - device/host used (prefer `potato.local`; avoid personal IPs in docs/PR text),
   - short scenario list and pass/fail result.
 - Automated Pi scripts are supporting evidence only (optional but recommended), for example:
