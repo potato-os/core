@@ -776,6 +776,10 @@ CHAT_HTML = """<!doctype html>
       --shadow: 0 18px 45px rgba(19, 37, 74, 0.11);
       --shadow-soft: 0 8px 26px rgba(19, 37, 74, 0.08);
       --focus: #2f7cf6;
+      --metric-normal: #142033;
+      --metric-warn: #b57d00;
+      --metric-high: #d95e00;
+      --metric-critical: #c81e1e;
     }
 
     :root[data-theme="dark"] {
@@ -797,6 +801,10 @@ CHAT_HTML = """<!doctype html>
       --shadow: 0 20px 48px rgba(0, 0, 0, 0.38);
       --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.24);
       --focus: #69adff;
+      --metric-normal: #f8fbff;
+      --metric-warn: #ffd86b;
+      --metric-high: #ffb067;
+      --metric-critical: #ff7f7f;
     }
 
     * { box-sizing: border-box; }
@@ -953,6 +961,23 @@ CHAT_HTML = """<!doctype html>
 
     .runtime-details[hidden] {
       display: none;
+    }
+
+    .runtime-metric-normal {
+      color: var(--metric-normal);
+    }
+
+    .runtime-metric-warn {
+      color: var(--metric-warn);
+    }
+
+    .runtime-metric-high {
+      color: var(--metric-high);
+    }
+
+    .runtime-metric-critical {
+      color: var(--metric-critical);
+      font-weight: 680;
     }
 
     .download-prompt {
@@ -1766,7 +1791,7 @@ CHAT_HTML = """<!doctype html>
         <div class="header-actions">
           <span id="statusBadge" class="badge offline">
             <span id="statusDot" class="indicator-dot offline" aria-hidden="true"></span>
-            <span id="statusLabel">DISCONNECTED</span>
+            <span id="statusLabel">DISCONNECTED:Local Model</span>
           </span>
           <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch theme">
             <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1853,6 +1878,14 @@ CHAT_HTML = """<!doctype html>
     const IMAGE_SAFE_MAX_BYTES = 140 * 1024;
     const IMAGE_MAX_DIMENSION = 896;
     const IMAGE_MAX_PIXEL_COUNT = IMAGE_MAX_DIMENSION * IMAGE_MAX_DIMENSION;
+    const CPU_CLOCK_MAX_HZ_PI5 = 2_400_000_000;
+    const GPU_CLOCK_MAX_HZ_PI5 = 1_000_000_000;
+    const RUNTIME_METRIC_SEVERITY_CLASSES = [
+      "runtime-metric-normal",
+      "runtime-metric-warn",
+      "runtime-metric-high",
+      "runtime-metric-critical",
+    ];
 
     function loadSettings() {
       const raw = localStorage.getItem(settingsKey);
@@ -1899,6 +1932,36 @@ CHAT_HTML = """<!doctype html>
       const hz = Number(rawHz);
       if (!Number.isFinite(hz) || hz <= 0) return "--";
       return `${Math.round(hz / 1_000_000)} MHz`;
+    }
+
+    function normalizePercent(rawValue) {
+      const value = Number(rawValue);
+      if (!Number.isFinite(value)) return Number.NaN;
+      return Math.min(100, Math.max(0, value));
+    }
+
+    function percentFromRatio(rawCurrent, rawMax) {
+      const current = Number(rawCurrent);
+      const max = Number(rawMax);
+      if (!Number.isFinite(current) || !Number.isFinite(max) || current < 0 || max <= 0) {
+        return Number.NaN;
+      }
+      return normalizePercent((current / max) * 100);
+    }
+
+    function runtimeMetricSeverityClass(rawPercent) {
+      const percent = normalizePercent(rawPercent);
+      if (!Number.isFinite(percent)) return "runtime-metric-normal";
+      if (percent >= 90) return "runtime-metric-critical";
+      if (percent >= 75) return "runtime-metric-high";
+      if (percent >= 60) return "runtime-metric-warn";
+      return "runtime-metric-normal";
+    }
+
+    function applyRuntimeMetricSeverity(element, rawPercent) {
+      if (!element) return;
+      element.classList.remove(...RUNTIME_METRIC_SEVERITY_CLASSES);
+      element.classList.add(runtimeMetricSeverityClass(rawPercent));
     }
 
     function formatCountdownSeconds(rawSeconds) {
@@ -2046,6 +2109,18 @@ CHAT_HTML = """<!doctype html>
       };
     }
 
+    function focusPromptInput(options = {}) {
+      const prompt = document.getElementById("userPrompt");
+      if (!prompt) return;
+      const preventScroll = options.preventScroll !== false;
+      prompt.focus({ preventScroll });
+      if (options.moveCaretToEnd === false) return;
+      const cursor = prompt.value.length;
+      if (typeof prompt.setSelectionRange === "function") {
+        prompt.setSelectionRange(cursor, cursor);
+      }
+    }
+
     function cancelPendingImageWork() {
       pendingImageToken += 1;
       if (pendingImageReader) {
@@ -2093,6 +2168,7 @@ CHAT_HTML = """<!doctype html>
         setComposerActivity("");
         hideComposerStatusChip();
         setCancelEnabled(false);
+        focusPromptInput();
         return;
       }
       if (!String(file.type || "").startsWith("image/")) {
@@ -2101,6 +2177,7 @@ CHAT_HTML = """<!doctype html>
         setComposerActivity("");
         hideComposerStatusChip();
         setCancelEnabled(false);
+        focusPromptInput();
         return;
       }
 
@@ -2134,6 +2211,7 @@ CHAT_HTML = """<!doctype html>
           setComposerActivity("");
           hideComposerStatusChip();
           setCancelEnabled(false);
+          focusPromptInput();
           return;
         }
 
@@ -2147,6 +2225,7 @@ CHAT_HTML = """<!doctype html>
           setComposerActivity("");
           hideComposerStatusChip();
           setCancelEnabled(false);
+          focusPromptInput();
           return;
         }
 
@@ -2193,6 +2272,7 @@ CHAT_HTML = """<!doctype html>
         setComposerActivity("");
         hideComposerStatusChip();
         setCancelEnabled(false);
+        focusPromptInput();
       };
       reader.onerror = () => {
         if (selectionToken !== pendingImageToken) {
@@ -2204,6 +2284,7 @@ CHAT_HTML = """<!doctype html>
         setComposerActivity("");
         hideComposerStatusChip();
         setCancelEnabled(false);
+        focusPromptInput();
       };
       reader.onabort = () => {
         if (selectionToken !== pendingImageToken) {
@@ -2214,6 +2295,7 @@ CHAT_HTML = """<!doctype html>
         setComposerActivity("Image load cancelled.");
         hideComposerStatusChip();
         setCancelEnabled(false);
+        focusPromptInput();
       };
       reader.readAsDataURL(file);
     }
@@ -2666,11 +2748,11 @@ CHAT_HTML = """<!doctype html>
       if (isHealthy) {
         badge.classList.add("online");
         dot.classList.add("online");
-        label.textContent = "CONNECTED";
+        label.textContent = "CONNECTED:Local Model";
       } else {
         badge.classList.add("offline");
         dot.classList.add("offline");
-        label.textContent = "DISCONNECTED";
+        label.textContent = "DISCONNECTED:Local Model";
       }
     }
 
@@ -2711,8 +2793,12 @@ CHAT_HTML = """<!doctype html>
       runtimeDetailsExpanded = Boolean(expanded);
       const details = document.getElementById("runtimeDetails");
       const toggle = document.getElementById("runtimeViewToggle");
+      const compact = document.getElementById("runtimeCompact");
       if (details) {
         details.hidden = !runtimeDetailsExpanded;
+      }
+      if (compact) {
+        compact.hidden = runtimeDetailsExpanded;
       }
       if (toggle) {
         toggle.textContent = runtimeDetailsExpanded ? "Show compact" : "Show details";
@@ -2748,6 +2834,11 @@ CHAT_HTML = """<!doctype html>
         if (throttleDetail) throttleDetail.textContent = "Throttling: --";
         if (throttleHistoryDetail) throttleHistoryDetail.textContent = "Throttling history: --";
         if (updatedDetail) updatedDetail.textContent = "Updated: --";
+        applyRuntimeMetricSeverity(cpuClockDetail, Number.NaN);
+        applyRuntimeMetricSeverity(memoryDetail, Number.NaN);
+        applyRuntimeMetricSeverity(swapDetail, Number.NaN);
+        applyRuntimeMetricSeverity(tempDetail, Number.NaN);
+        applyRuntimeMetricSeverity(gpuDetail, Number.NaN);
         return;
       }
 
@@ -2771,15 +2862,18 @@ CHAT_HTML = """<!doctype html>
       if (cpuDetail) cpuDetail.textContent = `CPU total: ${cpuTotal}`;
       if (coresDetail) coresDetail.textContent = `CPU cores: ${coresText}`;
       if (cpuClockDetail) cpuClockDetail.textContent = `CPU clock: ${cpuClock}`;
+      applyRuntimeMetricSeverity(cpuClockDetail, percentFromRatio(systemPayload?.cpu_clock_arm_hz, CPU_CLOCK_MAX_HZ_PI5));
 
       const memUsed = formatBytes(systemPayload?.memory_used_bytes);
       const memTotal = formatBytes(systemPayload?.memory_total_bytes);
       const memPercent = formatPercent(systemPayload?.memory_percent, 0);
       if (memoryDetail) memoryDetail.textContent = `Memory: ${memUsed} / ${memTotal} (${memPercent})`;
+      applyRuntimeMetricSeverity(memoryDetail, systemPayload?.memory_percent);
 
       const swapUsed = formatBytes(systemPayload?.swap_used_bytes);
       const swapTotal = formatBytes(systemPayload?.swap_total_bytes);
       if (swapDetail) swapDetail.textContent = `Swap: ${swapUsed} / ${swapTotal} (${swapPercent})`;
+      applyRuntimeMetricSeverity(swapDetail, systemPayload?.swap_percent);
 
       const tempRaw = systemPayload?.temperature_c;
       const tempValue = typeof tempRaw === "number" ? tempRaw : Number.NaN;
@@ -2788,8 +2882,14 @@ CHAT_HTML = """<!doctype html>
           ? `Temperature: ${tempValue.toFixed(1)}°C`
           : "Temperature: --";
       }
+      applyRuntimeMetricSeverity(tempDetail, tempValue);
 
       if (gpuDetail) gpuDetail.textContent = `GPU clock: core ${gpuCore}, v3d ${gpuV3d}`;
+      const gpuPeakHz = Math.max(
+        Number(systemPayload?.gpu_clock_core_hz) || 0,
+        Number(systemPayload?.gpu_clock_v3d_hz) || 0,
+      );
+      applyRuntimeMetricSeverity(gpuDetail, percentFromRatio(gpuPeakHz, GPU_CLOCK_MAX_HZ_PI5));
 
       const currentFlags = Array.isArray(systemPayload?.throttling?.current_flags)
         ? systemPayload.throttling.current_flags
@@ -3024,6 +3124,7 @@ CHAT_HTML = """<!doctype html>
       });
       userPrompt.value = "";
       clearPendingImage();
+      focusPromptInput();
       requestInFlight = true;
       setSendEnabled();
       setCancelEnabled(true);
@@ -3190,6 +3291,7 @@ CHAT_HTML = """<!doctype html>
         stopPrefillProgress();
         setComposerActivity("");
         setCancelEnabled(false);
+        focusPromptInput();
       }
     }
 
