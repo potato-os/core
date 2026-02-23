@@ -25,4 +25,4 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run unit and API tests
-        run: pytest -q tests/unit tests/api
+        run: python -m pytest -q tests/unit tests/api
