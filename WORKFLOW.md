@@ -63,15 +63,18 @@ Before moving `In Progress` -> `In Review`, PR description must include:
 - summarized test output for unit/API/UI layers touched
 - any workflow/runbook changes made from lessons learned
 
-## Real Pi Validation (Required For Pi-Impacting Work)
+## Real Pi Manual QA (Required For Pi-Impacting Work)
 
-If a ticket changes runtime behavior on device (API behavior, model orchestration, install scripts, nginx/systemd, or UI behavior tied to live backend), PRs must include at least one real-device E2E run.
+If a ticket changes runtime behavior on device (API behavior, model orchestration, install scripts, nginx/systemd, or UI behavior tied to live backend), PRs must include manual QA on a real Pi performed by the human tester (project owner).
 
-- Run E2E against device host with `PI_HOST` (prefer mDNS such as `potato.local`; avoid hardcoding personal IPs in docs/PR text).
-- Include command + result summary in PR:
+- Manual QA is the gate: do not move to `In Review` until manual QA is completed, unless explicitly labeled `blocked`.
+- PR description must include:
+  - who performed manual QA,
+  - device/host used (prefer `potato.local`; avoid personal IPs in docs/PR text),
+  - short scenario list and pass/fail result.
+- Automated Pi scripts are supporting evidence only (optional but recommended), for example:
   - `./tests/e2e/smoke_pi.sh`
-  - and ticket-specific E2E script (example: `./tests/e2e/seed_mode_pi.sh` for seed mode)
-- Do not mark `In Review` until real-device evidence is attached, unless explicitly labeled `blocked`.
+  - `./tests/e2e/seed_mode_pi.sh`
 
 ## Post-Merge Closeout
 
