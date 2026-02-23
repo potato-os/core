@@ -5,6 +5,7 @@ Potato OS provides a Raspberry Pi-hosted chat UI and OpenAI-compatible front doo
 ## Project workflow
 
 GitHub Project board: <https://github.com/users/slomin/projects/8>
+Detailed process guide: [`WORKFLOW.md`](WORKFLOW.md)
 
 We use a simple flow for issues and PRs:
 - `Todo`: ready to start
