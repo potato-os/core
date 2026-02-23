@@ -66,6 +66,18 @@ def test_stream_chat_script_validates_sse_done_and_chunk_object():
     assert "timings.predicted_per_second" in script
 
 
+def test_seed_mode_pi_script_validates_deterministic_seed_behavior():
+    script = Path("tests/e2e/seed_mode_pi.sh").read_text(encoding="utf-8")
+
+    assert "Seed deterministic check passed on" in script
+    assert "/v1/chat/completions" in script
+    assert "seed: ($seed | tonumber)" in script
+    assert "Deterministic outputs diverged for seed" in script
+    assert "random output:" in script
+    assert "PI_HOST_MDNS" in script
+    assert "potato.local" in script
+
+
 def test_install_script_uses_reference_llama_bundle_sync():
     script = Path("bin/install_dev.sh").read_text(encoding="utf-8")
 
