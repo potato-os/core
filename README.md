@@ -2,6 +2,24 @@
 
 Potato OS provides a Raspberry Pi-hosted chat UI and OpenAI-compatible front door.
 
+## Project workflow
+
+GitHub Project board: <https://github.com/users/slomin/projects/8>
+
+We use a simple flow for issues and PRs:
+- `Todo`: ready to start
+- `In Progress`: actively being worked
+- `In Review`: waiting for review/validation
+- `Done`: completed and merged
+
+Working rules:
+- Open an issue for each meaningful change.
+- Link both issue and PR to the `Potato OS` project.
+- Keep the status updated as work moves.
+- Use labels for fast triage: `type:feature`, `type:bug`, `type:chore`.
+- Use area labels for ownership: `area:ui`, `area:backend`, `area:pi-image`, `area:ops`.
+- Use `blocked` when progress is externally blocked.
+
 ## Local dev
 
 ```bash
