@@ -44,6 +44,17 @@ PRs should include:
 - test evidence (`pytest` output and any `smoke_pi.sh` result),
 - linked issue/task when available.
 
+## Branching Strategy
+Use a lightweight branch model (not GitFlow):
+- `main` is always releasable; avoid direct pushes.
+- Create short-lived branches from `main`:
+  - `feat/<short-name>` for features
+  - `fix/<short-name>` for bug fixes
+  - `chore/<short-name>` for maintenance/docs/tooling
+- Keep PRs focused and small; prefer squash merge into `main`.
+- For urgent production fixes, create `fix/<urgent-name>` from latest `main`, validate quickly, and merge as priority.
+- After merge, delete the branch locally/remotely to keep branch list clean.
+
 ## Security & Configuration Notes
 Never commit secrets, SSH private keys, or device-specific credentials. Keep credentials in environment variables and confirm `.gitignore` excludes local-only artifacts.
 For Raspberry Pi Imager, always use the generated `.rpi-imager-manifest` file (Pi 5-only tag `pi5-64bit`), not internal metadata files like `METADATA.json` or `potato-*-build-info.json`.
