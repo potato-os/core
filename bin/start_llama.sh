@@ -7,9 +7,10 @@ LLAMA_RUNTIME_DIR="${POTATO_LLAMA_RUNTIME_DIR:-${POTATO_BASE_DIR}/llama}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-${LLAMA_RUNTIME_DIR}/bin/llama-server}"
 LLAMA_HOST="${POTATO_LLAMA_HOST:-0.0.0.0}"
 LLAMA_PORT="${POTATO_LLAMA_PORT:-8080}"
-CTX_SIZE="${POTATO_CTX_SIZE:-16384}"
+CTX_SIZE="${POTATO_CTX_SIZE:-4096}"
 LLAMA_PARALLEL="${POTATO_LLAMA_PARALLEL:-1}"
 SLOT_SAVE_PATH="${POTATO_SLOT_SAVE_PATH:-${POTATO_BASE_DIR}/state/llama-slots}"
+CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-0}"
 
 MMPROJ_PATH="${POTATO_MMPROJ_PATH:-}"
 AUTO_DOWNLOAD_MMPROJ="${POTATO_AUTO_DOWNLOAD_MMPROJ:-1}"
@@ -20,6 +21,7 @@ CACHE_TYPE_V="${POTATO_CACHE_TYPE_V:-q8_0}"
 KV_FLAGS="${POTATO_LLAMA_KV_FLAGS:-}"
 ENABLE_FLASH_ATTN="${POTATO_LLAMA_FLASH_ATTN:-1}"
 USE_JINJA="${POTATO_LLAMA_JINJA:-1}"
+DISABLE_WARMUP="${POTATO_LLAMA_NO_WARMUP:-1}"
 EXTRA_FLAGS="${POTATO_LLAMA_EXTRA_FLAGS:-}"
 
 die() {
@@ -127,6 +129,9 @@ fi
 if [ "${ENABLE_FLASH_ATTN}" = "1" ]; then
   extra_args+=(--flash-attn on)
 fi
+if [ "${DISABLE_WARMUP}" = "1" ]; then
+  extra_args+=(--no-warmup)
+fi
 if [ -n "${EXTRA_FLAGS}" ]; then
   # shellcheck disable=SC2206
   split_extra=(${EXTRA_FLAGS})
@@ -139,6 +144,7 @@ exec "${LLAMA_SERVER_BIN}" \
   --host "${LLAMA_HOST}" \
   --port "${LLAMA_PORT}" \
   --ctx-size "${CTX_SIZE}" \
+  --cache-ram "${CACHE_RAM_MIB}" \
   --parallel "${LLAMA_PARALLEL}" \
   --slot-save-path "${SLOT_SAVE_PATH}" \
   "${kv_args[@]}" \

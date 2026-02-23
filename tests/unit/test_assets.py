@@ -9,8 +9,12 @@ def test_start_llama_contains_required_flags():
     script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
 
     assert "--ctx-size" in script
-    assert "16384" in script
+    assert 'CTX_SIZE="${POTATO_CTX_SIZE:-4096}"' in script
+    assert 'CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-0}"' in script
+    assert "--cache-ram" in script
     assert "--jinja" in script
+    assert "--no-warmup" in script
+    assert 'DISABLE_WARMUP="${POTATO_LLAMA_NO_WARMUP:-1}"' in script
     assert "--slot-save-path" in script
 
 
@@ -52,6 +56,22 @@ def test_smoke_script_retries_connection_refused():
 
     assert "--retry-connrefused" in script
     assert "--retry-all-errors" in script
+    assert "Syncing repository to Pi (excluding local heavy artifacts)..." in script
+    assert "--exclude 'models/'" in script
+    assert "--exclude 'node_modules/'" in script
+    assert "--exclude 'output/'" in script
+    assert 'PI_SSH_OPTIONS="${PI_SSH_OPTIONS:--o StrictHostKeyChecking=accept-new}"' in script
+    assert 'RSYNC_PROGRESS="${RSYNC_PROGRESS:-1}"' in script
+    assert "if rsync --help 2>/dev/null | grep -q -- '--info='" in script
+    assert 'rsync_progress_flags+=(--info=progress2)' in script
+    assert 'rsync_progress_flags+=(--progress)' in script
+    assert 'log_stage "[wait ${wait_pct}%] attempt ${attempt}/${WAIT_ATTEMPTS}, elapsed ${elapsed}s:' in script
+    assert 'SHOW_REMOTE_DIAGNOSTICS="${SHOW_REMOTE_DIAGNOSTICS:-1}"' in script
+    assert "Collecting remote diagnostics..." in script
+    assert "Smoke checks completed for" in script
+    assert '-e "ssh ${PI_SSH_OPTIONS}"' in script
+    assert 'read -r -a SSH_OPTION_ARGS <<< "${PI_SSH_OPTIONS}"' in script
+    assert 'ssh "${SSH_OPTION_ARGS[@]}"' in script
 
 
 def test_stream_chat_script_validates_sse_done_and_chunk_object():
@@ -181,6 +201,51 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "except subprocess.CalledProcessError as exc" in uv_script
     assert "--setup-docker" in uv_script
     assert 'run(["brew", "install", "docker", "colima"])' in uv_script
+
+
+def test_manual_qa_scripts_exist_for_fake_and_real_flows():
+    fake_script = Path("fake_manual_qa").read_text(encoding="utf-8")
+    real_script = Path("real_manual_qa").read_text(encoding="utf-8")
+    lite_script = Path("lite_real_manual_qa").read_text(encoding="utf-8")
+
+    assert "POTATO_CHAT_BACKEND=fake" in fake_script
+    assert "POTATO_ALLOW_FAKE_FALLBACK=1" in fake_script
+    assert "uvicorn app.main:app" in fake_script
+    assert 'HOST="${POTATO_QA_HOST:-127.0.0.1}"' in fake_script
+    assert 'URL="http://${HOST}:${PORT}"' in fake_script
+    assert "Stopping existing process(es) on port" in fake_script
+    assert "Press Ctrl+C to stop the server." in fake_script
+    assert "open_url" in fake_script
+
+    assert "tests/e2e/smoke_pi.sh" in real_script
+    assert "potato.local" in real_script
+    assert 'PI_USER="${PI_USER:-pi}"' in real_script
+    assert 'PI_PASSWORD="${PI_PASSWORD:-raspberry}"' in real_script
+    assert 'MEMORY_PREFLIGHT="${POTATO_QA_MEMORY_PREFLIGHT:-1}"' in real_script
+    assert 'SWAP_RECLAIM="${POTATO_QA_SWAP_RECLAIM:-0}"' in real_script
+    assert "run_memory_preflight" in real_script
+    assert "drop caches + safe swap reset" in real_script
+    assert "/sbin/swapon -a || swapon -a || true" in real_script
+    assert "systemd-zram-setup@zram0.service" in real_script
+    assert "POTATO_QA_RESET_SSH_HOST_KEYS" in real_script
+    assert "Resetting stale SSH host keys for QA targets..." in real_script
+    assert "ssh-keygen -R" in real_script
+    assert 'PI_SSH_OPTIONS="${PI_SSH_OPTIONS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR}"' in real_script
+    assert 'PI_SSH_OPTIONS="${PI_SSH_OPTIONS}"' in real_script
+    assert "open_url" in real_script
+
+    assert "Fast real-Pi QA (no apt/install/model sync)" in lite_script
+    assert 'PI_QA_PORT="${PI_QA_PORT:-1984}"' in lite_script
+    assert 'MEMORY_PREFLIGHT="${POTATO_QA_MEMORY_PREFLIGHT:-1}"' in lite_script
+    assert 'SWAP_RECLAIM="${POTATO_QA_SWAP_RECLAIM:-0}"' in lite_script
+    assert "run_memory_preflight" in lite_script
+    assert "drop caches + safe swap reset" in lite_script
+    assert "/sbin/swapon -a || swapon -a || true" in lite_script
+    assert "systemd-zram-setup@zram0.service" in lite_script
+    assert "POTATO_ENABLE_ORCHESTRATOR=0" in lite_script
+    assert "POTATO_LLAMA_BASE_URL=http://127.0.0.1:8080" in lite_script
+    assert "/opt/potato/venv/bin/uvicorn app.main:app" in lite_script
+    assert "open_when_ready" in lite_script
 
 
 def test_image_stage_assets_define_systemd_firstboot_image_flow():

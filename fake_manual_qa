@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOST="${POTATO_QA_HOST:-127.0.0.1}"
+PORT="${POTATO_QA_PORT:-1983}"
+URL="http://${HOST}:${PORT}"
+SKIP_OPEN="${POTATO_SKIP_OPEN:-0}"
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing command: $1" >&2
+    exit 1
+  fi
+}
+
+open_url() {
+  local target_url="$1"
+  if [ "${SKIP_OPEN}" = "1" ]; then
+    echo "POTATO_SKIP_OPEN=1, not opening browser. URL: ${target_url}"
+    return
+  fi
+  if command -v open >/dev/null 2>&1; then
+    open "${target_url}" >/dev/null 2>&1 || true
+    return
+  fi
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "${target_url}" >/dev/null 2>&1 || true
+    return
+  fi
+  echo "No browser opener found. Open this URL manually: ${target_url}"
+}
+
+require_cmd curl
+require_cmd lsof
+
+if [ ! -x "${PROJECT_ROOT}/.venv/bin/python" ]; then
+  echo "Missing local venv at ${PROJECT_ROOT}/.venv. Run:" >&2
+  echo "  python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt" >&2
+  exit 1
+fi
+
+existing_pids="$(lsof -nP -iTCP:${PORT} -sTCP:LISTEN -t | sort -u || true)"
+if [ -n "${existing_pids}" ]; then
+  echo "Stopping existing process(es) on port ${PORT}: ${existing_pids}"
+  printf '%s\n' "${existing_pids}" | xargs -r kill
+  sleep 1
+fi
+
+if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "Port ${PORT} is still busy after stop attempt. Resolve manually and retry." >&2
+  exit 1
+fi
+
+open_when_ready() {
+  for _ in $(seq 1 120); do
+    if curl -fsS --max-time 1 "${URL}/status" >/dev/null 2>&1; then
+      open_url "${URL}"
+      echo "Fake QA environment is ready at ${URL}"
+      return
+    fi
+    sleep 0.25
+  done
+  echo "Server did not become ready at ${URL}" >&2
+}
+
+open_when_ready &
+
+echo "Starting fake backend server with live logs at ${URL}..."
+echo "Press Ctrl+C to stop the server."
+cd "${PROJECT_ROOT}"
+POTATO_ENABLE_ORCHESTRATOR=0 \
+POTATO_CHAT_BACKEND=fake \
+POTATO_ALLOW_FAKE_FALLBACK=1 \
+POTATO_TEST_MODE=1 \
+POTATO_FAKE_PREFILL_DELAY_MS=1800 \
+POTATO_FAKE_STREAM_CHUNK_DELAY_MS=35 \
+  .venv/bin/python -m uvicorn app.main:app --host "${HOST}" --port "${PORT}"

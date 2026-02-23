@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PI_USER="${PI_USER:-pi}"
+PI_PASSWORD="${PI_PASSWORD:-raspberry}"
+PI_HOST_PRIMARY="${PI_HOST_PRIMARY:-potato.local}"
+PI_HOST_FALLBACK="${PI_HOST_FALLBACK:-192.168.1.132}"
+PI_SCHEME="${PI_SCHEME:-http}"
+PI_QA_PORT="${PI_QA_PORT:-1984}"
+SKIP_OPEN="${POTATO_SKIP_OPEN:-0}"
+PI_SSH_OPTIONS="${PI_SSH_OPTIONS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR}"
+REMOTE_QA_ROOT="${REMOTE_QA_ROOT:-/tmp/potato-qa}"
+READY_ATTEMPTS="${READY_ATTEMPTS:-80}"
+READY_SLEEP_SECONDS="${READY_SLEEP_SECONDS:-0.25}"
+MEMORY_PREFLIGHT="${POTATO_QA_MEMORY_PREFLIGHT:-1}"
+SWAP_RECLAIM="${POTATO_QA_SWAP_RECLAIM:-0}"
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing command: $1" >&2
+    exit 1
+  fi
+}
+
+open_url() {
+  local target_url="$1"
+  if [ "${SKIP_OPEN}" = "1" ]; then
+    echo "POTATO_SKIP_OPEN=1, not opening browser. URL: ${target_url}"
+    return
+  fi
+  if command -v open >/dev/null 2>&1; then
+    open "${target_url}" >/dev/null 2>&1 || true
+    return
+  fi
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "${target_url}" >/dev/null 2>&1 || true
+    return
+  fi
+  echo "No browser opener found. Open this URL manually: ${target_url}"
+}
+
+pick_host() {
+  if ping -c 1 -W 1 "${PI_HOST_PRIMARY}" >/dev/null 2>&1; then
+    echo "${PI_HOST_PRIMARY}"
+    return
+  fi
+  if ping -c 1 -W 1 "${PI_HOST_FALLBACK}" >/dev/null 2>&1; then
+    echo "${PI_HOST_FALLBACK}"
+    return
+  fi
+  echo ""
+}
+
+run_memory_preflight() {
+  if [ "${MEMORY_PREFLIGHT}" != "1" ]; then
+    echo "[lite] POTATO_QA_MEMORY_PREFLIGHT=0, skipping Pi memory preflight."
+    return
+  fi
+  echo "[lite] Running Pi memory preflight (drop caches + safe swap reset)..."
+  if [ "${SWAP_RECLAIM}" != "1" ]; then
+    echo "[lite] Swap reclaim disabled (set POTATO_QA_SWAP_RECLAIM=1 to enable swapoff/swapon)."
+  fi
+  SSHPASS="${PI_PASSWORD}" sshpass -e ssh "${SSH_OPTION_ARGS[@]}" "${PI_USER}@${TARGET_HOST}" \
+    "set -euo pipefail; \
+     echo '${PI_PASSWORD}' | sudo -S sh -c '\
+       sync; \
+       echo 3 > /proc/sys/vm/drop_caches; \
+       if [ \"${SWAP_RECLAIM}\" = \"1\" ]; then \
+         mem_available_kb=\$(awk \"\\\$1 == \\\"MemAvailable:\\\" {print \\\$2}\" /proc/meminfo); \
+         swap_total_kb=\$(awk \"\\\$1 == \\\"SwapTotal:\\\" {print \\\$2}\" /proc/meminfo); \
+         swap_free_kb=\$(awk \"\\\$1 == \\\"SwapFree:\\\" {print \\\$2}\" /proc/meminfo); \
+         swap_used_kb=\$((swap_total_kb - swap_free_kb)); \
+         margin_kb=524288; \
+         if [ \"\$swap_used_kb\" -gt 0 ] && [ \"\$mem_available_kb\" -gt \$((swap_used_kb + margin_kb)) ]; then \
+           swapoff -a || true; \
+           /sbin/swapon -a || swapon -a || true; \
+         fi; \
+       fi; \
+       swap_total_after_kb=\$(awk \"\\\$1 == \\\"SwapTotal:\\\" {print \\\$2}\" /proc/meminfo); \
+       if [ \"\$swap_total_after_kb\" -eq 0 ]; then \
+         systemctl restart systemd-zram-setup@zram0.service || true; \
+       fi; \
+       free -h; \
+       grep -E \"MemAvailable|SwapTotal|SwapFree\" /proc/meminfo \
+     '"
+}
+
+require_cmd sshpass
+require_cmd rsync
+require_cmd curl
+require_cmd jq
+require_cmd lsof
+
+TARGET_HOST="$(pick_host)"
+if [ -z "${TARGET_HOST}" ]; then
+  echo "No reachable Pi host found (${PI_HOST_PRIMARY}, ${PI_HOST_FALLBACK})." >&2
+  exit 1
+fi
+
+LOCAL_BASE_URL="http://127.0.0.1:${PI_QA_PORT}"
+echo "[lite] Fast real-Pi QA (no apt/install/model sync). Target host: ${TARGET_HOST}, local URL: ${LOCAL_BASE_URL}"
+
+existing_local_port_pids="$(lsof -nP -iTCP:${PI_QA_PORT} -sTCP:LISTEN -t | sort -u || true)"
+if [ -n "${existing_local_port_pids}" ]; then
+  echo "[lite] Stopping local process(es) already using port ${PI_QA_PORT}: ${existing_local_port_pids}"
+  printf '%s\n' "${existing_local_port_pids}" | xargs -r kill
+  sleep 1
+fi
+
+if lsof -nP -iTCP:${PI_QA_PORT} -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "[lite] Local port ${PI_QA_PORT} is still busy. Free it and retry." >&2
+  exit 1
+fi
+
+read -r -a SSH_OPTION_ARGS <<< "${PI_SSH_OPTIONS}"
+run_memory_preflight
+SSHPASS="${PI_PASSWORD}" sshpass -e ssh "${SSH_OPTION_ARGS[@]}" "${PI_USER}@${TARGET_HOST}" \
+  "mkdir -p '${REMOTE_QA_ROOT}/app'"
+
+echo "[lite] Syncing only runtime app files to ${TARGET_HOST}:${REMOTE_QA_ROOT} ..."
+SSHPASS="${PI_PASSWORD}" sshpass -e rsync -az --delete \
+  -e "ssh ${PI_SSH_OPTIONS}" \
+  --exclude '.git' --exclude '.venv' --exclude '__pycache__' --exclude 'references/' \
+  --exclude 'models/' --exclude 'node_modules/' --exclude 'output/' --exclude '.cache/' \
+  --exclude 'test-results/' --exclude 'playwright-report/' --exclude '.pytest_cache/' \
+  "${PROJECT_ROOT}/app/" "${PI_USER}@${TARGET_HOST}:${REMOTE_QA_ROOT}/app/"
+
+SSHPASS="${PI_PASSWORD}" sshpass -e rsync -az \
+  -e "ssh ${PI_SSH_OPTIONS}" \
+  "${PROJECT_ROOT}/requirements.txt" "${PI_USER}@${TARGET_HOST}:${REMOTE_QA_ROOT}/requirements.txt"
+
+echo "[lite] Stopping prior lite QA uvicorn (if any) ..."
+SSHPASS="${PI_PASSWORD}" sshpass -e ssh "${SSH_OPTION_ARGS[@]}" "${PI_USER}@${TARGET_HOST}" \
+  "pkill -f '[u]vicorn app.main:app --host 0.0.0.0 --port ${PI_QA_PORT}' || true"
+
+echo "[lite] Checking base potato service readiness ..."
+base_status="$(curl -sS --max-time 5 "http://${TARGET_HOST}/status" 2>/dev/null || true)"
+if [ -z "${base_status}" ] || ! printf '%s' "${base_status}" | jq -e . >/dev/null 2>&1; then
+  echo "[lite] Warning: base /status unavailable on http://${TARGET_HOST}/status"
+else
+  base_backend="$(printf '%s' "${base_status}" | jq -r '.backend.active // empty')"
+  base_llama="$(printf '%s' "${base_status}" | jq -r '.llama_server.healthy // false')"
+  echo "[lite] Base backend=${base_backend:-n/a}, llama_healthy=${base_llama}"
+fi
+
+open_when_ready() {
+  for attempt in $(seq 1 "${READY_ATTEMPTS}"); do
+    if curl -fsS --max-time 1 "${LOCAL_BASE_URL}/status" >/dev/null 2>&1; then
+      open_url "${LOCAL_BASE_URL}"
+      echo "[lite] QA server ready at ${LOCAL_BASE_URL}"
+      echo "[lite] Press Ctrl+C to stop this QA server."
+      return
+    fi
+    sleep "${READY_SLEEP_SECONDS}"
+  done
+  echo "[lite] QA server did not become ready in time at ${LOCAL_BASE_URL}. Check the live logs above." >&2
+}
+
+open_when_ready &
+
+echo "[lite] Starting remote QA uvicorn with live logs..."
+SSHPASS="${PI_PASSWORD}" exec sshpass -e ssh -tt "${SSH_OPTION_ARGS[@]}" -L "${PI_QA_PORT}:127.0.0.1:${PI_QA_PORT}" "${PI_USER}@${TARGET_HOST}" \
+  "cd '${REMOTE_QA_ROOT}' && \
+   POTATO_ENABLE_ORCHESTRATOR=0 \
+   POTATO_CHAT_BACKEND=llama \
+   POTATO_ALLOW_FAKE_FALLBACK=0 \
+   POTATO_BASE_DIR=/opt/potato \
+   POTATO_MODEL_PATH=/opt/potato/models/Qwen3-VL-4B-Instruct-Q4_K_M.gguf \
+   POTATO_DOWNLOAD_STATE_PATH=/opt/potato/state/download.json \
+   POTATO_LLAMA_BASE_URL=http://127.0.0.1:8080 \
+   /opt/potato/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port '${PI_QA_PORT}'"
