@@ -56,6 +56,66 @@ def test_status_ready_when_model_exists_and_llama_healthy(client, runtime, monke
     assert body["llama_server"]["healthy"] is True
 
 
+def test_status_stays_ready_when_active_model_healthy_and_download_error_is_from_side_model(
+    client,
+    runtime,
+    monkeypatch,
+):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "default",
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": runtime.model_path.name,
+                        "source_url": "https://example.com/default.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                    {
+                        "id": "side-model",
+                        "filename": "side-model.gguf",
+                        "source_url": "https://example.com/side-model.gguf",
+                        "source_type": "url",
+                        "status": "failed",
+                        "error": "insufficient_storage",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime.download_state_path.write_text(
+        json.dumps(
+            {
+                "bytes_total": 1024,
+                "bytes_downloaded": 0,
+                "percent": 0,
+                "speed_bps": 0,
+                "eta_seconds": 0,
+                "error": "insufficient_storage",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "READY"
+    assert body["download"]["error"] == "insufficient_storage"
+
+
 async def _healthy_true(_runtime):
     return True
 
