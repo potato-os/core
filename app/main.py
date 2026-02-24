@@ -1918,7 +1918,7 @@ CHAT_HTML = """<!doctype html>
       stream: true,
       generation_mode: "random",
       seed: 42,
-      theme: "dark",
+      theme: "light",
       system_prompt: "",
     };
     const settingsKey = "potato_settings_v2";
@@ -1927,6 +1927,10 @@ CHAT_HTML = """<!doctype html>
     const PREFILL_PROGRESS_FLOOR = 6;
     const PREFILL_TICK_MS = 180;
     const STATUS_CHIP_MIN_VISIBLE_MS = 260;
+    const STATUS_POLL_TIMEOUT_MS = 3500;
+    const RUNTIME_RECONNECT_INTERVAL_MS = 1200;
+    const RUNTIME_RECONNECT_TIMEOUT_MS = 2500;
+    const RUNTIME_RECONNECT_MAX_ATTEMPTS = 75;
     const IMAGE_CANCEL_RECOVERY_DELAY_MS = Math.max(
       200,
       Number(window.__POTATO_CANCEL_RECOVERY_DELAY_MS__ || 8000),
@@ -1945,6 +1949,11 @@ CHAT_HTML = """<!doctype html>
     let latestStatus = null;
     let downloadStartInFlight = false;
     let runtimeResetInFlight = false;
+    let runtimeReconnectWatchActive = false;
+    let runtimeReconnectWatchTimer = null;
+    let runtimeReconnectAttempts = 0;
+    let statusPollSeq = 0;
+    let statusPollAppliedSeq = 0;
     let runtimeDetailsExpanded = false;
     let mobileSidebarMql = null;
     const chatHistory = [];
@@ -1963,18 +1972,40 @@ CHAT_HTML = """<!doctype html>
       "runtime-metric-critical",
     ];
 
+    function detectSystemTheme() {
+      try {
+        if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+          if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            return "dark";
+          }
+        }
+      } catch (_err) {
+        // Fall through to light theme fallback.
+      }
+      return "light";
+    }
+
+    function normalizeTheme(rawTheme, fallback = defaultSettings.theme) {
+      if (rawTheme === "dark") return "dark";
+      if (rawTheme === "light") return "light";
+      return fallback;
+    }
+
     function loadSettings() {
       const raw = localStorage.getItem(settingsKey);
-      if (!raw) return { ...defaultSettings };
+      if (!raw) {
+        return { ...defaultSettings, theme: detectSystemTheme() };
+      }
       try {
         const parsed = { ...defaultSettings, ...JSON.parse(raw) };
         return {
           ...parsed,
           generation_mode: normalizeGenerationMode(parsed.generation_mode),
           seed: normalizeSeedValue(parsed.seed, defaultSettings.seed),
+          theme: normalizeTheme(parsed.theme, detectSystemTheme()),
         };
       } catch (_err) {
-        return { ...defaultSettings };
+        return { ...defaultSettings, theme: detectSystemTheme() };
       }
     }
 
@@ -2849,6 +2880,17 @@ CHAT_HTML = """<!doctype html>
       meta.textContent = text;
     }
 
+    function isLocalModelConnected(statusPayload) {
+      const backendMode = String(
+        statusPayload?.backend?.active
+        || statusPayload?.backend?.mode
+        || ""
+      ).toLowerCase();
+      const isReady = String(statusPayload?.state || "").toUpperCase() === "READY";
+      const llamaHealthy = statusPayload?.llama_server?.healthy === true;
+      return backendMode === "llama" && isReady && llamaHealthy;
+    }
+
     function updateLlamaIndicator(statusPayload) {
       const badge = document.getElementById("statusBadge");
       const dot = document.getElementById("statusDot");
@@ -2860,8 +2902,7 @@ CHAT_HTML = """<!doctype html>
         || ""
       ).toLowerCase();
       const isReady = String(statusPayload?.state || "").toUpperCase() === "READY";
-      const llamaHealthy = statusPayload?.llama_server?.healthy === true;
-      const isHealthy = llamaHealthy || (backendMode === "fake" && isReady);
+      const isHealthy = isLocalModelConnected(statusPayload) || (backendMode === "fake" && isReady);
       badge.classList.remove("online", "offline");
       dot.classList.remove("online", "offline");
       if (isHealthy) {
@@ -3074,6 +3115,50 @@ CHAT_HTML = """<!doctype html>
         : "Unload model + clean memory + restart";
     }
 
+    function stopRuntimeReconnectWatch() {
+      if (runtimeReconnectWatchTimer) {
+        window.clearTimeout(runtimeReconnectWatchTimer);
+        runtimeReconnectWatchTimer = null;
+      }
+      runtimeReconnectWatchActive = false;
+      runtimeReconnectAttempts = 0;
+    }
+
+    async function stepRuntimeReconnectWatch() {
+      if (!runtimeReconnectWatchActive) return;
+      runtimeReconnectAttempts += 1;
+      const statusPayload = await pollStatus({ timeoutMs: RUNTIME_RECONNECT_TIMEOUT_MS });
+      if (isLocalModelConnected(statusPayload)) {
+        stopRuntimeReconnectWatch();
+        setComposerActivity("Runtime reconnected.");
+        window.setTimeout(() => {
+          if (!runtimeReconnectWatchActive && !requestInFlight) {
+            setComposerActivity("");
+          }
+        }, 1500);
+        return;
+      }
+      if (runtimeReconnectAttempts >= RUNTIME_RECONNECT_MAX_ATTEMPTS) {
+        stopRuntimeReconnectWatch();
+        setComposerActivity("");
+        appendMessage(
+          "assistant",
+          "Runtime reset is taking longer than expected. It may still be loading the model. " +
+          "Check status in a few moments."
+        );
+        return;
+      }
+      runtimeReconnectWatchTimer = window.setTimeout(stepRuntimeReconnectWatch, RUNTIME_RECONNECT_INTERVAL_MS);
+    }
+
+    function startRuntimeReconnectWatch() {
+      stopRuntimeReconnectWatch();
+      runtimeReconnectWatchActive = true;
+      runtimeReconnectAttempts = 0;
+      setComposerActivity("Runtime reset in progress. Reconnecting...");
+      stepRuntimeReconnectWatch();
+    }
+
     async function resetRuntimeHeavy() {
       if (runtimeResetInFlight) return;
       const confirmed = window.confirm(
@@ -3083,6 +3168,7 @@ CHAT_HTML = """<!doctype html>
       if (!confirmed) return;
 
       runtimeResetInFlight = true;
+      let shouldTrackReconnect = false;
       setRuntimeResetButtonState(true);
       setComposerActivity("Scheduling runtime reset...");
       try {
@@ -3097,9 +3183,11 @@ CHAT_HTML = """<!doctype html>
           return;
         }
         if (body?.started) {
+          shouldTrackReconnect = true;
           appendMessage(
             "assistant",
-            "Runtime reset started. The model is unloading and memory is being reclaimed. Reconnecting shortly."
+            "Runtime reset started. Unloading model from memory and reclaiming RAM/swap. " +
+            "Model files on disk are unchanged."
           );
         } else {
           appendMessage("assistant", `Runtime reset did not start (${body?.reason || "unknown"}).`);
@@ -3109,10 +3197,14 @@ CHAT_HTML = """<!doctype html>
       } finally {
         runtimeResetInFlight = false;
         setRuntimeResetButtonState(false);
-        setComposerActivity("");
-        window.setTimeout(() => {
-          pollStatus();
-        }, 1500);
+        if (shouldTrackReconnect) {
+          startRuntimeReconnectWatch();
+        } else {
+          setComposerActivity("");
+          window.setTimeout(() => {
+            pollStatus();
+          }, 1000);
+        }
       }
     }
 
@@ -3209,12 +3301,28 @@ CHAT_HTML = """<!doctype html>
       setSendEnabled();
     }
 
-    async function pollStatus() {
+    async function pollStatus(options = {}) {
+      const timeoutMs = Math.max(500, Number(options?.timeoutMs || STATUS_POLL_TIMEOUT_MS));
+      const seq = ++statusPollSeq;
+      const controller = new AbortController();
+      const timeoutHandle = window.setTimeout(() => {
+        controller.abort();
+      }, timeoutMs);
       try {
-        const res = await fetch("/status");
+        const res = await fetch("/status", { cache: "no-store", signal: controller.signal });
         const body = await res.json();
+        if (seq < statusPollAppliedSeq) {
+          return latestStatus;
+        }
+        statusPollAppliedSeq = seq;
         setStatus(body);
+        return body;
       } catch (err) {
+        if (seq < statusPollAppliedSeq) {
+          return latestStatus;
+        }
+        statusPollAppliedSeq = seq;
+        const statusErrText = err?.name === "AbortError" ? "request timeout" : String(err);
         latestStatus = {
           state: "DOWN",
           download: {
@@ -3243,7 +3351,7 @@ CHAT_HTML = """<!doctype html>
             throttling: { any_current: false, current_flags: [], history_flags: [] },
           },
         };
-        document.getElementById("statusText").textContent = `Status error: ${err}`;
+        document.getElementById("statusText").textContent = `Status error: ${statusErrText}`;
         const modelNameField = document.getElementById("modelName");
         if (modelNameField) {
           modelNameField.value = "Unknown model (status unavailable)";
@@ -3252,6 +3360,9 @@ CHAT_HTML = """<!doctype html>
         renderDownloadPrompt(latestStatus);
         renderSystemRuntime(latestStatus.system);
         setSendEnabled();
+        return latestStatus;
+      } finally {
+        window.clearTimeout(timeoutHandle);
       }
     }
 

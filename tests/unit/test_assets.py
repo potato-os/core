@@ -315,6 +315,12 @@ def test_chat_ui_supports_theme_system_prompt_setting_and_enter_to_send():
     assert "theme-icon--moon" in CHAT_HTML
     assert "theme-icon--sun" in CHAT_HTML
     assert "Switch to light theme" in CHAT_HTML
+    assert 'theme: "light"' in CHAT_HTML
+    assert "function detectSystemTheme(" in CHAT_HTML
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in CHAT_HTML
+    assert 'return "dark";' in CHAT_HTML
+    assert 'return "light";' in CHAT_HTML
+    assert "theme: detectSystemTheme()" in CHAT_HTML
     assert 'id="theme"' not in CHAT_HTML
     assert "applyTheme(" in CHAT_HTML
     assert 'id="systemPrompt"' in CHAT_HTML
@@ -492,6 +498,18 @@ def test_chat_ui_supports_heavy_runtime_reset_action_with_confirmation():
     assert "window.confirm(" in CHAT_HTML
     assert 'fetch("/internal/reset-runtime"' in CHAT_HTML
     assert 'document.getElementById("resetRuntimeBtn").addEventListener("click", resetRuntimeHeavy);' in CHAT_HTML
+
+
+def test_chat_ui_runtime_reset_has_active_reconnect_polling():
+    assert "function startRuntimeReconnectWatch(" in CHAT_HTML
+    assert "function stopRuntimeReconnectWatch(" in CHAT_HTML
+    assert "RUNTIME_RECONNECT_MAX_ATTEMPTS" in CHAT_HTML
+    assert "Runtime reset in progress. Reconnecting..." in CHAT_HTML
+    assert "Runtime reconnected." in CHAT_HTML
+    assert "Model files on disk are unchanged." in CHAT_HTML
+    assert "const controller = new AbortController();" in CHAT_HTML
+    assert "cache: \"no-store\"" in CHAT_HTML
+    assert "controller.abort();" in CHAT_HTML
 
 
 def test_chat_ui_shows_pi_runtime_compact_with_details_toggle_above_settings():
