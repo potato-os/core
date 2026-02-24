@@ -9,6 +9,7 @@ chmod +x "${ROOTFS_DIR}"/opt/potato/bin/*.sh
 
 install -m 0644 "${ROOTFS_DIR}/opt/potato/systemd/potato.service" "${ROOTFS_DIR}/etc/systemd/system/potato.service"
 install -m 0644 "${ROOTFS_DIR}/opt/potato/systemd/potato-firstboot.service" "${ROOTFS_DIR}/etc/systemd/system/potato-firstboot.service"
+install -m 0644 "${ROOTFS_DIR}/opt/potato/systemd/potato-runtime-reset.service" "${ROOTFS_DIR}/etc/systemd/system/potato-runtime-reset.service"
 
 install -m 0644 "${ROOTFS_DIR}/opt/potato/nginx/potato.conf" "${ROOTFS_DIR}/etc/nginx/sites-available/potato"
 # Create runtime-valid symlink inside rootfs (not an absolute pi-gen build path).
@@ -61,5 +62,12 @@ fi
 /opt/potato/venv/bin/pip install -r /opt/potato/app/requirements.txt
 
 chown -R potato:potato /opt/potato
+
+cat > /etc/sudoers.d/potato-runtime-reset <<'SUDOERS'
+potato ALL=(root) NOPASSWD: /bin/systemctl start --no-block potato-runtime-reset.service
+potato ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block potato-runtime-reset.service
+SUDOERS
+chmod 0440 /etc/sudoers.d/potato-runtime-reset
+
 systemctl enable potato-firstboot.service potato.service nginx avahi-daemon ssh
 EOF

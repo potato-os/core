@@ -109,6 +109,7 @@ run_sudo install -m 0644 "${REPO_ROOT}/requirements.txt" "${TARGET_ROOT}/app/req
 run_sudo chmod +x "${TARGET_ROOT}"/bin/*.sh
 run_sudo install -m 0644 "${REPO_ROOT}/systemd/potato.service" "${SERVICE_DIR}/potato.service"
 run_sudo install -m 0644 "${REPO_ROOT}/systemd/potato-firstboot.service" "${SERVICE_DIR}/potato-firstboot.service"
+run_sudo install -m 0644 "${REPO_ROOT}/systemd/potato-runtime-reset.service" "${SERVICE_DIR}/potato-runtime-reset.service"
 
 bundle_src="$(resolve_llama_bundle_src || true)"
 if [ -n "${bundle_src}" ] && [ -x "${bundle_src}/bin/llama-server" ] && [ -d "${bundle_src}/lib" ]; then
@@ -143,6 +144,14 @@ if [ -f "${TARGET_ROOT}/nginx/potato.conf" ]; then
   run_sudo rm -f /etc/nginx/sites-enabled/default
   run_sudo nginx -t
 fi
+
+sudoers_tmp="$(mktemp)"
+cat > "${sudoers_tmp}" <<'SUDOERS'
+potato ALL=(root) NOPASSWD: /bin/systemctl start --no-block potato-runtime-reset.service
+potato ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block potato-runtime-reset.service
+SUDOERS
+run_sudo install -m 0440 "${sudoers_tmp}" /etc/sudoers.d/potato-runtime-reset
+rm -f "${sudoers_tmp}"
 
 run_sudo systemctl daemon-reload
 run_sudo systemctl enable avahi-daemon nginx potato-firstboot.service potato.service

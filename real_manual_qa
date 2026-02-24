@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PI_USER="${PI_USER:-pi}"
+PI_PASSWORD="${PI_PASSWORD:-raspberry}"
+PI_HOST_PRIMARY="${PI_HOST_PRIMARY:-potato.local}"
+PI_HOST_FALLBACK="${PI_HOST_FALLBACK:-192.168.1.132}"
+PI_SCHEME="${PI_SCHEME:-http}"
+PI_PORT="${PI_PORT:-80}"
+SKIP_OPEN="${POTATO_SKIP_OPEN:-0}"
+RESET_SSH_HOST_KEYS="${POTATO_QA_RESET_SSH_HOST_KEYS:-1}"
+PI_SSH_OPTIONS="${PI_SSH_OPTIONS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR}"
+REAL_QA_MODE="${POTATO_REAL_QA_MODE:-full}"
+MEMORY_PREFLIGHT="${POTATO_QA_MEMORY_PREFLIGHT:-1}"
+SWAP_RECLAIM="${POTATO_QA_SWAP_RECLAIM:-0}"
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing command: $1" >&2
+    exit 1
+  fi
+}
+
+open_url() {
+  local target_url="$1"
+  if [ "${SKIP_OPEN}" = "1" ]; then
+    echo "POTATO_SKIP_OPEN=1, not opening browser. URL: ${target_url}"
+    return
+  fi
+  if command -v open >/dev/null 2>&1; then
+    open "${target_url}" >/dev/null 2>&1 || true
+    return
+  fi
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "${target_url}" >/dev/null 2>&1 || true
+    return
+  fi
+  echo "No browser opener found. Open this URL manually: ${target_url}"
+}
+
+clear_known_host_entry() {
+  local host="$1"
+  if [ -z "${host}" ]; then
+    return
+  fi
+  ssh-keygen -R "${host}" >/dev/null 2>&1 || true
+  ssh-keygen -R "[${host}]:22" >/dev/null 2>&1 || true
+}
+
+pick_host() {
+  if ping -c 1 -W 1 "${PI_HOST_PRIMARY}" >/dev/null 2>&1; then
+    echo "${PI_HOST_PRIMARY}"
+    return
+  fi
+  if ping -c 1 -W 1 "${PI_HOST_FALLBACK}" >/dev/null 2>&1; then
+    echo "${PI_HOST_FALLBACK}"
+    return
+  fi
+  echo ""
+}
+
+run_memory_preflight() {
+  if [ "${MEMORY_PREFLIGHT}" != "1" ]; then
+    echo "POTATO_QA_MEMORY_PREFLIGHT=0, skipping Pi memory preflight."
+    return
+  fi
+
+  local target_host="${QA_HOST:-}"
+  if [ -z "${target_host}" ]; then
+    target_host="$(pick_host)"
+  fi
+  if [ -z "${target_host}" ]; then
+    echo "Could not resolve reachable Pi host for memory preflight; skipping."
+    return
+  fi
+
+  read -r -a SSH_OPTION_ARGS <<< "${PI_SSH_OPTIONS}"
+  echo "Running Pi memory preflight on ${target_host} (drop caches + safe swap reset)..."
+  if [ "${SWAP_RECLAIM}" != "1" ]; then
+    echo "Swap reclaim disabled (set POTATO_QA_SWAP_RECLAIM=1 to enable swapoff/swapon)."
+  fi
+  SSHPASS="${PI_PASSWORD}" sshpass -e ssh "${SSH_OPTION_ARGS[@]}" "${PI_USER}@${target_host}" \
+    "set -euo pipefail; \
+     echo '${PI_PASSWORD}' | sudo -S sh -c '\
+       sync; \
+       echo 3 > /proc/sys/vm/drop_caches; \
+       if [ \"${SWAP_RECLAIM}\" = \"1\" ]; then \
+         mem_available_kb=\$(awk \"\\\$1 == \\\"MemAvailable:\\\" {print \\\$2}\" /proc/meminfo); \
+         swap_total_kb=\$(awk \"\\\$1 == \\\"SwapTotal:\\\" {print \\\$2}\" /proc/meminfo); \
+         swap_free_kb=\$(awk \"\\\$1 == \\\"SwapFree:\\\" {print \\\$2}\" /proc/meminfo); \
+         swap_used_kb=\$((swap_total_kb - swap_free_kb)); \
+         margin_kb=524288; \
+         if [ \"\$swap_used_kb\" -gt 0 ] && [ \"\$mem_available_kb\" -gt \$((swap_used_kb + margin_kb)) ]; then \
+           swapoff -a || true; \
+           /sbin/swapon -a || swapon -a || true; \
+         fi; \
+       fi; \
+       swap_total_after_kb=\$(awk \"\\\$1 == \\\"SwapTotal:\\\" {print \\\$2}\" /proc/meminfo); \
+       if [ \"\$swap_total_after_kb\" -eq 0 ]; then \
+         systemctl restart systemd-zram-setup@zram0.service || true; \
+       fi; \
+       free -h; \
+       grep -E \"MemAvailable|SwapTotal|SwapFree\" /proc/meminfo \
+     '"
+}
+
+QA_HOST="${PI_HOST_PRIMARY}"
+detected_host="$(pick_host)"
+if [ -n "${detected_host}" ]; then
+  QA_HOST="${detected_host}"
+fi
+
+TARGET_URL="${PI_SCHEME}://${QA_HOST}"
+if [ -n "${PI_PORT}" ]; then
+  TARGET_URL="${TARGET_URL}:${PI_PORT}"
+fi
+
+if [ "${RESET_SSH_HOST_KEYS}" = "1" ]; then
+  require_cmd ssh-keygen
+  echo "Resetting stale SSH host keys for QA targets..."
+  clear_known_host_entry "potato.local"
+  clear_known_host_entry "${PI_HOST_PRIMARY}"
+  clear_known_host_entry "${PI_HOST_FALLBACK}"
+fi
+
+if [ "${REAL_QA_MODE}" = "fast" ]; then
+  echo "Running fast real-Pi QA mode (no deploy/reinstall, no model-health wait)."
+  echo "Set POTATO_REAL_QA_MODE=full for full deploy + strict smoke."
+  exec "${PROJECT_ROOT}/lite_real_manual_qa"
+fi
+
+require_cmd sshpass
+run_memory_preflight
+
+echo "Using Pi host for deploy/open: ${QA_HOST}"
+echo "Deploying and validating on Pi via smoke flow..."
+(
+  cd "${PROJECT_ROOT}"
+  PI_HOST_PRIMARY="${QA_HOST}" \
+  PI_HOST_FALLBACK="${PI_HOST_FALLBACK}" \
+  PI_SCHEME="${PI_SCHEME}" \
+  PI_PORT="${PI_PORT}" \
+  PI_SSH_OPTIONS="${PI_SSH_OPTIONS}" \
+  WAIT_FOR_LLAMA_HEALTH="${WAIT_FOR_LLAMA_HEALTH:-1}" \
+  RUN_CHAT_SMOKE="${RUN_CHAT_SMOKE:-1}" \
+  ./tests/e2e/smoke_pi.sh
+)
+
+echo "Pi deployment + smoke flow completed."
+open_url "${TARGET_URL}"
+echo "Real QA target opened: ${TARGET_URL}"

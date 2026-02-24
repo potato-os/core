@@ -1,0 +1,9 @@
+[Unit]
+Description=Potato OS heavy runtime reset (unload + memory reclaim + restart)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/potato/bin/reset_runtime.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -107,6 +107,14 @@ def test_start_model_download_returns_conflict_when_orchestrator_disabled(client
     assert body["reason"] == "orchestrator_disabled"
 
 
+def test_reset_runtime_returns_conflict_when_orchestrator_disabled(client):
+    response = client.post("/internal/reset-runtime")
+    assert response.status_code == 409
+    body = response.json()
+    assert body["started"] is False
+    assert body["reason"] == "orchestrator_disabled"
+
+
 def test_start_model_download_starts_when_enabled(runtime, monkeypatch):
     app = create_app(runtime=runtime, enable_orchestrator=False)
     runtime.enable_orchestrator = True
@@ -125,6 +133,44 @@ def test_start_model_download_starts_when_enabled(runtime, monkeypatch):
     body = response.json()
     assert body["started"] is True
     assert body["reason"] == "started"
+
+
+def test_reset_runtime_starts_when_enabled(runtime, monkeypatch):
+    app = create_app(runtime=runtime, enable_orchestrator=False)
+    runtime.enable_orchestrator = True
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    async def _start(_runtime):
+        return True, "scheduled"
+
+    monkeypatch.setattr("app.main.start_runtime_reset", _start)
+
+    with TestClient(app) as test_client:
+        response = test_client.post("/internal/reset-runtime")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["started"] is True
+    assert body["reason"] == "scheduled"
+
+
+def test_reset_runtime_returns_not_started_reason(runtime, monkeypatch):
+    app = create_app(runtime=runtime, enable_orchestrator=False)
+    runtime.enable_orchestrator = True
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    async def _start(_runtime):
+        return False, "script_missing"
+
+    monkeypatch.setattr("app.main.start_runtime_reset", _start)
+
+    with TestClient(app) as test_client:
+        response = test_client.post("/internal/reset-runtime")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["started"] is False
+    assert body["reason"] == "script_missing"
 
 
 def test_status_includes_auto_start_countdown(runtime, monkeypatch):

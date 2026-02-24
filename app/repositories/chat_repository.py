@@ -207,12 +207,25 @@ def _fake_content(payload: dict[str, Any]) -> str:
     last_user = _extract_last_user_text(payload)
     if not last_user:
         last_user = "hello from the starch dimension"
-    reply = random.choice(FAKE_PARODY_REPLIES)
+    seed = _coerce_seed(payload.get("seed"))
+    if seed is None:
+        reply = random.choice(FAKE_PARODY_REPLIES)
+    else:
+        reply = random.Random(seed).choice(FAKE_PARODY_REPLIES)
     return (
         "[fake-llama.cpp] "
         f"{reply} "
         f"Last user message (dramatically reenacted): {last_user}"
     )
+
+
+def _coerce_seed(raw_seed: Any) -> int | None:
+    try:
+        if raw_seed is None:
+            return None
+        return int(raw_seed)
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_last_user_text(payload: dict[str, Any]) -> str:
@@ -319,7 +332,7 @@ def _tokenize_for_stream(content: str) -> list[str]:
 
 
 def _read_fake_timing_config() -> tuple[float, float]:
-    # Keep UI/dev fake mode human-paced by default, while tests can stay fast.
+    # Keep UI/dev fake mode Manual QA-paced by default, while tests can stay fast.
     test_mode = os.getenv("POTATO_TEST_MODE", "0") == "1"
     prefill_delay_ms = _safe_delay_ms(
         os.getenv("POTATO_FAKE_PREFILL_DELAY_MS"),

@@ -20,6 +20,7 @@ def test_shell_scripts_have_valid_bash_syntax():
         REPO_ROOT / "bin" / "prepare_imager_bundle.sh",
         REPO_ROOT / "bin" / "ensure_model.sh",
         REPO_ROOT / "bin" / "start_llama.sh",
+        REPO_ROOT / "bin" / "reset_runtime.sh",
         REPO_ROOT / "bin" / "firstboot.sh",
         REPO_ROOT / "bin" / "install_dev.sh",
         REPO_ROOT / "bin" / "uninstall_dev.sh",
@@ -139,8 +140,9 @@ echo "apt-get $*" >> "$CALLS_FILE"
     subprocess.run([str(REPO_ROOT / "bin" / "uninstall_dev.sh")], check=True, cwd=REPO_ROOT, env=env)
 
     log = calls.read_text(encoding="utf-8")
-    assert "systemctl disable --now potato.service potato-firstboot.service" in log
+    assert "systemctl disable --now potato.service potato-firstboot.service potato-runtime-reset.service" in log
     assert "systemctl daemon-reload" in log
+    assert "rm -f /etc/sudoers.d/potato-runtime-reset" in log
     assert "rm -rf /opt/potato-test /tmp/potato-os" in log
     assert "userdel potato" in log
     assert "groupdel potato" in log

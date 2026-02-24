@@ -5,6 +5,48 @@ async function waitUntilReady(page) {
   await expect(page.locator("#statusText")).toContainText("State: READY");
 }
 
+test("seed mode defaults to random, toggles deterministic, persists, and controls request payload", async ({ page }) => {
+  await waitUntilReady(page);
+
+  const generationMode = page.locator("#generationMode");
+  const seedField = page.locator("#seed");
+  const streamField = page.locator("#stream");
+  const promptField = page.locator("#userPrompt");
+  const sendBtn = page.locator("#sendBtn");
+  await page.locator("details.settings").evaluate((el) => { el.open = true; });
+
+  await expect(generationMode).toHaveValue("random");
+  await expect(seedField).toHaveValue("42");
+  await expect(seedField).toBeDisabled();
+
+  await streamField.selectOption("false");
+  await promptField.fill("Seed random request.");
+  const randomRequestPromise = page.waitForRequest("**/v1/chat/completions");
+  await promptField.press("Enter");
+  const randomRequest = await randomRequestPromise;
+  const randomPayload = JSON.parse(randomRequest.postData() || "{}");
+  expect(randomPayload.seed).toBeUndefined();
+  await expect(sendBtn).toHaveText("Send");
+
+  await generationMode.selectOption("deterministic");
+  await expect(seedField).toBeEnabled();
+  await expect(seedField).toHaveValue("42");
+  await seedField.fill("1337");
+
+  await promptField.fill("Seed deterministic request.");
+  const deterministicRequestPromise = page.waitForRequest("**/v1/chat/completions");
+  await promptField.press("Enter");
+  const deterministicRequest = await deterministicRequestPromise;
+  const deterministicPayload = JSON.parse(deterministicRequest.postData() || "{}");
+  expect(deterministicPayload.seed).toBe(1337);
+  await expect(sendBtn).toHaveText("Send");
+
+  await page.reload();
+  await expect(page.locator("#generationMode")).toHaveValue("deterministic");
+  await expect(page.locator("#seed")).toHaveValue("1337");
+  await expect(page.locator("#seed")).toBeEnabled();
+});
+
 test("shows staged prefill estimate before first token and clears after generation starts", async ({ page }) => {
   await waitUntilReady(page);
 

@@ -18,8 +18,9 @@ run_sudo() {
   sudo "$@"
 }
 
-run_sudo systemctl disable --now potato.service potato-firstboot.service || true
-run_sudo rm -f /etc/systemd/system/potato.service /etc/systemd/system/potato-firstboot.service
+run_sudo systemctl disable --now potato.service potato-firstboot.service potato-runtime-reset.service || true
+run_sudo rm -f /etc/systemd/system/potato.service /etc/systemd/system/potato-firstboot.service /etc/systemd/system/potato-runtime-reset.service
+run_sudo rm -f /etc/sudoers.d/potato-runtime-reset
 run_sudo rm -f /etc/nginx/sites-enabled/potato /etc/nginx/sites-available/potato
 run_sudo systemctl disable --now nginx || true
 run_sudo systemctl daemon-reload

@@ -9,8 +9,12 @@ def test_start_llama_contains_required_flags():
     script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
 
     assert "--ctx-size" in script
-    assert "16384" in script
+    assert 'CTX_SIZE="${POTATO_CTX_SIZE:-16384}"' in script
+    assert 'CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-0}"' in script
+    assert "--cache-ram" in script
     assert "--jinja" in script
+    assert "--no-warmup" in script
+    assert 'DISABLE_WARMUP="${POTATO_LLAMA_NO_WARMUP:-1}"' in script
     assert "--slot-save-path" in script
 
 
@@ -40,8 +44,9 @@ def test_firstboot_service_avoids_repeating_setup():
 def test_uninstall_script_targets_pi_runtime_only():
     script = Path("bin/uninstall_dev.sh").read_text(encoding="utf-8")
 
-    assert "systemctl disable --now potato.service potato-firstboot.service" in script
-    assert "rm -f /etc/systemd/system/potato.service /etc/systemd/system/potato-firstboot.service" in script
+    assert "systemctl disable --now potato.service potato-firstboot.service potato-runtime-reset.service" in script
+    assert "rm -f /etc/systemd/system/potato.service /etc/systemd/system/potato-firstboot.service /etc/systemd/system/potato-runtime-reset.service" in script
+    assert "rm -f /etc/sudoers.d/potato-runtime-reset" in script
     assert "rm -rf \"${TARGET_ROOT}\" /tmp/potato-os" in script
     assert "userdel \"${POTATO_USER}\"" in script
     assert "groupdel \"${POTATO_GROUP}\"" in script
@@ -52,6 +57,22 @@ def test_smoke_script_retries_connection_refused():
 
     assert "--retry-connrefused" in script
     assert "--retry-all-errors" in script
+    assert "Syncing repository to Pi (excluding local heavy artifacts)..." in script
+    assert "--exclude 'models/'" in script
+    assert "--exclude 'node_modules/'" in script
+    assert "--exclude 'output/'" in script
+    assert 'PI_SSH_OPTIONS="${PI_SSH_OPTIONS:--o StrictHostKeyChecking=accept-new}"' in script
+    assert 'RSYNC_PROGRESS="${RSYNC_PROGRESS:-1}"' in script
+    assert "if rsync --help 2>/dev/null | grep -q -- '--info='" in script
+    assert 'rsync_progress_flags+=(--info=progress2)' in script
+    assert 'rsync_progress_flags+=(--progress)' in script
+    assert 'log_stage "[wait ${wait_pct}%] attempt ${attempt}/${WAIT_ATTEMPTS}, elapsed ${elapsed}s:' in script
+    assert 'SHOW_REMOTE_DIAGNOSTICS="${SHOW_REMOTE_DIAGNOSTICS:-1}"' in script
+    assert "Collecting remote diagnostics..." in script
+    assert "Smoke checks completed for" in script
+    assert '-e "ssh ${PI_SSH_OPTIONS}"' in script
+    assert 'read -r -a SSH_OPTION_ARGS <<< "${PI_SSH_OPTIONS}"' in script
+    assert 'ssh "${SSH_OPTION_ARGS[@]}"' in script
 
 
 def test_stream_chat_script_validates_sse_done_and_chunk_object():
@@ -64,6 +85,18 @@ def test_stream_chat_script_validates_sse_done_and_chunk_object():
     assert 'if [ "$#" -gt 0 ]; then' in script
     assert "Throughput:" in script
     assert "timings.predicted_per_second" in script
+
+
+def test_seed_mode_pi_script_validates_deterministic_seed_behavior():
+    script = Path("tests/e2e/seed_mode_pi.sh").read_text(encoding="utf-8")
+
+    assert "Seed deterministic check passed on" in script
+    assert "/v1/chat/completions" in script
+    assert "seed: ($seed | tonumber)" in script
+    assert "Deterministic outputs diverged for seed" in script
+    assert "random output:" in script
+    assert "PI_HOST_MDNS" in script
+    assert "potato.local" in script
 
 
 def test_install_script_uses_reference_llama_bundle_sync():
@@ -84,6 +117,9 @@ def test_install_script_uses_reference_llama_bundle_sync():
     assert '"127.0.1.1 " hostname ".local " hostname' in script
     assert "avahi-daemon.conf" in script
     assert "host-name=${POTATO_HOSTNAME}" in script
+    assert "potato-runtime-reset.service" in script
+    assert "/etc/sudoers.d/potato-runtime-reset" in script
+    assert "systemctl start --no-block potato-runtime-reset.service" in script
 
 
 def test_prepare_imager_bundle_script_wires_first_boot_installer():
@@ -171,6 +207,55 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert 'run(["brew", "install", "docker", "colima"])' in uv_script
 
 
+def test_manual_qa_scripts_exist_for_fake_and_real_flows():
+    fake_script = Path("fake_manual_qa").read_text(encoding="utf-8")
+    real_script = Path("real_manual_qa").read_text(encoding="utf-8")
+    lite_script = Path("lite_real_manual_qa").read_text(encoding="utf-8")
+
+    assert "POTATO_CHAT_BACKEND=fake" in fake_script
+    assert "POTATO_ALLOW_FAKE_FALLBACK=1" in fake_script
+    assert "uvicorn app.main:app" in fake_script
+    assert 'HOST="${POTATO_QA_HOST:-127.0.0.1}"' in fake_script
+    assert 'URL="http://${HOST}:${PORT}"' in fake_script
+    assert "Stopping existing process(es) on port" in fake_script
+    assert "Press Ctrl+C to stop the server." in fake_script
+    assert "open_url" in fake_script
+
+    assert "tests/e2e/smoke_pi.sh" in real_script
+    assert "potato.local" in real_script
+    assert 'REAL_QA_MODE="${POTATO_REAL_QA_MODE:-full}"' in real_script
+    assert 'PI_USER="${PI_USER:-pi}"' in real_script
+    assert 'PI_PASSWORD="${PI_PASSWORD:-raspberry}"' in real_script
+    assert 'MEMORY_PREFLIGHT="${POTATO_QA_MEMORY_PREFLIGHT:-1}"' in real_script
+    assert 'SWAP_RECLAIM="${POTATO_QA_SWAP_RECLAIM:-0}"' in real_script
+    assert "run_memory_preflight" in real_script
+    assert "drop caches + safe swap reset" in real_script
+    assert "/sbin/swapon -a || swapon -a || true" in real_script
+    assert "systemd-zram-setup@zram0.service" in real_script
+    assert "POTATO_QA_RESET_SSH_HOST_KEYS" in real_script
+    assert "Resetting stale SSH host keys for QA targets..." in real_script
+    assert "ssh-keygen -R" in real_script
+    assert 'PI_SSH_OPTIONS="${PI_SSH_OPTIONS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR}"' in real_script
+    assert 'PI_SSH_OPTIONS="${PI_SSH_OPTIONS}"' in real_script
+    assert 'QA_HOST="${PI_HOST_PRIMARY}"' in real_script
+    assert 'PI_HOST_PRIMARY="${QA_HOST}"' in real_script
+    assert 'TARGET_URL="${PI_SCHEME}://${QA_HOST}"' in real_script
+    assert "open_url" in real_script
+
+    assert "Fast real-Pi QA (no apt/install/model sync)" in lite_script
+    assert 'PI_QA_PORT="${PI_QA_PORT:-1984}"' in lite_script
+    assert 'MEMORY_PREFLIGHT="${POTATO_QA_MEMORY_PREFLIGHT:-1}"' in lite_script
+    assert 'SWAP_RECLAIM="${POTATO_QA_SWAP_RECLAIM:-0}"' in lite_script
+    assert "run_memory_preflight" in lite_script
+    assert "drop caches + safe swap reset" in lite_script
+    assert "/sbin/swapon -a || swapon -a || true" in lite_script
+    assert "systemd-zram-setup@zram0.service" in lite_script
+    assert "POTATO_ENABLE_ORCHESTRATOR=0" in lite_script
+    assert "POTATO_LLAMA_BASE_URL=http://127.0.0.1:8080" in lite_script
+    assert "/opt/potato/venv/bin/uvicorn app.main:app" in lite_script
+    assert "open_when_ready" in lite_script
+
+
 def test_image_stage_assets_define_systemd_firstboot_image_flow():
     packages = Path("image/stage-potato/00-potato/00-packages").read_text(encoding="utf-8")
     run_script = Path("image/stage-potato/00-potato/00-run.sh").read_text(encoding="utf-8")
@@ -186,6 +271,9 @@ def test_image_stage_assets_define_systemd_firstboot_image_flow():
     assert "systemctl enable potato-firstboot.service potato.service nginx avahi-daemon" in run_script
     assert "potato-firstboot.service" in run_script
     assert "potato.service" in run_script
+    assert "potato-runtime-reset.service" in run_script
+    assert "/etc/sudoers.d/potato-runtime-reset" in run_script
+    assert "systemctl start --no-block potato-runtime-reset.service" in run_script
     assert "potato.local" in run_script
     assert "usermod -a -G video potato" in run_script
     assert 'printf \'potato\\n\' > "${ROOTFS_DIR}/etc/hostname"' in run_script
@@ -231,6 +319,12 @@ def test_chat_ui_supports_theme_system_prompt_setting_and_enter_to_send():
     assert "theme-icon--moon" in CHAT_HTML
     assert "theme-icon--sun" in CHAT_HTML
     assert "Switch to light theme" in CHAT_HTML
+    assert 'theme: "light"' in CHAT_HTML
+    assert "function detectSystemTheme(" in CHAT_HTML
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in CHAT_HTML
+    assert 'return "dark";' in CHAT_HTML
+    assert 'return "light";' in CHAT_HTML
+    assert "theme: detectSystemTheme()" in CHAT_HTML
     assert 'id="theme"' not in CHAT_HTML
     assert "applyTheme(" in CHAT_HTML
     assert 'id="systemPrompt"' in CHAT_HTML
@@ -238,6 +332,21 @@ def test_chat_ui_supports_theme_system_prompt_setting_and_enter_to_send():
     assert 'userPrompt.addEventListener("keydown"' in CHAT_HTML
     assert 'event.key === "Enter"' in CHAT_HTML
     assert "!event.shiftKey" in CHAT_HTML
+
+
+def test_chat_ui_seed_mode_settings_contract():
+    assert 'id="generationMode"' in CHAT_HTML
+    assert '<option value="random">Random</option>' in CHAT_HTML
+    assert '<option value="deterministic">Deterministic</option>' in CHAT_HTML
+    assert 'id="seed"' in CHAT_HTML
+    assert "generation_mode: \"random\"" in CHAT_HTML
+    assert "seed: 42" in CHAT_HTML
+    assert "function normalizeGenerationMode(" in CHAT_HTML
+    assert "function normalizeSeedValue(" in CHAT_HTML
+    assert "function updateSeedFieldState(" in CHAT_HTML
+    assert "function resolveSeedForRequest(" in CHAT_HTML
+    assert "seedField.disabled = generationMode !== \"deterministic\";" in CHAT_HTML
+    assert "reqBody.seed = resolvedSeed;" in CHAT_HTML
 
 
 def test_chat_ui_keeps_theme_toggle_clear_of_status_badge():
@@ -384,6 +493,27 @@ def test_chat_ui_supports_manual_or_idle_model_download_prompt():
     assert 'fetch("/internal/start-model-download"' in CHAT_HTML
     assert "Auto-download starts in" in CHAT_HTML
     assert "statusPayload.download.auto_start_remaining_seconds" in CHAT_HTML
+
+
+def test_chat_ui_supports_heavy_runtime_reset_action_with_confirmation():
+    assert 'id="resetRuntimeBtn"' in CHAT_HTML
+    assert "Unload model + clean memory + restart" in CHAT_HTML
+    assert "function resetRuntimeHeavy(" in CHAT_HTML
+    assert "window.confirm(" in CHAT_HTML
+    assert 'fetch("/internal/reset-runtime"' in CHAT_HTML
+    assert 'document.getElementById("resetRuntimeBtn").addEventListener("click", resetRuntimeHeavy);' in CHAT_HTML
+
+
+def test_chat_ui_runtime_reset_has_active_reconnect_polling():
+    assert "function startRuntimeReconnectWatch(" in CHAT_HTML
+    assert "function stopRuntimeReconnectWatch(" in CHAT_HTML
+    assert "RUNTIME_RECONNECT_MAX_ATTEMPTS" in CHAT_HTML
+    assert "Runtime reset in progress. Reconnecting..." in CHAT_HTML
+    assert "Runtime reconnected." in CHAT_HTML
+    assert "Model files on disk are unchanged." in CHAT_HTML
+    assert "const controller = new AbortController();" in CHAT_HTML
+    assert "cache: \"no-store\"" in CHAT_HTML
+    assert "controller.abort();" in CHAT_HTML
 
 
 def test_chat_ui_shows_pi_runtime_compact_with_details_toggle_above_settings():

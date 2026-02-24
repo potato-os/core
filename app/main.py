@@ -82,6 +82,7 @@ class RuntimeConfig:
     allow_fake_fallback: bool = False
     ensure_model_script: Path | None = None
     start_llama_script: Path | None = None
+    runtime_reset_service: str = "potato-runtime-reset.service"
 
     def __post_init__(self) -> None:
         if self.ensure_model_script is None:
@@ -106,6 +107,7 @@ class RuntimeConfig:
         start_llama_script = Path(
             os.getenv("POTATO_START_LLAMA_SCRIPT", str(base_dir / "bin" / "start_llama.sh"))
         )
+        runtime_reset_service = os.getenv("POTATO_RUNTIME_RESET_SERVICE", "potato-runtime-reset.service").strip()
         enable_orchestrator = os.getenv("POTATO_ENABLE_ORCHESTRATOR", "1") == "1"
         auto_download_idle_seconds = max(0, _safe_int(os.getenv("POTATO_AUTO_DOWNLOAD_IDLE_SECONDS", "300"), 300))
         allow_fake_fallback = os.getenv("POTATO_ALLOW_FAKE_FALLBACK", "0") == "1"
@@ -120,6 +122,7 @@ class RuntimeConfig:
             llama_port=llama_port,
             ensure_model_script=ensure_model_script,
             start_llama_script=start_llama_script,
+            runtime_reset_service=runtime_reset_service,
             enable_orchestrator=enable_orchestrator,
             auto_download_idle_seconds=auto_download_idle_seconds,
             allow_fake_fallback=allow_fake_fallback,
@@ -639,6 +642,40 @@ async def start_model_download(app: FastAPI, runtime: RuntimeConfig, trigger: st
         task.add_done_callback(_clear_task)
         app.state.model_download_task = task
         return True, "started"
+
+
+async def start_runtime_reset(runtime: RuntimeConfig) -> tuple[bool, str]:
+    service_name = runtime.runtime_reset_service.strip()
+    if not service_name:
+        return False, "service_not_configured"
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "sudo",
+            "-n",
+            "systemctl",
+            "start",
+            "--no-block",
+            service_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+    except FileNotFoundError:
+        return False, "sudo_missing"
+    except OSError:
+        logger.exception("Failed to start runtime reset service")
+        return False, "spawn_failed"
+
+    if proc.returncode == 0:
+        return True, "scheduled"
+
+    details = ((stderr or b"") + b"\n" + (stdout or b"")).decode("utf-8", errors="replace").lower()
+    if "not found" in details and service_name.lower() in details:
+        return False, "service_missing"
+    if "password" in details or "sudoers" in details:
+        return False, "permission_denied"
+    return False, "start_failed"
 
 
 def get_status_download_context(app: FastAPI, runtime: RuntimeConfig) -> tuple[bool, int]:
@@ -1518,6 +1555,30 @@ CHAT_HTML = """<!doctype html>
       grid-column: 1 / -1;
     }
 
+    .settings-action-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .settings-action-row .ghost-btn {
+      width: 100%;
+      text-align: center;
+    }
+
+    .danger-btn {
+      border-color: color-mix(in srgb, #dc2626 48%, var(--border));
+      background: color-mix(in srgb, #dc2626 14%, var(--panel-muted));
+      color: color-mix(in srgb, var(--text) 88%, #dc2626 12%);
+      font-weight: 600;
+    }
+
+    .danger-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+    }
+
     /* User feedback pass: keep layout cleaner and less flashy. */
     :root {
       --bg: #f3f5f8;
@@ -1758,6 +1819,15 @@ CHAT_HTML = """<!doctype html>
               <option value="false">false</option>
             </select>
           </label>
+          <label>Generation Mode
+            <select id="generationMode">
+              <option value="random">Random</option>
+              <option value="deterministic">Deterministic</option>
+            </select>
+          </label>
+          <label>Seed
+            <input id="seed" type="number" step="1">
+          </label>
           <label>Temperature
             <input id="temperature" type="number" step="0.1" min="0" max="2">
           </label>
@@ -1776,6 +1846,9 @@ CHAT_HTML = """<!doctype html>
           <label>Max Tokens
             <input id="max_tokens" type="number" step="1" min="1">
           </label>
+          <div class="settings-action-row full">
+            <button id="resetRuntimeBtn" class="ghost-btn danger-btn" type="button">Unload model + clean memory + restart</button>
+          </div>
         </div>
       </details>
     </aside>
@@ -1843,7 +1916,9 @@ CHAT_HTML = """<!doctype html>
       presence_penalty: 1.5,
       max_tokens: 16384,
       stream: true,
-      theme: "dark",
+      generation_mode: "random",
+      seed: 42,
+      theme: "light",
       system_prompt: "",
     };
     const settingsKey = "potato_settings_v2";
@@ -1852,6 +1927,10 @@ CHAT_HTML = """<!doctype html>
     const PREFILL_PROGRESS_FLOOR = 6;
     const PREFILL_TICK_MS = 180;
     const STATUS_CHIP_MIN_VISIBLE_MS = 260;
+    const STATUS_POLL_TIMEOUT_MS = 3500;
+    const RUNTIME_RECONNECT_INTERVAL_MS = 1200;
+    const RUNTIME_RECONNECT_TIMEOUT_MS = 2500;
+    const RUNTIME_RECONNECT_MAX_ATTEMPTS = 75;
     const IMAGE_CANCEL_RECOVERY_DELAY_MS = Math.max(
       200,
       Number(window.__POTATO_CANCEL_RECOVERY_DELAY_MS__ || 8000),
@@ -1869,6 +1948,12 @@ CHAT_HTML = """<!doctype html>
     let statusChipHideTimer = null;
     let latestStatus = null;
     let downloadStartInFlight = false;
+    let runtimeResetInFlight = false;
+    let runtimeReconnectWatchActive = false;
+    let runtimeReconnectWatchTimer = null;
+    let runtimeReconnectAttempts = 0;
+    let statusPollSeq = 0;
+    let statusPollAppliedSeq = 0;
     let runtimeDetailsExpanded = false;
     let mobileSidebarMql = null;
     const chatHistory = [];
@@ -1887,13 +1972,40 @@ CHAT_HTML = """<!doctype html>
       "runtime-metric-critical",
     ];
 
+    function detectSystemTheme() {
+      try {
+        if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+          if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            return "dark";
+          }
+        }
+      } catch (_err) {
+        // Fall through to light theme fallback.
+      }
+      return "light";
+    }
+
+    function normalizeTheme(rawTheme, fallback = defaultSettings.theme) {
+      if (rawTheme === "dark") return "dark";
+      if (rawTheme === "light") return "light";
+      return fallback;
+    }
+
     function loadSettings() {
       const raw = localStorage.getItem(settingsKey);
-      if (!raw) return { ...defaultSettings };
+      if (!raw) {
+        return { ...defaultSettings, theme: detectSystemTheme() };
+      }
       try {
-        return { ...defaultSettings, ...JSON.parse(raw) };
+        const parsed = { ...defaultSettings, ...JSON.parse(raw) };
+        return {
+          ...parsed,
+          generation_mode: normalizeGenerationMode(parsed.generation_mode),
+          seed: normalizeSeedValue(parsed.seed, defaultSettings.seed),
+          theme: normalizeTheme(parsed.theme, detectSystemTheme()),
+        };
       } catch (_err) {
-        return { ...defaultSettings };
+        return { ...defaultSettings, theme: detectSystemTheme() };
       }
     }
 
@@ -1904,6 +2016,30 @@ CHAT_HTML = """<!doctype html>
     function parseNumber(id, fallback) {
       const parsed = Number(document.getElementById(id).value);
       return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    function normalizeGenerationMode(rawMode) {
+      return rawMode === "deterministic" ? "deterministic" : "random";
+    }
+
+    function normalizeSeedValue(rawSeed, fallback = defaultSettings.seed) {
+      const parsed = Number(rawSeed);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.trunc(parsed);
+    }
+
+    function updateSeedFieldState(generationMode) {
+      const seedField = document.getElementById("seed");
+      if (!seedField) return;
+      seedField.disabled = generationMode !== "deterministic";
+    }
+
+    function resolveSeedForRequest(settings) {
+      const mode = normalizeGenerationMode(settings?.generation_mode);
+      if (mode !== "deterministic") {
+        return null;
+      }
+      return normalizeSeedValue(settings?.seed, defaultSettings.seed);
     }
 
     function formatBytes(rawBytes) {
@@ -2096,6 +2232,8 @@ CHAT_HTML = """<!doctype html>
     }
 
     function collectSettings() {
+      const generationMode = normalizeGenerationMode(document.getElementById("generationMode").value);
+      const seed = normalizeSeedValue(document.getElementById("seed").value, defaultSettings.seed);
       return {
         temperature: parseNumber("temperature", defaultSettings.temperature),
         top_p: parseNumber("top_p", defaultSettings.top_p),
@@ -2104,6 +2242,8 @@ CHAT_HTML = """<!doctype html>
         presence_penalty: parseNumber("presence_penalty", defaultSettings.presence_penalty),
         max_tokens: parseNumber("max_tokens", defaultSettings.max_tokens),
         stream: document.getElementById("stream").value === "true",
+        generation_mode: generationMode,
+        seed,
         theme: document.documentElement.getAttribute("data-theme") || defaultSettings.theme,
         system_prompt: document.getElementById("systemPrompt").value.trim(),
       };
@@ -2412,6 +2552,8 @@ CHAT_HTML = """<!doctype html>
 
     function bindSettings() {
       const settings = loadSettings();
+      const normalizedGenerationMode = normalizeGenerationMode(settings.generation_mode);
+      const normalizedSeed = normalizeSeedValue(settings.seed, defaultSettings.seed);
 
       document.getElementById("temperature").value = String(settings.temperature);
       document.getElementById("top_p").value = String(settings.top_p);
@@ -2420,12 +2562,20 @@ CHAT_HTML = """<!doctype html>
       document.getElementById("presence_penalty").value = String(settings.presence_penalty);
       document.getElementById("max_tokens").value = String(settings.max_tokens);
       document.getElementById("stream").value = String(settings.stream);
+      document.getElementById("generationMode").value = normalizedGenerationMode;
+      document.getElementById("seed").value = String(normalizedSeed);
       document.getElementById("systemPrompt").value = settings.system_prompt;
+      updateSeedFieldState(normalizedGenerationMode);
 
       applyTheme(settings.theme);
 
       document.querySelectorAll("details input, details select, details textarea").forEach((el) => {
         el.addEventListener("change", persistSettingsFromInputs);
+      });
+      document.getElementById("generationMode").addEventListener("change", (event) => {
+        const generationMode = normalizeGenerationMode(event.target?.value);
+        updateSeedFieldState(generationMode);
+        persistSettingsFromInputs();
       });
     }
 
@@ -2730,6 +2880,17 @@ CHAT_HTML = """<!doctype html>
       meta.textContent = text;
     }
 
+    function isLocalModelConnected(statusPayload) {
+      const backendMode = String(
+        statusPayload?.backend?.active
+        || statusPayload?.backend?.mode
+        || ""
+      ).toLowerCase();
+      const isReady = String(statusPayload?.state || "").toUpperCase() === "READY";
+      const llamaHealthy = statusPayload?.llama_server?.healthy === true;
+      return backendMode === "llama" && isReady && llamaHealthy;
+    }
+
     function updateLlamaIndicator(statusPayload) {
       const badge = document.getElementById("statusBadge");
       const dot = document.getElementById("statusDot");
@@ -2741,8 +2902,7 @@ CHAT_HTML = """<!doctype html>
         || ""
       ).toLowerCase();
       const isReady = String(statusPayload?.state || "").toUpperCase() === "READY";
-      const llamaHealthy = statusPayload?.llama_server?.healthy === true;
-      const isHealthy = llamaHealthy || (backendMode === "fake" && isReady);
+      const isHealthy = isLocalModelConnected(statusPayload) || (backendMode === "fake" && isReady);
       badge.classList.remove("online", "offline");
       dot.classList.remove("online", "offline");
       if (isHealthy) {
@@ -2946,6 +3106,108 @@ CHAT_HTML = """<!doctype html>
       }
     }
 
+    function setRuntimeResetButtonState(inFlight) {
+      const btn = document.getElementById("resetRuntimeBtn");
+      if (!btn) return;
+      btn.disabled = Boolean(inFlight);
+      btn.textContent = inFlight
+        ? "Restarting runtime..."
+        : "Unload model + clean memory + restart";
+    }
+
+    function stopRuntimeReconnectWatch() {
+      if (runtimeReconnectWatchTimer) {
+        window.clearTimeout(runtimeReconnectWatchTimer);
+        runtimeReconnectWatchTimer = null;
+      }
+      runtimeReconnectWatchActive = false;
+      runtimeReconnectAttempts = 0;
+    }
+
+    async function stepRuntimeReconnectWatch() {
+      if (!runtimeReconnectWatchActive) return;
+      runtimeReconnectAttempts += 1;
+      const statusPayload = await pollStatus({ timeoutMs: RUNTIME_RECONNECT_TIMEOUT_MS });
+      if (isLocalModelConnected(statusPayload)) {
+        stopRuntimeReconnectWatch();
+        setComposerActivity("Runtime reconnected.");
+        window.setTimeout(() => {
+          if (!runtimeReconnectWatchActive && !requestInFlight) {
+            setComposerActivity("");
+          }
+        }, 1500);
+        return;
+      }
+      if (runtimeReconnectAttempts >= RUNTIME_RECONNECT_MAX_ATTEMPTS) {
+        stopRuntimeReconnectWatch();
+        setComposerActivity("");
+        appendMessage(
+          "assistant",
+          "Runtime reset is taking longer than expected. It may still be loading the model. " +
+          "Check status in a few moments."
+        );
+        return;
+      }
+      runtimeReconnectWatchTimer = window.setTimeout(stepRuntimeReconnectWatch, RUNTIME_RECONNECT_INTERVAL_MS);
+    }
+
+    function startRuntimeReconnectWatch() {
+      stopRuntimeReconnectWatch();
+      runtimeReconnectWatchActive = true;
+      runtimeReconnectAttempts = 0;
+      setComposerActivity("Runtime reset in progress. Reconnecting...");
+      stepRuntimeReconnectWatch();
+    }
+
+    async function resetRuntimeHeavy() {
+      if (runtimeResetInFlight) return;
+      const confirmed = window.confirm(
+        "Unload the model, reclaim memory/swap, and restart Potato runtime now? " +
+        "The chat will disconnect briefly."
+      );
+      if (!confirmed) return;
+
+      runtimeResetInFlight = true;
+      let shouldTrackReconnect = false;
+      setRuntimeResetButtonState(true);
+      setComposerActivity("Scheduling runtime reset...");
+      try {
+        const res = await fetch("/internal/reset-runtime", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const reason = body?.reason ? ` (${body.reason})` : "";
+          appendMessage("assistant", `Could not start runtime reset${reason}.`);
+          return;
+        }
+        if (body?.started) {
+          shouldTrackReconnect = true;
+          appendMessage(
+            "assistant",
+            "Runtime reset started. Unloading model from memory and reclaiming RAM/swap. " +
+            "Model files on disk are unchanged."
+          );
+        } else {
+          appendMessage("assistant", `Runtime reset did not start (${body?.reason || "unknown"}).`);
+        }
+      } catch (err) {
+        appendMessage("assistant", `Could not start runtime reset: ${err}`);
+      } finally {
+        runtimeResetInFlight = false;
+        setRuntimeResetButtonState(false);
+        if (shouldTrackReconnect) {
+          startRuntimeReconnectWatch();
+        } else {
+          setComposerActivity("");
+          window.setTimeout(() => {
+            pollStatus();
+          }, 1000);
+        }
+      }
+    }
+
     function consumeSseDeltas(state, chunkText) {
       if (!chunkText) return { deltas: [], events: [] };
       state.buffer += chunkText.replace(/\\r\\n/g, "\\n");
@@ -3039,12 +3301,28 @@ CHAT_HTML = """<!doctype html>
       setSendEnabled();
     }
 
-    async function pollStatus() {
+    async function pollStatus(options = {}) {
+      const timeoutMs = Math.max(500, Number(options?.timeoutMs || STATUS_POLL_TIMEOUT_MS));
+      const seq = ++statusPollSeq;
+      const controller = new AbortController();
+      const timeoutHandle = window.setTimeout(() => {
+        controller.abort();
+      }, timeoutMs);
       try {
-        const res = await fetch("/status");
+        const res = await fetch("/status", { cache: "no-store", signal: controller.signal });
         const body = await res.json();
+        if (seq < statusPollAppliedSeq) {
+          return latestStatus;
+        }
+        statusPollAppliedSeq = seq;
         setStatus(body);
+        return body;
       } catch (err) {
+        if (seq < statusPollAppliedSeq) {
+          return latestStatus;
+        }
+        statusPollAppliedSeq = seq;
+        const statusErrText = err?.name === "AbortError" ? "request timeout" : String(err);
         latestStatus = {
           state: "DOWN",
           download: {
@@ -3073,7 +3351,7 @@ CHAT_HTML = """<!doctype html>
             throttling: { any_current: false, current_flags: [], history_flags: [] },
           },
         };
-        document.getElementById("statusText").textContent = `Status error: ${err}`;
+        document.getElementById("statusText").textContent = `Status error: ${statusErrText}`;
         const modelNameField = document.getElementById("modelName");
         if (modelNameField) {
           modelNameField.value = "Unknown model (status unavailable)";
@@ -3082,6 +3360,9 @@ CHAT_HTML = """<!doctype html>
         renderDownloadPrompt(latestStatus);
         renderSystemRuntime(latestStatus.system);
         setSendEnabled();
+        return latestStatus;
+      } finally {
+        window.clearTimeout(timeoutHandle);
       }
     }
 
@@ -3141,6 +3422,10 @@ CHAT_HTML = """<!doctype html>
           max_tokens: settings.max_tokens,
           stream: settings.stream,
         };
+        const resolvedSeed = resolveSeedForRequest(settings);
+        if (resolvedSeed !== null) {
+          reqBody.seed = resolvedSeed;
+        }
 
         if (settings.system_prompt) {
           reqBody.messages.push({ role: "system", content: settings.system_prompt });
@@ -3448,6 +3733,7 @@ CHAT_HTML = """<!doctype html>
       setRuntimeDetailsExpanded(!runtimeDetailsExpanded);
     });
     document.getElementById("startDownloadBtn").addEventListener("click", startModelDownload);
+    document.getElementById("resetRuntimeBtn").addEventListener("click", resetRuntimeHeavy);
     document.getElementById("attachImageBtn").addEventListener("click", openImagePicker);
     document.getElementById("cancelBtn").addEventListener("click", cancelCurrentWork);
     document.getElementById("clearImageBtn").addEventListener("click", (event) => {
@@ -3609,6 +3895,18 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
             )
 
         started, reason = await start_model_download(app, runtime_cfg, trigger="manual")
+        status_code = 202 if started else 200
+        return JSONResponse(status_code=status_code, content={"started": started, "reason": reason})
+
+    @app.post("/internal/reset-runtime")
+    async def reset_runtime_now(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"started": False, "reason": "orchestrator_disabled"},
+            )
+
+        started, reason = await start_runtime_reset(runtime_cfg)
         status_code = 202 if started else 200
         return JSONResponse(status_code=status_code, content={"started": started, "reason": reason})
 
