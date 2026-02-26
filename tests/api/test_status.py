@@ -104,6 +104,16 @@ def test_status_includes_llama_memory_loading_setting(client):
     assert body["llama_runtime"]["memory_loading"]["mode"] in {"auto", "full_ram", "mmap"}
 
 
+def test_status_includes_large_model_override_setting(client):
+    response = client.get("/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert "llama_runtime" in body
+    assert "large_model_override" in body["llama_runtime"]
+    assert body["llama_runtime"]["large_model_override"]["enabled"] in {True, False}
+    assert "override_enabled" in body["compatibility"]
+
+
 def test_status_stays_ready_when_active_model_healthy_and_download_error_is_from_side_model(
     client,
     runtime,

@@ -240,6 +240,40 @@ def test_set_llama_memory_loading_mode_persists_and_restarts(runtime, monkeypatc
     assert status_body["llama_runtime"]["memory_loading"]["no_mmap_env"] == "1"
 
 
+def test_set_large_model_override_persists_without_restart(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+    monkeypatch.setattr("app.main._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
+    monkeypatch.setattr("app.main._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("app.main.get_large_model_warn_threshold_bytes", lambda: 1)
+    with runtime.model_path.open("wb") as handle:
+        handle.seek((6 * 1024 * 1024 * 1024) - 1)
+        handle.write(b"x")
+
+    with TestClient(app) as client:
+        before = client.get("/status")
+        response = client.post(
+            "/internal/compatibility/large-model-override",
+            json={"enabled": True},
+        )
+        after = client.get("/status")
+
+    assert before.status_code == 200
+    assert before.json()["compatibility"]["warnings"]
+    assert response.status_code == 200
+    body = response.json()
+    assert body["updated"] is True
+    assert body["override"]["enabled"] is True
+    assert body["compatibility"]["override_enabled"] is True
+    assert body["compatibility"]["warnings"] == []
+    assert after.status_code == 200
+    after_body = after.json()
+    assert after_body["compatibility"]["override_enabled"] is True
+    assert after_body["compatibility"]["warnings"] == []
+    assert after_body["llama_runtime"]["large_model_override"]["enabled"] is True
+
+
 def test_delete_model_removes_file_and_registry(runtime):
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)

@@ -235,6 +235,9 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "POTATO_IMAGE_OUTPUT_DIR" in common
     assert "potato-lite" in common
     assert "potato-full" in common
+    assert "generate_imager_manifest.py" in common
+    assert "potato-${variant}.rpi-imager-manifest" in common
+    assert "Potato OS (${variant}, Raspberry Pi 5)" in common
     assert "uv run --script" in all_in_one
     assert "--variant" in uv_script
     assert "https://github.com/RPi-Distro/pi-gen.git" in uv_script
@@ -427,8 +430,11 @@ def test_chat_ui_copy_and_stats_footnote_contract():
 
 def test_chat_ui_runtime_details_hide_compact_and_apply_metric_threshold_classes():
     assert 'id="compatibilityWarnings"' in CHAT_HTML
+    assert 'id="compatibilityWarningsText"' in CHAT_HTML
+    assert 'id="compatibilityOverrideBtn"' in CHAT_HTML
     assert "function renderCompatibilityWarnings(" in CHAT_HTML
     assert "statusPayload?.compatibility?.warnings" in CHAT_HTML
+    assert "statusPayload?.compatibility?.override_enabled" in CHAT_HTML
     assert 'id="runtimeCompact"' in CHAT_HTML
     assert "compact.hidden = runtimeDetailsExpanded;" in CHAT_HTML
     assert 'toggle.textContent = runtimeDetailsExpanded ? "Show compact" : "Show details";' in CHAT_HTML
@@ -465,6 +471,15 @@ def test_chat_ui_exposes_llama_memory_loading_controls():
     assert 'id="applyLlamaMemoryLoadingBtn"' in CHAT_HTML
     assert 'id="llamaMemoryLoadingStatus"' in CHAT_HTML
     assert "function applyLlamaMemoryLoadingMode(" in CHAT_HTML
+
+
+def test_chat_ui_exposes_large_model_compatibility_override_controls():
+    assert "Allow unsupported large models (try anyway)" in CHAT_HTML
+    assert 'id="largeModelOverrideEnabled"' in CHAT_HTML
+    assert 'id="applyLargeModelOverrideBtn"' in CHAT_HTML
+    assert 'id="largeModelOverrideStatus"' in CHAT_HTML
+    assert "function applyLargeModelCompatibilityOverride(" in CHAT_HTML
+    assert "/internal/compatibility/large-model-override" in CHAT_HTML
     assert "/internal/llama-runtime/memory-loading" in CHAT_HTML
     assert "memory_loading" in CHAT_HTML
 

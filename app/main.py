@@ -285,6 +285,7 @@ def build_large_model_compatibility(
     *,
     model_filename: str | None = None,
     model_size_bytes: int | None = None,
+    allow_override: bool | None = None,
 ) -> dict[str, Any]:
     total_memory_bytes = _detect_total_memory_bytes()
     pi_model_name = _read_pi_device_model_name()
@@ -293,12 +294,19 @@ def build_large_model_compatibility(
         pi_model_name=pi_model_name,
     )
     threshold_bytes = get_large_model_warn_threshold_bytes()
+    override_enabled = (
+        normalize_allow_unsupported_large_models(allow_override)
+        if allow_override is not None
+        else normalize_allow_unsupported_large_models(
+            read_llama_runtime_settings(runtime).get("allow_unsupported_large_models")
+        )
+    )
     size_bytes = int(model_size_bytes) if isinstance(model_size_bytes, int) else _safe_int(model_size_bytes, 0)
     if size_bytes <= 0:
         size_bytes = 0
 
     warnings: list[dict[str, Any]] = []
-    if size_bytes > threshold_bytes and device_class != "pi5-16gb":
+    if size_bytes > threshold_bytes and device_class != "pi5-16gb" and not override_enabled:
         filename = str(model_filename or runtime.model_path.name or "model.gguf")
         warnings.append(
             {
@@ -319,6 +327,7 @@ def build_large_model_compatibility(
         "memory_total_bytes": total_memory_bytes or 0,
         "large_model_warn_threshold_bytes": threshold_bytes,
         "supported_target": "raspberry-pi-5-16gb",
+        "override_enabled": override_enabled,
         "warnings": warnings,
     }
 
@@ -473,6 +482,15 @@ def llama_memory_loading_no_mmap_env(mode: str) -> str:
     return "auto"
 
 
+def normalize_allow_unsupported_large_models(raw_value: Any) -> bool:
+    if isinstance(raw_value, bool):
+        return raw_value
+    if raw_value is None:
+        return False
+    value = str(raw_value).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def read_llama_runtime_settings(runtime: RuntimeConfig) -> dict[str, Any]:
     path = _llama_runtime_settings_path(runtime)
     try:
@@ -484,13 +502,29 @@ def read_llama_runtime_settings(runtime: RuntimeConfig) -> dict[str, Any]:
     mode = normalize_llama_memory_loading_mode(raw.get("memory_loading_mode"))
     return {
         "memory_loading_mode": mode,
+        "allow_unsupported_large_models": normalize_allow_unsupported_large_models(
+            raw.get("allow_unsupported_large_models")
+        ),
         "updated_at_unix": _safe_int(raw.get("updated_at_unix"), 0) or None,
     }
 
 
-def write_llama_runtime_settings(runtime: RuntimeConfig, *, memory_loading_mode: str) -> dict[str, Any]:
+def write_llama_runtime_settings(
+    runtime: RuntimeConfig,
+    *,
+    memory_loading_mode: str | None = None,
+    allow_unsupported_large_models: bool | None = None,
+) -> dict[str, Any]:
+    current = read_llama_runtime_settings(runtime)
     payload = {
-        "memory_loading_mode": normalize_llama_memory_loading_mode(memory_loading_mode),
+        "memory_loading_mode": normalize_llama_memory_loading_mode(
+            current.get("memory_loading_mode") if memory_loading_mode is None else memory_loading_mode
+        ),
+        "allow_unsupported_large_models": normalize_allow_unsupported_large_models(
+            current.get("allow_unsupported_large_models")
+            if allow_unsupported_large_models is None
+            else allow_unsupported_large_models
+        ),
         "updated_at_unix": int(time.time()),
     }
     _atomic_write_json(_llama_runtime_settings_path(runtime), payload)
@@ -511,6 +545,16 @@ def build_llama_memory_loading_status(runtime: RuntimeConfig) -> dict[str, Any]:
             if mode == "mmap"
             else "Automatic (profile-based)"
         ),
+        "updated_at_unix": settings.get("updated_at_unix"),
+    }
+
+
+def build_llama_large_model_override_status(runtime: RuntimeConfig) -> dict[str, Any]:
+    settings = read_llama_runtime_settings(runtime)
+    enabled = normalize_allow_unsupported_large_models(settings.get("allow_unsupported_large_models"))
+    return {
+        "enabled": enabled,
+        "label": "Try unsupported large model anyway" if enabled else "Use compatibility warnings (default)",
         "updated_at_unix": settings.get("updated_at_unix"),
     }
 
@@ -577,6 +621,7 @@ def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = Non
         "available_bundles": available,
         "switch": switch_snapshot,
         "memory_loading": build_llama_memory_loading_status(runtime),
+        "large_model_override": build_llama_large_model_override_status(runtime),
     }
 
 
@@ -3282,7 +3327,10 @@ CHAT_HTML = """<!doctype html>
             <span>Pi Runtime</span>
             <button id="runtimeViewToggle" class="runtime-toggle" type="button" aria-expanded="false">Show details</button>
           </div>
-          <div id="compatibilityWarnings" class="runtime-compact" hidden></div>
+          <div id="compatibilityWarnings" class="runtime-compact" hidden>
+            <span id="compatibilityWarningsText"></span>
+            <button id="compatibilityOverrideBtn" class="ghost-btn" type="button" hidden>Try anyway</button>
+          </div>
           <div id="runtimeCompact" class="runtime-compact">CPU -- | Cores -- | GPU -- | Swap -- | Throttle --</div>
           <div id="runtimeDetails" class="runtime-details" hidden>
             <div id="runtimeDetailCpu">CPU total: --</div>
@@ -3302,6 +3350,17 @@ CHAT_HTML = """<!doctype html>
       <details class="settings">
         <summary>Settings</summary>
         <div class="settings-grid">
+          <div class="full">
+            <h3 style="margin: 0 0 8px; font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Large Model Compatibility</h3>
+            <label class="full" style="display:flex; align-items:center; gap:8px;">
+              <input id="largeModelOverrideEnabled" type="checkbox">
+              <span>Allow unsupported large models (try anyway)</span>
+            </label>
+            <div class="settings-action-row full">
+              <button id="applyLargeModelOverrideBtn" class="ghost-btn" type="button">Apply compatibility override</button>
+            </div>
+            <div id="largeModelOverrideStatus" class="runtime-compact">Compatibility override: default warnings</div>
+          </div>
           <div class="full">
             <h3 style="margin: 0 0 8px; font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Model Memory Loading</h3>
             <label class="full">GGUF loading mode (requires runtime restart)
@@ -3504,6 +3563,7 @@ CHAT_HTML = """<!doctype html>
     let modelActionInFlight = false;
     let llamaRuntimeSwitchInFlight = false;
     let llamaMemoryLoadingApplyInFlight = false;
+    let largeModelOverrideApplyInFlight = false;
     let uploadRequest = null;
     let runtimeResetInFlight = false;
     let runtimeReconnectWatchActive = false;
@@ -4733,20 +4793,33 @@ CHAT_HTML = """<!doctype html>
 
     function renderCompatibilityWarnings(statusPayload) {
       const el = document.getElementById("compatibilityWarnings");
+      const textEl = document.getElementById("compatibilityWarningsText");
+      const overrideBtn = document.getElementById("compatibilityOverrideBtn");
       if (!el) return;
       const warnings = Array.isArray(statusPayload?.compatibility?.warnings)
         ? statusPayload.compatibility.warnings
         : [];
+      const overrideEnabled = statusPayload?.compatibility?.override_enabled === true;
       if (!warnings.length) {
         el.hidden = true;
-        el.textContent = "";
+        if (textEl) textEl.textContent = "";
+        else el.textContent = "";
+        if (overrideBtn) {
+          overrideBtn.hidden = true;
+          overrideBtn.disabled = false;
+          overrideBtn.textContent = "Try anyway";
+        }
         return;
       }
       const text = warnings
         .map((item) => String(item?.message || "Compatibility warning"))
         .filter((item) => item.length > 0)
         .join(" | ");
-      el.textContent = text || "Compatibility warning";
+      if (textEl) textEl.textContent = text || "Compatibility warning";
+      else el.textContent = text || "Compatibility warning";
+      if (overrideBtn) {
+        overrideBtn.hidden = overrideEnabled;
+      }
       el.hidden = false;
     }
 
@@ -4768,6 +4841,12 @@ CHAT_HTML = """<!doctype html>
       el.textContent = String(message || "Current memory loading: unknown");
     }
 
+    function setLargeModelOverrideStatus(message) {
+      const el = document.getElementById("largeModelOverrideStatus");
+      if (!el) return;
+      el.textContent = String(message || "Compatibility override: default warnings");
+    }
+
     function setLlamaRuntimeSwitchButtonState(inFlight) {
       const btn = document.getElementById("switchLlamaRuntimeBtn");
       if (!btn) return;
@@ -4780,6 +4859,19 @@ CHAT_HTML = """<!doctype html>
       if (!btn) return;
       btn.disabled = Boolean(inFlight);
       btn.textContent = inFlight ? "Applying..." : "Apply memory loading + restart";
+    }
+
+    function setLargeModelOverrideButtonState(inFlight) {
+      const btn = document.getElementById("applyLargeModelOverrideBtn");
+      if (btn) {
+        btn.disabled = Boolean(inFlight);
+        btn.textContent = inFlight ? "Applying..." : "Apply compatibility override";
+      }
+      const quickBtn = document.getElementById("compatibilityOverrideBtn");
+      if (quickBtn) {
+        quickBtn.disabled = Boolean(inFlight);
+        quickBtn.textContent = inFlight ? "Applying..." : "Try anyway";
+      }
     }
 
     function renderLlamaRuntimeStatus(statusPayload) {
@@ -4854,6 +4946,18 @@ CHAT_HTML = """<!doctype html>
         setLlamaMemoryLoadingStatus("Current memory loading: unknown");
       }
 
+      const largeModelOverrideToggle = document.getElementById("largeModelOverrideEnabled");
+      const largeModelOverride = runtimePayload?.large_model_override || {};
+      const overrideEnabled = largeModelOverride?.enabled === true || statusPayload?.compatibility?.override_enabled === true;
+      if (largeModelOverrideToggle) {
+        largeModelOverrideToggle.checked = overrideEnabled;
+      }
+      if (overrideEnabled) {
+        setLargeModelOverrideStatus("Compatibility override: trying unsupported large models is enabled");
+      } else {
+        setLargeModelOverrideStatus("Compatibility override: default warnings");
+      }
+
       const switchState = runtimePayload?.switch || {};
       if (switchState?.active) {
         const target = String(switchState?.target_bundle_path || "selected bundle");
@@ -4868,6 +4972,7 @@ CHAT_HTML = """<!doctype html>
 
       setLlamaRuntimeSwitchButtonState(llamaRuntimeSwitchInFlight || switchState?.active === true);
       setLlamaMemoryLoadingButtonState(llamaMemoryLoadingApplyInFlight);
+      setLargeModelOverrideButtonState(largeModelOverrideApplyInFlight);
     }
 
     function findModelInLatestStatus(modelId) {
@@ -4963,6 +5068,57 @@ CHAT_HTML = """<!doctype html>
         llamaMemoryLoadingApplyInFlight = false;
         setLlamaMemoryLoadingButtonState(false);
       }
+    }
+
+    async function applyLargeModelCompatibilityOverride(enabled) {
+      if (largeModelOverrideApplyInFlight) return;
+      largeModelOverrideApplyInFlight = true;
+      setLargeModelOverrideButtonState(true);
+      setLargeModelOverrideStatus(
+        enabled
+          ? "Applying compatibility override: try unsupported models..."
+          : "Applying compatibility override: restore warnings..."
+      );
+      try {
+        const { res, body } = await postJson("/internal/compatibility/large-model-override", { enabled: Boolean(enabled) });
+        if (!res.ok || body?.updated !== true) {
+          appendMessage("assistant", `Could not update compatibility override (${body?.reason || res.status}).`);
+          setLargeModelOverrideStatus(`Last compatibility override error: ${body?.reason || res.status}`);
+          return;
+        }
+        appendMessage(
+          "assistant",
+          body?.override?.enabled
+            ? "Enabled compatibility override. Potato will try unsupported large models."
+            : "Disabled compatibility override. Default large-model warnings are active again."
+        );
+        setLargeModelOverrideStatus(
+          body?.override?.enabled
+            ? "Compatibility override: trying unsupported large models is enabled"
+            : "Compatibility override: default warnings"
+        );
+      } catch (err) {
+        appendMessage("assistant", `Could not update compatibility override: ${err}`);
+        setLargeModelOverrideStatus(`Last compatibility override error: ${err}`);
+      } finally {
+        largeModelOverrideApplyInFlight = false;
+        setLargeModelOverrideButtonState(false);
+        await pollStatus();
+      }
+    }
+
+    async function applyLargeModelOverrideFromSettings() {
+      const checkbox = document.getElementById("largeModelOverrideEnabled");
+      await applyLargeModelCompatibilityOverride(checkbox?.checked === true);
+    }
+
+    async function allowUnsupportedLargeModelFromWarning() {
+      const confirmed = window.confirm(
+        "Try loading unsupported large models anyway on this device? " +
+        "This may fail or be unstable, but Potato will stop warning-blocking this attempt."
+      );
+      if (!confirmed) return;
+      await applyLargeModelCompatibilityOverride(true);
     }
 
     function renderModelsList(statusPayload) {
@@ -6026,6 +6182,8 @@ CHAT_HTML = """<!doctype html>
     document.getElementById("uploadModelBtn").addEventListener("click", uploadLocalModel);
     document.getElementById("cancelUploadBtn").addEventListener("click", cancelLocalModelUpload);
     document.getElementById("purgeModelsBtn").addEventListener("click", purgeAllModels);
+    document.getElementById("applyLargeModelOverrideBtn").addEventListener("click", applyLargeModelOverrideFromSettings);
+    document.getElementById("compatibilityOverrideBtn").addEventListener("click", allowUnsupportedLargeModelFromWarning);
     document.getElementById("applyLlamaMemoryLoadingBtn").addEventListener("click", applyLlamaMemoryLoadingMode);
     document.getElementById("switchLlamaRuntimeBtn").addEventListener("click", switchLlamaRuntimeBundle);
     document.getElementById("modelsList").addEventListener("click", (event) => {
@@ -6323,6 +6481,49 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 "saved": saved,
                 "restarted": restarted,
                 "restart_reason": restart_reason,
+            },
+        )
+
+    @app.post("/internal/compatibility/large-model-override")
+    async def set_large_model_override(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"updated": False, "reason": "orchestrator_disabled"},
+            )
+
+        payload = await request.json()
+        enabled = normalize_allow_unsupported_large_models(
+            payload.get("enabled", payload.get("allow_unsupported_large_models"))
+        )
+        saved = write_llama_runtime_settings(
+            runtime_cfg,
+            allow_unsupported_large_models=enabled,
+        )
+        compatibility = build_large_model_compatibility(
+            runtime_cfg,
+            model_filename=runtime_cfg.model_path.name,
+            model_size_bytes=(runtime_cfg.model_path.stat().st_size if runtime_cfg.model_path.exists() else None),
+            allow_override=enabled,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "updated": True,
+                "reason": "large_model_override_updated",
+                "override": {
+                    "enabled": enabled,
+                    "label": (
+                        "Try unsupported large model anyway"
+                        if enabled
+                        else "Use compatibility warnings (default)"
+                    ),
+                },
+                "compatibility": compatibility,
+                "saved": saved,
             },
         )
 
