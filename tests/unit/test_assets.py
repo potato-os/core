@@ -193,6 +193,21 @@ def test_local_image_build_script_collects_artifacts_for_flash_test():
     assert "CLEAN_ARTIFACTS_MODE" in script
 
 
+def test_clean_image_build_artifacts_script_cleans_outputs_and_optional_caches():
+    script = Path("bin/clean_image_build_artifacts.sh").read_text(encoding="utf-8")
+
+    assert "output/images" in script
+    assert ".cache/potato-image-build" in script
+    assert ".cache/potato-image-cache" in script
+    assert ".cache/pi-gen-arm64" in script
+    assert "--deep" in script
+    assert "--include-download-cache" in script
+    assert "--include-pi-gen-checkout" in script
+    assert "docker container inspect" in script
+    assert "pigen_work potato-pigen-lite potato-pigen-full" in script
+    assert "find \"${target}\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +" in script
+
+
 def test_imager_manifest_generator_is_pi5_only():
     script = Path("bin/generate_imager_manifest.py").read_text(encoding="utf-8")
 
@@ -231,6 +246,9 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "docker rm -f" in common
     assert "Git does not preserve directory modes" in common
     assert "chmod 0755 \"${files_root}/opt\"" in common
+    assert "${potato_root}/llama-bundles" in common
+    assert "llama-bundles/${bundle_name}/" in common
+    assert "find \"${bundle_root}\" -mindepth 1 -maxdepth 1 -type d -name 'llama_server_bundle_*' | sort" in common
     assert "docker context use default" in uv_script
     assert "colima start" in uv_script
     assert "except RuntimeError as exc" in uv_script

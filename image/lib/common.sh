@@ -150,10 +150,11 @@ build_stage_payload() {
 
   local files_root="${stage_path}/00-potato/files"
   local potato_root="${files_root}/opt/potato"
-  mkdir -p "${potato_root}/app" "${potato_root}/bin" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama"
+  local bundle_root="${POTATO_LLAMA_BUNDLE_ROOT:-${repo_root}/references/old_reference_design/llama_cpp_binary}"
+  mkdir -p "${potato_root}/app" "${potato_root}/bin" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama" "${potato_root}/llama-bundles"
   # Git does not preserve directory modes, and local umask can make files/opt too restrictive.
   # Normalize stage payload directories so the flashed image keeps /opt traversable by service users.
-  chmod 0755 "${files_root}/opt" "${potato_root}" "${potato_root}/app" "${potato_root}/bin" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama"
+  chmod 0755 "${files_root}/opt" "${potato_root}" "${potato_root}/app" "${potato_root}/bin" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama" "${potato_root}/llama-bundles"
 
   rsync -a "${repo_root}/app/" "${potato_root}/app/"
   rsync -a "${repo_root}/bin/" "${potato_root}/bin/"
@@ -168,6 +169,21 @@ build_stage_payload() {
   fi
   rsync -a --delete "${bundle_src}/" "${potato_root}/llama/"
   chmod +x "${potato_root}/llama/bin/llama-server"
+
+  if [ -d "${bundle_root}" ]; then
+    local bundle_dir bundle_name
+    find "${bundle_root}" -mindepth 1 -maxdepth 1 -type d -name 'llama_server_bundle_*' | sort | while IFS= read -r bundle_dir; do
+      [ -n "${bundle_dir}" ] || continue
+      [ -x "${bundle_dir}/bin/llama-server" ] || continue
+      [ -d "${bundle_dir}/lib" ] || continue
+      bundle_name="$(basename "${bundle_dir}")"
+      rsync -a --delete "${bundle_dir}/" "${potato_root}/llama-bundles/${bundle_name}/"
+      chmod +x "${potato_root}/llama-bundles/${bundle_name}/bin/llama-server"
+      if [ -f "${potato_root}/llama-bundles/${bundle_name}/run-llama-server.sh" ]; then
+        chmod +x "${potato_root}/llama-bundles/${bundle_name}/run-llama-server.sh"
+      fi
+    done
+  fi
 
   if [ "${variant}" = "full" ]; then
     local model_path="${POTATO_FULL_MODEL_PATH:-}"
