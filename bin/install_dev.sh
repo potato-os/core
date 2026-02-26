@@ -25,6 +25,19 @@ run_sudo() {
   sudo "$@"
 }
 
+normalize_runtime_dir_permissions() {
+  # Ensure the systemd service user can traverse the parent path (notably /opt on some images).
+  local target_parent
+  target_parent="$(dirname "${TARGET_ROOT}")"
+  if [ "${target_parent}" = "/opt" ] && [ -d /opt ]; then
+    run_sudo chmod 0755 /opt
+  fi
+
+  if [ -d "${TARGET_ROOT}" ]; then
+    run_sudo chmod 0755 "${TARGET_ROOT}" || true
+  fi
+}
+
 resolve_llama_bundle_src() {
   if [ -n "${LLAMA_BUNDLE_SRC}" ]; then
     printf '%s\n' "${LLAMA_BUNDLE_SRC}"
@@ -98,6 +111,7 @@ fi
 
 run_sudo mkdir -p "${TARGET_ROOT}"/{bin,app,models,state,config,llama}
 run_sudo mkdir -p "${TARGET_ROOT}/nginx"
+normalize_runtime_dir_permissions
 
 run_sudo rsync -a "${REPO_ROOT}/app/" "${TARGET_ROOT}/app/"
 run_sudo rsync -a "${REPO_ROOT}/bin/" "${TARGET_ROOT}/bin/"
@@ -137,6 +151,7 @@ run_sudo "${TARGET_ROOT}/venv/bin/pip" install --upgrade pip
 run_sudo "${TARGET_ROOT}/venv/bin/pip" install -r "${TARGET_ROOT}/app/requirements.txt"
 
 run_sudo chown -R "${POTATO_USER}:${POTATO_GROUP}" "${TARGET_ROOT}"
+normalize_runtime_dir_permissions
 
 if [ -f "${TARGET_ROOT}/nginx/potato.conf" ]; then
   run_sudo install -m 0644 "${TARGET_ROOT}/nginx/potato.conf" /etc/nginx/sites-available/potato

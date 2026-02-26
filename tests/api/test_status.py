@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi.testclient import TestClient
 
-from app.main import create_app, get_runtime
+from app.main import build_status, create_app, get_runtime
 
 
 def test_status_booting_when_model_missing(client, monkeypatch):
@@ -54,6 +55,66 @@ def test_status_ready_when_model_exists_and_llama_healthy(client, runtime, monke
     assert body["state"] == "READY"
     assert body["model_present"] is True
     assert body["llama_server"]["healthy"] is True
+
+
+def test_status_stays_ready_when_active_model_healthy_and_download_error_is_from_side_model(
+    client,
+    runtime,
+    monkeypatch,
+):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "default",
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": runtime.model_path.name,
+                        "source_url": "https://example.com/default.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                    {
+                        "id": "side-model",
+                        "filename": "side-model.gguf",
+                        "source_url": "https://example.com/side-model.gguf",
+                        "source_type": "url",
+                        "status": "failed",
+                        "error": "insufficient_storage",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime.download_state_path.write_text(
+        json.dumps(
+            {
+                "bytes_total": 1024,
+                "bytes_downloaded": 0,
+                "percent": 0,
+                "speed_bps": 0,
+                "eta_seconds": 0,
+                "error": "insufficient_storage",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "READY"
+    assert body["download"]["error"] == "insufficient_storage"
 
 
 async def _healthy_true(_runtime):
@@ -190,6 +251,79 @@ def test_status_includes_auto_start_countdown(runtime, monkeypatch):
     assert body["download"]["active"] is False
     assert body["download"]["auto_start_seconds"] == 300
     assert body["download"]["auto_start_remaining_seconds"] == 160
+    assert body["download"]["auto_download_completed_once"] is False
+
+
+def test_status_disables_auto_start_when_default_model_was_downloaded_once(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    runtime.auto_download_idle_seconds = 300
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "default",
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+                        "source_url": "https://example.com/Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+                        "source_type": "url",
+                        "status": "not_downloaded",
+                        "error": None,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(runtime=runtime, enable_orchestrator=False)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+    monkeypatch.setattr("app.main.get_monotonic_time", lambda: 2000.0)
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+
+    with TestClient(app) as test_client:
+        app.state.startup_monotonic = 100.0
+        response = test_client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["download"]["auto_download_completed_once"] is True
+    assert body["download"]["auto_start_remaining_seconds"] == 0
+
+
+def test_status_falls_back_download_target_model_when_missing(runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    runtime.download_state_path.write_text(
+        json.dumps(
+            {
+                "bytes_total": 100,
+                "bytes_downloaded": 50,
+                "percent": 50,
+                "speed_bps": 10,
+                "eta_seconds": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    body = asyncio.run(
+        build_status(
+            runtime,
+            app=None,
+            download_active=True,
+            auto_start_remaining_seconds=0,
+            system_snapshot=None,
+        )
+    )
+
+    assert body["download"]["current_model_id"] == "default"
+    default_model = next(item for item in body["models"] if item["id"] == "default")
+    assert default_model["status"] == "downloading"
+    assert default_model["percent"] == 50
 
 
 def test_status_includes_system_runtime_payload(runtime, monkeypatch):
@@ -209,6 +343,10 @@ def test_status_includes_system_runtime_payload(runtime, monkeypatch):
         "swap_total_bytes": 2000000000,
         "swap_used_bytes": 7000000,
         "swap_percent": 0.35,
+        "storage_total_bytes": 64000000000,
+        "storage_used_bytes": 22000000000,
+        "storage_free_bytes": 42000000000,
+        "storage_percent": 34.37,
         "temperature_c": 67.5,
         "gpu_clock_core_hz": 910007424,
         "gpu_clock_v3d_hz": 960012800,
@@ -230,6 +368,7 @@ def test_status_includes_system_runtime_payload(runtime, monkeypatch):
     assert body["system"]["available"] is True
     assert body["system"]["cpu_cores_percent"] == [18.0, 24.0, 19.0, 22.0]
     assert body["system"]["cpu_clock_arm_hz"] == 2400023808
+    assert body["system"]["storage_free_bytes"] == 42000000000
     assert body["system"]["throttling"]["raw"] == "0x80000"
 
 

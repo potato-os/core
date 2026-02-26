@@ -41,6 +41,22 @@ test("seed mode defaults to random, toggles deterministic, persists, and control
   expect(deterministicPayload.seed).toBe(1337);
   await expect(sendBtn).toHaveText("Send");
 
+  await generationMode.selectOption("random");
+  await expect(seedField).toBeDisabled();
+  await expect(seedField).toHaveValue("1337");
+
+  await promptField.fill("Seed random request after toggle.");
+  const randomRequestAfterTogglePromise = page.waitForRequest("**/v1/chat/completions");
+  await promptField.press("Enter");
+  const randomRequestAfterToggle = await randomRequestAfterTogglePromise;
+  const randomPayloadAfterToggle = JSON.parse(randomRequestAfterToggle.postData() || "{}");
+  expect(randomPayloadAfterToggle.seed).toBeUndefined();
+  await expect(sendBtn).toHaveText("Send");
+
+  await generationMode.selectOption("deterministic");
+  await expect(seedField).toBeEnabled();
+  await expect(seedField).toHaveValue("1337");
+
   await page.reload();
   await expect(page.locator("#generationMode")).toHaveValue("deterministic");
   await expect(page.locator("#seed")).toHaveValue("1337");
@@ -337,8 +353,70 @@ test("runtime details apply threshold colors for clock, memory, swap, and temper
 
 test("fake backend ready state shows connected badge", async ({ page }) => {
   await waitUntilReady(page);
-  await expect(page.locator("#statusLabel")).toHaveText("CONNECTED:Local Model");
+  await expect(page.locator("#statusLabel")).toHaveText("CONNECTED:Fake Backend");
   await expect(page.locator("#statusBadge")).toHaveClass(/online/);
+});
+
+test("llama booting with model present shows loading badge", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "BOOTING",
+        model_present: true,
+        model: { filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf" },
+        llama_server: { healthy: false, running: false, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        download: {
+          bytes_total: 2497282336,
+          bytes_downloaded: 2497282336,
+          percent: 100,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: null,
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.locator("#statusLabel")).toHaveText("LOADING:llama.cpp:Qwen3-VL-4B-Instruct-Q4_K_M.gguf");
+  await expect(page.locator("#statusBadge")).toHaveClass(/loading/);
+});
+
+test("llama error state shows failed badge", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "ERROR",
+        model_present: true,
+        model: { filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf" },
+        llama_server: { healthy: false, running: false, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        download: {
+          bytes_total: 2497282336,
+          bytes_downloaded: 2497282336,
+          percent: 100,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: "model_load_failed",
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.locator("#statusLabel")).toHaveText("FAILED:llama.cpp:Qwen3-VL-4B-Instruct-Q4_K_M.gguf");
+  await expect(page.locator("#statusBadge")).toHaveClass(/failed/);
 });
 
 test("mobile hamburger controls sidebar drawer and keeps composer actions aligned", async ({ page }) => {
@@ -383,4 +461,243 @@ test("mobile hamburger controls sidebar drawer and keeps composer actions aligne
   expect(attach.y).toBeGreaterThanOrEqual(comp.y);
   expect(send.y).toBeGreaterThanOrEqual(comp.y);
   expect(send.y + send.height).toBeLessThanOrEqual(comp.y + comp.height + 1);
+});
+
+test("model manager toggles countdown, registers URL model, and switches active model", async ({ page }) => {
+  page.on("dialog", (dialog) => dialog.accept());
+  let models = [
+    {
+      id: "default",
+      filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+      source_url: "https://example.com/default.gguf",
+      source_type: "url",
+      status: "ready",
+      is_active: true,
+      bytes_total: 0,
+      bytes_downloaded: 0,
+      percent: 0,
+      error: null,
+    },
+    {
+      id: "alt-model",
+      filename: "Alt-Funny-Model.gguf",
+      source_url: "https://example.com/alt.gguf",
+      source_type: "url",
+      status: "ready",
+      is_active: false,
+      bytes_total: 0,
+      bytes_downloaded: 0,
+      percent: 0,
+      error: null,
+    },
+  ];
+  let countdownEnabled = true;
+  let activeModelId = "default";
+
+  const statusPayload = () => ({
+    state: "READY",
+    model_present: true,
+    model: {
+      filename: models.find((m) => m.id === activeModelId)?.filename || "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+      active_model_id: activeModelId,
+    },
+    models: models.map((m) => ({ ...m, is_active: m.id === activeModelId })),
+    upload: {
+      active: false,
+      model_id: null,
+      bytes_total: 0,
+      bytes_received: 0,
+      percent: 0,
+      error: null,
+    },
+    download: {
+      bytes_total: 0,
+      bytes_downloaded: 0,
+      percent: 0,
+      speed_bps: 0,
+      eta_seconds: 0,
+      error: null,
+      active: models.some((m) => m.status === "downloading"),
+      auto_start_seconds: 300,
+      auto_start_remaining_seconds: countdownEnabled ? 120 : 0,
+      countdown_enabled: countdownEnabled,
+      current_model_id: models.find((m) => m.status === "downloading")?.id || null,
+    },
+    llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+    backend: { mode: "llama", active: "llama", fallback_active: false },
+    system: { available: false, cpu_cores_percent: [] },
+  });
+
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(statusPayload()),
+    });
+  });
+
+  await page.route("**/internal/download-countdown", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    countdownEnabled = body.enabled !== false;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ updated: true, countdown_enabled: countdownEnabled }),
+    });
+  });
+
+  await page.route("**/internal/models/register", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    models.push({
+      id: "new-url-model",
+      filename: "new-url-model.gguf",
+      source_url: body.source_url,
+      source_type: "url",
+      status: "not_downloaded",
+      is_active: false,
+      bytes_total: 0,
+      bytes_downloaded: 0,
+      percent: 0,
+      error: null,
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, reason: "registered", model: models[models.length - 1] }),
+    });
+  });
+
+  await page.route("**/internal/models/download", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    models = models.map((m) => (m.id === body.model_id ? { ...m, status: "downloading", percent: 42 } : m));
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ started: true, reason: "started", model_id: body.model_id }),
+    });
+  });
+
+  await page.route("**/internal/models/cancel-download", async (route) => {
+    models = models.map((m) => (m.status === "downloading" ? { ...m, status: "not_downloaded", percent: 0 } : m));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ cancelled: true, reason: "cancelled" }),
+    });
+  });
+
+  await page.route("**/internal/models/activate", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    activeModelId = body.model_id;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ switched: true, reason: "activated", restarted: true, model_id: body.model_id }),
+    });
+  });
+
+  await page.route("**/internal/models/delete", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    models = models.filter((m) => m.id !== body.model_id);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ deleted: true, reason: "deleted", model_id: body.model_id, deleted_file: true }),
+    });
+  });
+
+  await page.goto("/");
+  await page.locator("details.settings").evaluate((el) => { el.open = true; });
+
+  await page.locator("#downloadCountdownEnabled").selectOption("false");
+  await expect(page.locator("#downloadCountdownEnabled")).toHaveValue("false");
+
+  await page.locator("#modelUrlInput").fill("https://example.com/new-url-model.gguf");
+  await page.locator("#registerModelBtn").click();
+  await expect(page.locator("#modelsList")).toContainText("new-url-model.gguf");
+
+  await page.locator('#modelsList .model-row[data-model-id="new-url-model"] button[data-action="download"]').click();
+  await expect(page.locator('#modelsList .model-row[data-model-id="new-url-model"]')).toContainText("downloading");
+  await expect(
+    page.locator('#modelsList .model-row[data-model-id="new-url-model"] button[data-action="cancel-download"]')
+  ).toHaveText("Stop download");
+  await expect(
+    page.locator('#modelsList .model-row[data-model-id="new-url-model"] button[data-action="delete"]')
+  ).toHaveText("Cancel + delete");
+
+  await page.locator('#modelsList .model-row[data-model-id="new-url-model"] button[data-action="cancel-download"]').click();
+  await expect(page.locator('#modelsList .model-row[data-model-id="new-url-model"]')).toContainText("not downloaded");
+
+  await page.locator('#modelsList .model-row[data-model-id="alt-model"] button[data-action="activate"]').click();
+  await expect(page.locator("#modelName")).toHaveValue(/Alt-Funny-Model.gguf/);
+
+  await page.locator('#modelsList .model-row[data-model-id="new-url-model"] button[data-action="delete"]').click();
+  await expect(page.locator('#modelsList .model-row[data-model-id="new-url-model"]')).toHaveCount(0);
+});
+
+test("model upload sends file with filename header", async ({ page }) => {
+  let sawUpload = false;
+  let uploadName = "";
+
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "READY",
+        model_present: true,
+        model: { filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf", active_model_id: "default" },
+        models: [],
+        upload: { active: false, model_id: null, bytes_total: 0, bytes_received: 0, percent: 0, error: null },
+        download: {
+          bytes_total: 0,
+          bytes_downloaded: 0,
+          percent: 0,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: null,
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+          countdown_enabled: true,
+          current_model_id: null,
+        },
+        llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        system: { available: false, cpu_cores_percent: [] },
+      }),
+    });
+  });
+
+  await page.route("**/internal/models/upload", async (route) => {
+    sawUpload = true;
+    uploadName = route.request().headers()["x-potato-filename"] || "";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        uploaded: true,
+        model: {
+          id: "tiny-upload",
+          filename: "tiny.gguf",
+          source_url: null,
+          source_type: "upload",
+          status: "ready",
+          error: null,
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.locator("details.settings").evaluate((el) => { el.open = true; });
+
+  await page.locator("#modelUploadInput").setInputFiles({
+    name: "tiny.gguf",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("tiny"),
+  });
+  await page.locator("#uploadModelBtn").click();
+  await expect.poll(() => sawUpload).toBeTruthy();
+  expect(uploadName).toBe("tiny.gguf");
 });

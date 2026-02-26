@@ -34,6 +34,14 @@ This is the single source of truth for how we plan, execute, and close work.
 10. Merge PR (squash preferred).
 11. Close issue and set project item to `Done`.
 
+## Branching Rules (Required)
+
+- Never implement ticket work on `main`.
+- `main` is merge-only; no direct commits for feature/bug/chore work.
+- Before writing code, confirm branch: `git branch --show-current`.
+- Required branch naming: `feat/issue-<id>-<short-slug>`, `fix/issue-<id>-<short-slug>`, `chore/issue-<id>-<short-slug>`.
+- Start every ticket branch from latest `main`: `git checkout main && git pull --ff-only && git checkout -b <branch-name>`.
+
 ## Ticket Quality Standard (Required)
 
 Every implementation ticket must include:

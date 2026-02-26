@@ -8,6 +8,11 @@ STATE_DIR="${POTATO_BASE_DIR}/state"
 MARKER="${STATE_DIR}/firstboot.done"
 
 mkdir -p "${POTATO_BASE_DIR}/bin" "${POTATO_BASE_DIR}/app" "${POTATO_BASE_DIR}/models" "${STATE_DIR}" "${POTATO_BASE_DIR}/config"
+# Some image build hosts use a restrictive umask; keep /opt traversable for the potato service user.
+if [ -d /opt ]; then
+  chmod 0755 /opt || true
+fi
+chmod 0755 "${POTATO_BASE_DIR}" || true
 
 if [ "${POTATO_ENFORCE_HOSTNAME}" = "1" ]; then
   current_hostname="$(hostnamectl --static 2>/dev/null || hostname)"

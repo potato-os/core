@@ -120,6 +120,18 @@ def test_install_script_uses_reference_llama_bundle_sync():
     assert "potato-runtime-reset.service" in script
     assert "/etc/sudoers.d/potato-runtime-reset" in script
     assert "systemctl start --no-block potato-runtime-reset.service" in script
+    assert "normalize_runtime_dir_permissions" in script
+    assert 'if [ "${target_parent}" = "/opt" ]' in script
+    assert "chmod 0755 /opt" in script
+
+
+def test_nginx_config_allows_large_streaming_uploads():
+    conf = Path("nginx/potato.conf").read_text(encoding="utf-8")
+
+    assert "client_max_body_size 0;" in conf
+    assert "client_body_timeout 3600;" in conf
+    assert "proxy_request_buffering off;" in conf
+    assert "proxy_buffering off;" in conf
 
 
 def test_prepare_imager_bundle_script_wires_first_boot_installer():
@@ -199,6 +211,8 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "DOCKER_BUILDKIT=0" in common
     assert "container_name=\"potato-pigen-${variant}\"" in common
     assert "docker rm -f" in common
+    assert "Git does not preserve directory modes" in common
+    assert "chmod 0755 \"${files_root}/opt\"" in common
     assert "docker context use default" in uv_script
     assert "colima start" in uv_script
     assert "except RuntimeError as exc" in uv_script
@@ -267,6 +281,7 @@ def test_image_stage_assets_define_systemd_firstboot_image_flow():
     assert "python3-venv" in packages
     assert 'rsync -a files/ "${ROOTFS_DIR}/"' in run_script
     assert '"${ROOTFS_DIR}/opt/potato"' in run_script
+    assert 'chmod 0755 "${ROOTFS_DIR}/opt" "${ROOTFS_DIR}/opt/potato"' in run_script
     assert "on_chroot <<'EOF'" in run_script
     assert "systemctl enable potato-firstboot.service potato.service nginx avahi-daemon" in run_script
     assert "potato-firstboot.service" in run_script
@@ -276,6 +291,7 @@ def test_image_stage_assets_define_systemd_firstboot_image_flow():
     assert "systemctl start --no-block potato-runtime-reset.service" in run_script
     assert "potato.local" in run_script
     assert "usermod -a -G video potato" in run_script
+    assert "chmod 0755 /opt /opt/potato" in run_script
     assert 'printf \'potato\\n\' > "${ROOTFS_DIR}/etc/hostname"' in run_script
     assert "127.0.1.1 potato.local potato" in run_script
     assert "host-name=potato" in run_script
@@ -293,6 +309,8 @@ def test_firstboot_script_enforces_potato_hostname_and_avahi_refresh():
     assert "avahi-daemon.conf" in firstboot
     assert "host-name=${POTATO_HOSTNAME}" in firstboot
     assert "systemctl restart avahi-daemon" in firstboot
+    assert "chmod 0755 /opt" in firstboot
+    assert 'chmod 0755 "${POTATO_BASE_DIR}"' in firstboot
 
 
 def test_gitignore_excludes_large_artifacts_and_model_downloads():
@@ -346,6 +364,8 @@ def test_chat_ui_seed_mode_settings_contract():
     assert "function updateSeedFieldState(" in CHAT_HTML
     assert "function resolveSeedForRequest(" in CHAT_HTML
     assert "seedField.disabled = generationMode !== \"deterministic\";" in CHAT_HTML
+    assert "#seed:disabled" in CHAT_HTML
+    assert "cursor: not-allowed;" in CHAT_HTML
     assert "reqBody.seed = resolvedSeed;" in CHAT_HTML
 
 
@@ -418,10 +438,20 @@ def test_chat_ui_shows_llama_connection_indicator():
     assert "indicator-dot" in CHAT_HTML
     assert "function updateLlamaIndicator(" in CHAT_HTML
     assert "statusPayload?.llama_server?.healthy" in CHAT_HTML
-    assert 'label.textContent = "CONNECTED:Local Model"' in CHAT_HTML
-    assert 'label.textContent = "DISCONNECTED:Local Model"' in CHAT_HTML
+    assert "const modelSuffix = modelFilename ? `:${modelFilename}` : \"\";" in CHAT_HTML
+    assert "label.textContent = `CONNECTED:llama.cpp${modelSuffix}`" in CHAT_HTML
+    assert "label.textContent = `LOADING:llama.cpp${modelSuffix}`" in CHAT_HTML
+    assert "label.textContent = `FAILED:llama.cpp${modelSuffix}`" in CHAT_HTML
+    assert 'label.textContent = "DISCONNECTED:llama.cpp"' in CHAT_HTML
+    assert 'label.textContent = "CONNECTED:Fake Backend"' in CHAT_HTML
     assert 'dot.classList.add("online")' in CHAT_HTML
+    assert 'dot.classList.add("loading")' in CHAT_HTML
+    assert 'dot.classList.add("failed")' in CHAT_HTML
     assert 'dot.classList.add("offline")' in CHAT_HTML
+    assert '.indicator-dot.loading {' in CHAT_HTML
+    assert '.indicator-dot.failed {' in CHAT_HTML
+    assert '.badge.loading {' in CHAT_HTML
+    assert '.badge.failed {' in CHAT_HTML
     assert "statusPayload?.backend?.active" in CHAT_HTML
     assert "backendMode === \"fake\"" in CHAT_HTML
     assert "Llama server: connected" not in CHAT_HTML
@@ -493,6 +523,9 @@ def test_chat_ui_supports_manual_or_idle_model_download_prompt():
     assert 'fetch("/internal/start-model-download"' in CHAT_HTML
     assert "Auto-download starts in" in CHAT_HTML
     assert "statusPayload.download.auto_start_remaining_seconds" in CHAT_HTML
+    assert "Not enough free storage for this model." in CHAT_HTML
+    assert "Model likely too large for free storage. Delete files and retry." in CHAT_HTML
+    assert "freeBytes < 512 * 1024 * 1024" in CHAT_HTML
 
 
 def test_chat_ui_supports_heavy_runtime_reset_action_with_confirmation():
@@ -526,6 +559,8 @@ def test_chat_ui_shows_pi_runtime_compact_with_details_toggle_above_settings():
     assert "function setRuntimeDetailsExpanded(" in CHAT_HTML
     assert "function renderSystemRuntime(" in CHAT_HTML
     assert "CPU clock:" in CHAT_HTML
+    assert "Storage free:" in CHAT_HTML
+    assert 'id="runtimeDetailStorage"' in CHAT_HTML
     assert "renderSystemRuntime(statusPayload?.system)" in CHAT_HTML
     assert CHAT_HTML.index('id="systemRuntimeCard"') < CHAT_HTML.index('<details class="settings"')
 
@@ -573,6 +608,24 @@ def test_chat_ui_compresses_large_images_before_send():
     assert "setComposerActivity(\"Optimizing image...\")" in CHAT_HTML
     assert "await maybeCompressImage(result, file);" in CHAT_HTML
     assert "optimized from" in CHAT_HTML
+
+
+def test_chat_ui_model_manager_supports_model_delete_action():
+    assert "async function deleteSelectedModel(" in CHAT_HTML
+    assert "async function cancelActiveModelDownload(modelId = null)" in CHAT_HTML
+    assert "/internal/models/delete" in CHAT_HTML
+    assert 'deleteBtn.dataset.action = "delete"' in CHAT_HTML
+    assert "Delete model" in CHAT_HTML
+    assert "Cancel + delete" in CHAT_HTML
+    assert "Stop download" in CHAT_HTML
+    assert "formatModelStatusLabel" in CHAT_HTML
+    assert "function startModelDownloadForModel(" in CHAT_HTML
+    assert "/internal/models/download" in CHAT_HTML
+    assert "insufficient_storage" in CHAT_HTML
+    assert 'id="purgeModelsBtn"' in CHAT_HTML
+    assert "async function purgeAllModels(" in CHAT_HTML
+    assert "/internal/models/purge" in CHAT_HTML
+    assert "reset_bootstrap_flag: false" in CHAT_HTML
 
 
 def test_chat_ui_shows_processing_indicator_while_generating():

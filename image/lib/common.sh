@@ -151,6 +151,9 @@ build_stage_payload() {
   local files_root="${stage_path}/00-potato/files"
   local potato_root="${files_root}/opt/potato"
   mkdir -p "${potato_root}/app" "${potato_root}/bin" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama"
+  # Git does not preserve directory modes, and local umask can make files/opt too restrictive.
+  # Normalize stage payload directories so the flashed image keeps /opt traversable by service users.
+  chmod 0755 "${files_root}/opt" "${potato_root}" "${potato_root}/app" "${potato_root}/bin" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama"
 
   rsync -a "${repo_root}/app/" "${potato_root}/app/"
   rsync -a "${repo_root}/bin/" "${potato_root}/bin/"

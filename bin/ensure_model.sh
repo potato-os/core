@@ -8,6 +8,7 @@ MODEL_URL="${POTATO_MODEL_URL:-https://huggingface.co/unsloth/Qwen3-VL-4B-Instru
 
 mkdir -p "$(dirname "${MODEL_PATH}")" "$(dirname "${STATE_PATH}")"
 TMP_PATH="${MODEL_PATH}.part"
+CURL_ERR_PATH="${STATE_PATH}.curl.err"
 
 filesize() {
   local path="$1"
@@ -16,6 +17,10 @@ filesize() {
   else
     echo 0
   fi
+}
+
+free_space_bytes() {
+  df -B1 "$(dirname "${MODEL_PATH}")" | awk 'NR==2 {print $4+0}'
 }
 
 write_state() {
@@ -58,8 +63,29 @@ if [ -z "${total_bytes}" ]; then
   total_bytes=0
 fi
 
+if [ "${total_bytes}" -gt 0 ]; then
+  already_downloaded="$(filesize "${TMP_PATH}")"
+  if [ "${already_downloaded}" -lt 0 ]; then
+    already_downloaded=0
+  fi
+  bytes_needed=$((total_bytes - already_downloaded))
+  if [ "${bytes_needed}" -lt 0 ]; then
+    bytes_needed=0
+  fi
+  free_now="$(free_space_bytes)"
+  if [ "${free_now}" -lt "${bytes_needed}" ]; then
+    percent=0
+    if [ "${total_bytes}" -gt 0 ]; then
+      percent=$((already_downloaded * 100 / total_bytes))
+    fi
+    write_state "${total_bytes}" "${already_downloaded}" "${percent}" 0 0 "insufficient_storage"
+    exit 1
+  fi
+fi
+
 start_ts="$(date +%s)"
-curl -L -C - --fail --output "${TMP_PATH}" "${MODEL_URL}" &
+rm -f "${CURL_ERR_PATH}"
+curl -L -C - --fail --output "${TMP_PATH}" "${MODEL_URL}" 2>"${CURL_ERR_PATH}" &
 download_pid=$!
 
 while kill -0 "${download_pid}" 2>/dev/null; do
@@ -88,10 +114,22 @@ while kill -0 "${download_pid}" 2>/dev/null; do
 done
 
 if ! wait "${download_pid}"; then
-  write_state "${total_bytes}" "$(filesize "${TMP_PATH}")" 0 0 0 "download_failed"
+  err_msg="download_failed"
+  downloaded_now="$(filesize "${TMP_PATH}")"
+  percent_now=0
+  if [ "${total_bytes}" -gt 0 ]; then
+    percent_now=$((downloaded_now * 100 / total_bytes))
+  fi
+  if [ "$(free_space_bytes)" -le 0 ]; then
+    err_msg="insufficient_storage"
+  elif [ -f "${CURL_ERR_PATH}" ] && grep -qi "No space left on device" "${CURL_ERR_PATH}"; then
+    err_msg="insufficient_storage"
+  fi
+  write_state "${total_bytes}" "${downloaded_now}" "${percent_now}" 0 0 "${err_msg}"
   exit 1
 fi
 
 mv -f "${TMP_PATH}" "${MODEL_PATH}"
 final_size="$(filesize "${MODEL_PATH}")"
 write_state "${final_size}" "${final_size}" 100 0 0 ""
+rm -f "${CURL_ERR_PATH}"

@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -43,6 +44,13 @@ MODEL_URL = (
     "https://huggingface.co/unsloth/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
     "Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
 )
+MODELS_STATE_VERSION = 1
+MODEL_UPLOAD_LIMIT_8GB_BYTES = 8 * 1024 * 1024 * 1024
+MODEL_UPLOAD_LIMIT_16GB_BYTES = 16 * 1024 * 1024 * 1024
+MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES = 12 * 1024 * 1024 * 1024
+MAX_MODEL_UPLOAD_BYTES = MODEL_UPLOAD_LIMIT_16GB_BYTES
+MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS = 20.0
+MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
 
 DEFAULT_CHAT_SETTINGS = {
     "temperature": 0.7,
@@ -68,11 +76,23 @@ THROTTLE_HISTORY_BITS = {
 }
 
 
+def _empty_model_upload_state() -> dict[str, Any]:
+    return {
+        "active": False,
+        "model_id": None,
+        "bytes_total": 0,
+        "bytes_received": 0,
+        "percent": 0,
+        "error": None,
+    }
+
+
 @dataclass
 class RuntimeConfig:
     base_dir: Path
     model_path: Path
     download_state_path: Path
+    models_state_path: Path
     llama_base_url: str
     chat_backend_mode: str
     web_port: int
@@ -92,10 +112,21 @@ class RuntimeConfig:
 
     @classmethod
     def from_env(cls) -> "RuntimeConfig":
-        base_dir = Path(os.getenv("POTATO_BASE_DIR", "/opt/potato"))
+        base_dir_env = os.getenv("POTATO_BASE_DIR")
+        if base_dir_env:
+            base_dir = Path(base_dir_env)
+        else:
+            preferred = Path("/opt/potato")
+            if preferred.exists() and os.access(preferred, os.W_OK):
+                base_dir = preferred
+            else:
+                base_dir = Path.home() / ".cache" / "potato-os"
         model_path = Path(os.getenv("POTATO_MODEL_PATH", str(base_dir / "models" / MODEL_FILENAME)))
         download_state_path = Path(
             os.getenv("POTATO_DOWNLOAD_STATE_PATH", str(base_dir / "state" / "download.json"))
+        )
+        models_state_path = Path(
+            os.getenv("POTATO_MODELS_STATE_PATH", str(base_dir / "state" / "models.json"))
         )
         llama_base_url = os.getenv("POTATO_LLAMA_BASE_URL", "http://127.0.0.1:8080")
         chat_backend_mode = os.getenv("POTATO_CHAT_BACKEND", "llama").strip().lower()
@@ -116,6 +147,7 @@ class RuntimeConfig:
             base_dir=base_dir,
             model_path=model_path,
             download_state_path=download_state_path,
+            models_state_path=models_state_path,
             llama_base_url=llama_base_url.rstrip("/"),
             chat_backend_mode=chat_backend_mode,
             web_port=web_port,
@@ -155,6 +187,220 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _detect_total_memory_bytes() -> int | None:
+    if psutil is None:
+        return None
+    try:
+        memory = psutil.virtual_memory()
+    except Exception:
+        return None
+    total = _safe_int(getattr(memory, "total", None), default=0)
+    return total if total > 0 else None
+
+
+def get_model_upload_max_bytes() -> int | None:
+    raw_override = os.getenv("POTATO_MODEL_UPLOAD_MAX_BYTES", "").strip()
+    if raw_override:
+        lowered = raw_override.lower()
+        if lowered in {"0", "none", "no-limit", "nolimit", "unlimited"}:
+            return None
+        parsed = _safe_int(raw_override, default=-1)
+        if parsed > 0:
+            return parsed
+        logger.warning("Invalid POTATO_MODEL_UPLOAD_MAX_BYTES=%r; falling back to auto limit", raw_override)
+
+    total_memory_bytes = _detect_total_memory_bytes()
+    if total_memory_bytes is None:
+        return MODEL_UPLOAD_LIMIT_16GB_BYTES
+    if total_memory_bytes >= MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES:
+        return MODEL_UPLOAD_LIMIT_16GB_BYTES
+    return MODEL_UPLOAD_LIMIT_8GB_BYTES
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        logger.warning("Could not persist JSON state to %s", path, exc_info=True)
+
+
+def _model_file_path(runtime: RuntimeConfig, filename: str) -> Path:
+    return runtime.base_dir / "models" / filename
+
+
+def _sanitize_filename(filename: str) -> str:
+    candidate = Path(filename).name.strip()
+    candidate = re.sub(r"[^A-Za-z0-9._-]+", "-", candidate)
+    candidate = candidate.lstrip(".")
+    return candidate or "model.gguf"
+
+
+def _slugify_id(raw: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    return slug or "model"
+
+
+def _unique_model_id(base_id: str, existing_ids: set[str]) -> str:
+    candidate = base_id
+    idx = 2
+    while candidate in existing_ids:
+        candidate = f"{base_id}-{idx}"
+        idx += 1
+    return candidate
+
+
+def _unique_filename(base_name: str, existing_names: set[str]) -> str:
+    stem = Path(base_name).stem
+    suffix = Path(base_name).suffix or ".gguf"
+    candidate = f"{stem}{suffix}"
+    idx = 2
+    while candidate in existing_names:
+        candidate = f"{stem}-{idx}{suffix}"
+        idx += 1
+    return candidate
+
+
+def validate_model_url(source_url: str) -> tuple[bool, str, str]:
+    parsed = urlparse(source_url.strip())
+    if parsed.scheme != "https":
+        return False, "https_required", ""
+    basename = unquote(Path(parsed.path).name)
+    if not basename:
+        return False, "filename_missing", ""
+    if not basename.lower().endswith(".gguf"):
+        return False, "gguf_required", ""
+    safe_name = _sanitize_filename(basename)
+    if not safe_name.lower().endswith(".gguf"):
+        safe_name = f"{Path(safe_name).stem}.gguf"
+    return True, "", safe_name
+
+
+def _default_model_record(_runtime: RuntimeConfig) -> dict[str, Any]:
+    return {
+        "id": "default",
+        "filename": MODEL_FILENAME,
+        "source_url": MODEL_URL,
+        "source_type": "url",
+        "status": "not_downloaded",
+        "error": None,
+    }
+
+
+def _normalize_models_state(runtime: RuntimeConfig, raw: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = raw or {}
+    models_raw = payload.get("models")
+    models: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_filenames: set[str] = set()
+
+    if isinstance(models_raw, list):
+        for item in models_raw:
+            if not isinstance(item, dict):
+                continue
+            source_url = str(item.get("source_url") or "")
+            filename = _sanitize_filename(str(item.get("filename") or ""))
+            if not filename.lower().endswith(".gguf"):
+                filename = f"{Path(filename).stem}.gguf"
+            item_id_raw = str(item.get("id") or _slugify_id(Path(filename).stem))
+            item_id = _unique_model_id(_slugify_id(item_id_raw), seen_ids)
+            filename = _unique_filename(filename, seen_filenames)
+            seen_ids.add(item_id)
+            seen_filenames.add(filename)
+            models.append(
+                {
+                    "id": item_id,
+                    "filename": filename,
+                    "source_url": source_url or None,
+                    "source_type": "upload" if not source_url else str(item.get("source_type") or "url"),
+                    "status": str(item.get("status") or "not_downloaded"),
+                    "error": item.get("error"),
+                }
+            )
+
+    if not models:
+        default_model = _default_model_record(runtime)
+        models.append(default_model)
+        seen_ids.add(default_model["id"])
+        seen_filenames.add(default_model["filename"])
+    elif "default" not in seen_ids:
+        default_model = _default_model_record(runtime)
+        default_model["id"] = _unique_model_id("default", seen_ids)
+        default_model["filename"] = _unique_filename(default_model["filename"], seen_filenames)
+        models.insert(0, default_model)
+        seen_ids.add(default_model["id"])
+        seen_filenames.add(default_model["filename"])
+
+    active_model_id = str(payload.get("active_model_id") or "default")
+    if active_model_id not in seen_ids:
+        active_model_id = models[0]["id"]
+
+    default_model_id = str(payload.get("default_model_id") or "default")
+    if default_model_id not in seen_ids:
+        default_model_id = "default" if "default" in seen_ids else models[0]["id"]
+
+    current_download_model_id = payload.get("current_download_model_id")
+    if current_download_model_id not in seen_ids:
+        current_download_model_id = None
+
+    return {
+        "version": MODELS_STATE_VERSION,
+        "countdown_enabled": bool(payload.get("countdown_enabled", True)),
+        "default_model_downloaded_once": bool(payload.get("default_model_downloaded_once", False)),
+        "active_model_id": active_model_id,
+        "default_model_id": default_model_id,
+        "current_download_model_id": current_download_model_id,
+        "models": models,
+    }
+
+
+def ensure_models_state(runtime: RuntimeConfig) -> dict[str, Any]:
+    raw: dict[str, Any] | None = None
+    if runtime.models_state_path.exists():
+        try:
+            loaded = json.loads(runtime.models_state_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                raw = loaded
+        except (OSError, json.JSONDecodeError):
+            raw = None
+
+    normalized = _normalize_models_state(runtime, raw)
+    default_model_id = str(normalized.get("default_model_id") or "default")
+    default_model = get_model_by_id(normalized, default_model_id)
+    if isinstance(default_model, dict):
+        default_filename = str(default_model.get("filename") or "")
+        if default_filename == MODEL_FILENAME and model_file_present(runtime, default_filename):
+            normalized["default_model_downloaded_once"] = True
+    _atomic_write_json(runtime.models_state_path, normalized)
+    return normalized
+
+
+def save_models_state(runtime: RuntimeConfig, state: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_models_state(runtime, state)
+    _atomic_write_json(runtime.models_state_path, normalized)
+    return normalized
+
+
+def get_model_by_id(state: dict[str, Any], model_id: str) -> dict[str, Any] | None:
+    for item in state.get("models", []):
+        if isinstance(item, dict) and item.get("id") == model_id:
+            return item
+    return None
+
+
+def resolve_active_model(state: dict[str, Any], runtime: RuntimeConfig) -> tuple[dict[str, Any], Path]:
+    active_id = str(state.get("active_model_id") or "")
+    model = get_model_by_id(state, active_id)
+    if model is None:
+        model = state["models"][0]
+        state["active_model_id"] = model["id"]
+    path = _model_file_path(runtime, str(model["filename"]))
+    runtime.model_path = path
+    return model, path
+
+
 def default_system_metrics_snapshot() -> dict[str, Any]:
     return {
         "available": False,
@@ -168,6 +414,10 @@ def default_system_metrics_snapshot() -> dict[str, Any]:
         "swap_total_bytes": 0,
         "swap_used_bytes": 0,
         "swap_percent": None,
+        "storage_total_bytes": 0,
+        "storage_used_bytes": 0,
+        "storage_free_bytes": 0,
+        "storage_percent": None,
         "temperature_c": None,
         "gpu_clock_core_hz": None,
         "gpu_clock_v3d_hz": None,
@@ -284,6 +534,11 @@ def collect_system_metrics_snapshot() -> dict[str, Any]:
             snapshot["swap_total_bytes"] = int(swap.total)
             snapshot["swap_used_bytes"] = int(swap.used)
             snapshot["swap_percent"] = round(_safe_float(swap.percent), 2)
+            storage = psutil.disk_usage("/")
+            snapshot["storage_total_bytes"] = int(storage.total)
+            snapshot["storage_used_bytes"] = int(storage.used)
+            snapshot["storage_free_bytes"] = int(storage.free)
+            snapshot["storage_percent"] = round(_safe_float(storage.percent), 2)
             metrics_collected = True
         except Exception:
             logger.exception("system metrics collection failed (psutil)")
@@ -363,6 +618,64 @@ def read_download_progress(runtime: RuntimeConfig) -> dict[str, Any]:
         progress["percent"] = int(progress["bytes_downloaded"] * 100 / progress["bytes_total"])
 
     return progress
+
+
+def get_free_storage_bytes(runtime: RuntimeConfig) -> int | None:
+    if psutil is None:
+        return None
+    probe_path = runtime.base_dir if runtime.base_dir.exists() else Path("/")
+    try:
+        usage = psutil.disk_usage(str(probe_path))
+        return int(max(0, usage.free))
+    except OSError:
+        return None
+
+
+def compute_required_download_bytes(total_bytes: int, partial_bytes: int = 0) -> int:
+    required = max(0, int(total_bytes) - max(0, int(partial_bytes)))
+    return int(required)
+
+
+def is_likely_too_large_for_storage(
+    *,
+    total_bytes: int,
+    free_bytes: int | None,
+    partial_bytes: int = 0,
+) -> bool:
+    if int(total_bytes) <= 0:
+        return False
+    if free_bytes is None:
+        return False
+    required = compute_required_download_bytes(total_bytes, partial_bytes)
+    return int(free_bytes) < required
+
+
+async def fetch_remote_content_length_bytes(source_url: str) -> int:
+    timeout = httpx.Timeout(8.0, connect=3.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        try:
+            response = await client.head(source_url)
+            header = response.headers.get("content-length")
+            if header:
+                return max(0, int(header))
+        except (httpx.HTTPError, ValueError):
+            pass
+        try:
+            async with client.stream("GET", source_url, headers={"range": "bytes=0-0"}) as response:
+                content_range = response.headers.get("content-range", "")
+                if "/" in content_range:
+                    try:
+                        return max(0, int(content_range.split("/")[-1]))
+                    except ValueError:
+                        return 0
+                header = response.headers.get("content-length")
+                try:
+                    return max(0, int(header)) if header else 0
+                except ValueError:
+                    return 0
+        except httpx.HTTPError:
+            return 0
+        return 0
 
 
 async def check_llama_health(runtime: RuntimeConfig, *, busy_is_healthy: bool = True) -> bool:
@@ -462,8 +775,18 @@ def get_monotonic_time() -> float:
 
 
 def model_present(runtime: RuntimeConfig) -> bool:
+    state = ensure_models_state(runtime)
+    _, active_model_path = resolve_active_model(state, runtime)
     try:
-        return runtime.model_path.exists() and runtime.model_path.stat().st_size > 0
+        return active_model_path.exists() and active_model_path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def model_file_present(runtime: RuntimeConfig, filename: str) -> bool:
+    path = _model_file_path(runtime, filename)
+    try:
+        return path.exists() and path.stat().st_size > 0
     except OSError:
         return False
 
@@ -475,8 +798,14 @@ def compute_auto_download_remaining_seconds(
     download_active: bool,
     startup_monotonic: float | None,
     now_monotonic: float,
+    countdown_enabled: bool = True,
+    default_model_downloaded_once: bool = False,
 ) -> int:
     if not runtime.enable_orchestrator:
+        return 0
+    if not countdown_enabled:
+        return 0
+    if default_model_downloaded_once:
         return 0
 
     delay_seconds = max(0, int(runtime.auto_download_idle_seconds))
@@ -499,10 +828,16 @@ def should_auto_start_download(
     download_active: bool,
     startup_monotonic: float | None,
     now_monotonic: float,
+    countdown_enabled: bool = True,
+    default_model_downloaded_once: bool = False,
 ) -> bool:
     if model_present or download_active:
         return False
     if not runtime.enable_orchestrator:
+        return False
+    if not countdown_enabled:
+        return False
+    if default_model_downloaded_once:
         return False
     return compute_auto_download_remaining_seconds(
         runtime,
@@ -510,6 +845,8 @@ def should_auto_start_download(
         download_active=download_active,
         startup_monotonic=startup_monotonic,
         now_monotonic=now_monotonic,
+        countdown_enabled=countdown_enabled,
+        default_model_downloaded_once=default_model_downloaded_once,
     ) == 0
 
 
@@ -520,11 +857,14 @@ def is_download_task_active(task: asyncio.Task[Any] | None) -> bool:
 async def build_status(
     runtime: RuntimeConfig,
     *,
+    app: FastAPI | None = None,
     download_active: bool = False,
     auto_start_remaining_seconds: int = 0,
     system_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    has_model = model_present(runtime)
+    models_state = ensure_models_state(runtime)
+    active_model, active_model_path = resolve_active_model(models_state, runtime)
+    has_model = model_file_present(runtime, str(active_model["filename"]))
     download = read_download_progress(runtime)
     llama_healthy = False
 
@@ -540,31 +880,100 @@ async def build_status(
 
     if active_backend == "fake":
         state = "READY"
-    elif download.get("error"):
-        state = "ERROR"
     elif has_model and llama_healthy:
         state = "READY"
+    elif download.get("error"):
+        state = "ERROR"
     elif download_active or (
         not has_model and (
-        download["bytes_downloaded"] > 0 or download["percent"] > 0 or download["bytes_total"] > 0
+            download["bytes_downloaded"] > 0 or download["percent"] > 0 or download["bytes_total"] > 0
         )
     ):
         state = "DOWNLOADING"
     else:
         state = "BOOTING"
 
+    current_download_model_id = models_state.get("current_download_model_id")
+    if download_active and (not isinstance(current_download_model_id, str) or not current_download_model_id):
+        current_download_model_id = str(models_state.get("default_model_id") or "default")
+    models_payload: list[dict[str, Any]] = []
+    for item in models_state.get("models", []):
+        if not isinstance(item, dict):
+            continue
+        filename = str(item.get("filename") or "")
+        model_id = str(item.get("id") or "")
+        present = model_file_present(runtime, filename)
+        status_label = str(item.get("status") or "not_downloaded")
+        model_progress = {
+            "bytes_total": 0,
+            "bytes_downloaded": 0,
+            "percent": 0,
+        }
+        if download_active and model_id == current_download_model_id:
+            status_label = "downloading"
+            model_progress = {
+                "bytes_total": download["bytes_total"],
+                "bytes_downloaded": download["bytes_downloaded"],
+                "percent": download["percent"],
+            }
+        elif present:
+            status_label = "ready"
+        elif status_label not in {"failed", "not_downloaded"}:
+            status_label = "not_downloaded"
+
+        models_payload.append(
+            {
+                "id": model_id,
+                "filename": filename,
+                "source_url": item.get("source_url"),
+                "source_type": item.get("source_type") or "url",
+                "status": status_label,
+                "error": item.get("error"),
+                "is_active": model_id == models_state.get("active_model_id"),
+                **model_progress,
+            }
+        )
+
     download_payload = dict(download)
     download_payload["active"] = bool(download_active)
     download_payload["auto_start_seconds"] = int(max(0, runtime.auto_download_idle_seconds))
     download_payload["auto_start_remaining_seconds"] = int(max(0, auto_start_remaining_seconds))
+    download_payload["countdown_enabled"] = bool(models_state.get("countdown_enabled", True))
+    download_payload["auto_download_completed_once"] = bool(models_state.get("default_model_downloaded_once", False))
+    download_payload["current_model_id"] = current_download_model_id
+
+    upload_snapshot = {
+        "active": False,
+        "model_id": None,
+        "bytes_total": 0,
+        "bytes_received": 0,
+        "percent": 0,
+        "error": None,
+    }
+    if app is not None:
+        state_snapshot = getattr(app.state, "model_upload_state", None)
+        if isinstance(state_snapshot, dict):
+            upload_snapshot.update(
+                {
+                    "active": bool(state_snapshot.get("active", False)),
+                    "model_id": state_snapshot.get("model_id"),
+                    "bytes_total": _safe_int(state_snapshot.get("bytes_total"), 0),
+                    "bytes_received": _safe_int(state_snapshot.get("bytes_received"), 0),
+                    "percent": _safe_int(state_snapshot.get("percent"), 0),
+                    "error": state_snapshot.get("error"),
+                }
+            )
 
     return {
         "state": state,
         "model_present": has_model,
         "model": {
-            "filename": runtime.model_path.name,
+            "filename": active_model_path.name,
+            "active_model_id": models_state.get("active_model_id"),
         },
+        "models": models_payload,
         "download": download_payload,
+        "upload": upload_snapshot,
         "llama_server": {
             "running": llama_healthy,
             "healthy": llama_healthy,
@@ -598,11 +1007,29 @@ async def _run_script(path: Path, runtime: RuntimeConfig) -> int:
     return await proc.wait()
 
 
+def _upsert_model_status(
+    runtime: RuntimeConfig,
+    *,
+    model_id: str,
+    status: str,
+    error: str | None = None,
+    current_download_model_id: str | None = None,
+) -> dict[str, Any]:
+    state = ensure_models_state(runtime)
+    model = get_model_by_id(state, model_id)
+    if model is not None:
+        model["status"] = status
+        model["error"] = error
+    state["current_download_model_id"] = current_download_model_id
+    return save_models_state(runtime, state)
+
+
 def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env = os.environ.copy()
     env["POTATO_BASE_DIR"] = str(runtime.base_dir)
     env["POTATO_MODEL_PATH"] = str(runtime.model_path)
     env["POTATO_DOWNLOAD_STATE_PATH"] = str(runtime.download_state_path)
+    env["POTATO_MODELS_STATE_PATH"] = str(runtime.models_state_path)
     env["POTATO_LLAMA_BASE_URL"] = runtime.llama_base_url
     env["POTATO_CHAT_BACKEND"] = runtime.chat_backend_mode
     env["POTATO_ALLOW_FAKE_FALLBACK"] = "1" if runtime.allow_fake_fallback else "0"
@@ -611,13 +1038,16 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     return env
 
 
-async def start_model_download(app: FastAPI, runtime: RuntimeConfig, trigger: str) -> tuple[bool, str]:
+async def start_model_download(
+    app: FastAPI,
+    runtime: RuntimeConfig,
+    trigger: str,
+    *,
+    model_id: str | None = None,
+) -> tuple[bool, str]:
     lock = app.state.download_lock
 
     async with lock:
-        if model_present(runtime):
-            return False, "model_present"
-
         task = app.state.model_download_task
         if is_download_task_active(task):
             return False, "already_running"
@@ -626,11 +1056,129 @@ async def start_model_download(app: FastAPI, runtime: RuntimeConfig, trigger: st
             logger.warning("ensure_model script missing: %s", runtime.ensure_model_script)
             return False, "script_missing"
 
+        state = ensure_models_state(runtime)
+        selected_model_id = model_id or str(state.get("default_model_id") or "default")
+        default_model_id = str(state.get("default_model_id") or "default")
+        model = get_model_by_id(state, selected_model_id)
+        if not isinstance(model, dict):
+            return False, "model_not_found"
+
+        target_filename = str(model.get("filename") or "")
+        target_path = _model_file_path(runtime, target_filename)
+        if model_file_present(runtime, target_filename):
+            if model.get("status") != "ready":
+                _upsert_model_status(runtime, model_id=selected_model_id, status="ready")
+            if (
+                selected_model_id == default_model_id
+                and target_filename == MODEL_FILENAME
+                and not bool(state.get("default_model_downloaded_once", False))
+            ):
+                state["default_model_downloaded_once"] = True
+                save_models_state(runtime, state)
+            return False, "model_present"
+
+        source_url = str(model.get("source_url") or "")
+        if not source_url:
+            return False, "source_url_missing"
+
+        expected_total_bytes = await fetch_remote_content_length_bytes(source_url)
+        partial_path = _model_file_path(runtime, target_filename + ".part")
+        partial_bytes = 0
+        try:
+            if partial_path.exists():
+                partial_bytes = max(0, int(partial_path.stat().st_size))
+        except OSError:
+            partial_bytes = 0
+        free_bytes = get_free_storage_bytes(runtime)
+        if is_likely_too_large_for_storage(
+            total_bytes=expected_total_bytes,
+            free_bytes=free_bytes,
+            partial_bytes=partial_bytes,
+        ):
+            required_bytes = compute_required_download_bytes(expected_total_bytes, partial_bytes)
+            percent = int(partial_bytes * 100 / expected_total_bytes) if expected_total_bytes > 0 else 0
+            _atomic_write_json(
+                runtime.download_state_path,
+                {
+                    "bytes_total": int(max(0, expected_total_bytes)),
+                    "bytes_downloaded": int(max(0, partial_bytes)),
+                    "percent": int(max(0, percent)),
+                    "speed_bps": 0,
+                    "eta_seconds": 0,
+                    "error": "insufficient_storage",
+                    "required_bytes": int(max(0, required_bytes)),
+                    "free_bytes": int(max(0, free_bytes)),
+                },
+            )
+            _upsert_model_status(
+                runtime,
+                model_id=selected_model_id,
+                status="failed",
+                error="insufficient_storage",
+                current_download_model_id=None,
+            )
+            return False, "insufficient_storage"
+
+        _upsert_model_status(
+            runtime,
+            model_id=selected_model_id,
+            status="downloading",
+            error=None,
+            current_download_model_id=selected_model_id,
+        )
+
+        env = _runtime_env(runtime)
+        env["POTATO_MODEL_PATH"] = str(target_path)
+        env["POTATO_MODEL_URL"] = source_url
+
         async def _worker() -> int:
-            logger.info("Starting model download (%s)", trigger)
-            result = await _run_script(runtime.ensure_model_script, runtime)
-            if result != 0:
-                logger.warning("Model download script exited with %s", result)
+            logger.info("Starting model download (%s, model=%s)", trigger, selected_model_id)
+            proc = await asyncio.create_subprocess_exec(
+                str(runtime.ensure_model_script),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+            )
+            app.state.model_download_process = proc
+            try:
+                if proc.stdout is not None:
+                    while True:
+                        line = await proc.stdout.readline()
+                        if not line:
+                            break
+                        logger.info("%s", line.decode("utf-8", errors="replace").rstrip())
+                result = await proc.wait()
+            finally:
+                if app.state.model_download_process is proc:
+                    app.state.model_download_process = None
+
+            if result == 0 and model_file_present(runtime, target_filename):
+                _upsert_model_status(
+                    runtime,
+                    model_id=selected_model_id,
+                    status="ready",
+                    error=None,
+                    current_download_model_id=None,
+                )
+                updated_state = ensure_models_state(runtime)
+                if (
+                    selected_model_id == default_model_id
+                    and target_filename == MODEL_FILENAME
+                    and not bool(updated_state.get("default_model_downloaded_once", False))
+                ):
+                    updated_state["default_model_downloaded_once"] = True
+                    save_models_state(runtime, updated_state)
+            else:
+                failure_state = read_download_progress(runtime)
+                failure_reason = str(failure_state.get("error") or "download_failed")
+                _upsert_model_status(
+                    runtime,
+                    model_id=selected_model_id,
+                    status="failed",
+                    error=failure_reason,
+                    current_download_model_id=None,
+                )
+                logger.warning("Model download script exited with %s (%s)", result, failure_reason)
             return result
 
         task = asyncio.create_task(_worker(), name=f"potato-download-{trigger}")
@@ -642,6 +1190,73 @@ async def start_model_download(app: FastAPI, runtime: RuntimeConfig, trigger: st
         task.add_done_callback(_clear_task)
         app.state.model_download_task = task
         return True, "started"
+
+
+async def _cancel_model_download_locked(
+    app: FastAPI,
+    runtime: RuntimeConfig,
+    *,
+    expected_model_id: str | None = None,
+    timeout_seconds: float = MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS,
+) -> tuple[bool, str]:
+    task = app.state.model_download_task
+    if not is_download_task_active(task):
+        return False, "not_running"
+
+    state = ensure_models_state(runtime)
+    current_model_id = state.get("current_download_model_id")
+    current_model_id_str = (
+        str(current_model_id).strip()
+        if isinstance(current_model_id, str) and str(current_model_id).strip()
+        else None
+    )
+    if expected_model_id is not None and current_model_id_str != expected_model_id:
+        return False, "not_target_download"
+
+    proc = app.state.model_download_process
+    if proc is not None and proc.returncode is None:
+        proc.terminate()
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, timeout=max(0.1, float(timeout_seconds)))
+    except asyncio.CancelledError:
+        pass
+    except asyncio.TimeoutError:
+        return False, "cancel_timeout"
+
+    if app.state.model_download_task is task:
+        app.state.model_download_task = None
+    if proc is not None and app.state.model_download_process is proc:
+        app.state.model_download_process = None
+
+    if current_model_id_str is not None:
+        _upsert_model_status(
+            runtime,
+            model_id=current_model_id_str,
+            status="not_downloaded",
+            error=None,
+            current_download_model_id=None,
+        )
+    else:
+        state["current_download_model_id"] = None
+        save_models_state(runtime, state)
+    return True, "cancelled"
+
+
+async def cancel_model_download(
+    app: FastAPI,
+    runtime: RuntimeConfig,
+    *,
+    expected_model_id: str | None = None,
+    timeout_seconds: float = MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS,
+) -> tuple[bool, str]:
+    async with app.state.download_lock:
+        return await _cancel_model_download_locked(
+            app,
+            runtime,
+            expected_model_id=expected_model_id,
+            timeout_seconds=timeout_seconds,
+        )
 
 
 async def start_runtime_reset(runtime: RuntimeConfig) -> tuple[bool, str]:
@@ -679,35 +1294,332 @@ async def start_runtime_reset(runtime: RuntimeConfig) -> tuple[bool, str]:
 
 
 def get_status_download_context(app: FastAPI, runtime: RuntimeConfig) -> tuple[bool, int]:
-    has_model = model_present(runtime)
+    models_state = ensure_models_state(runtime)
+    resolve_active_model(models_state, runtime)
+    default_model_id = str(models_state.get("default_model_id") or "default")
+    default_model = get_model_by_id(models_state, default_model_id)
+    default_model_present = False
+    default_model_is_bootstrap_target = False
+    if isinstance(default_model, dict):
+        default_filename = str(default_model.get("filename") or "")
+        default_model_present = model_file_present(runtime, default_filename)
+        default_model_is_bootstrap_target = default_filename == MODEL_FILENAME
     task = app.state.model_download_task
     download_active = is_download_task_active(task)
     remaining = compute_auto_download_remaining_seconds(
         runtime,
-        model_present=has_model,
+        model_present=default_model_present,
         download_active=download_active,
         startup_monotonic=app.state.startup_monotonic,
         now_monotonic=get_monotonic_time(),
+        countdown_enabled=bool(models_state.get("countdown_enabled", True)),
+        default_model_downloaded_once=bool(models_state.get("default_model_downloaded_once", False))
+        or not default_model_is_bootstrap_target,
     )
     return download_active, remaining
+
+
+def set_download_countdown_enabled(runtime: RuntimeConfig, enabled: bool) -> dict[str, Any]:
+    state = ensure_models_state(runtime)
+    state["countdown_enabled"] = bool(enabled)
+    return save_models_state(runtime, state)
+
+
+def register_model_url(runtime: RuntimeConfig, source_url: str, alias: str | None = None) -> tuple[bool, str, dict[str, Any] | None]:
+    ok, reason, filename = validate_model_url(source_url)
+    if not ok:
+        return False, reason, None
+
+    state = ensure_models_state(runtime)
+    models = state.get("models", [])
+    assert isinstance(models, list)
+    existing_ids = {str(item.get("id")) for item in models if isinstance(item, dict)}
+    existing_names = {str(item.get("filename")) for item in models if isinstance(item, dict)}
+
+    for item in models:
+        if isinstance(item, dict) and str(item.get("source_url") or "") == source_url:
+            saved = save_models_state(runtime, state)
+            model = get_model_by_id(saved, str(item.get("id") or ""))
+            return True, "already_exists", model
+
+    preferred_name = filename
+    if alias:
+        alias_safe = _sanitize_filename(alias)
+        if not alias_safe.lower().endswith(".gguf"):
+            alias_safe = f"{Path(alias_safe).stem}.gguf"
+        if alias_safe:
+            preferred_name = alias_safe
+
+    final_name = _unique_filename(preferred_name, existing_names)
+    model_id = _unique_model_id(_slugify_id(Path(final_name).stem), existing_ids)
+    model_record = {
+        "id": model_id,
+        "filename": final_name,
+        "source_url": source_url,
+        "source_type": "url",
+        "status": "ready" if model_file_present(runtime, final_name) else "not_downloaded",
+        "error": None,
+    }
+    models.append(model_record)
+    saved = save_models_state(runtime, state)
+    created = get_model_by_id(saved, model_id)
+    return True, "registered", created
+
+
+async def activate_model(
+    app: FastAPI,
+    runtime: RuntimeConfig,
+    *,
+    model_id: str,
+) -> tuple[bool, str, bool]:
+    state = ensure_models_state(runtime)
+    target = get_model_by_id(state, model_id)
+    if target is None:
+        return False, "model_not_found", False
+    filename = str(target.get("filename") or "")
+    if not model_file_present(runtime, filename):
+        return False, "model_not_ready", False
+    state["active_model_id"] = model_id
+    target["status"] = "ready"
+    save_models_state(runtime, state)
+    runtime.model_path = _model_file_path(runtime, filename)
+    restarted, _reason = await restart_managed_llama_process(app)
+    return True, "activated", restarted
+
+
+def delete_model(runtime: RuntimeConfig, *, model_id: str) -> tuple[bool, str, bool, int, bool]:
+    state = ensure_models_state(runtime)
+    active_model_id = str(state.get("active_model_id") or "")
+    target = get_model_by_id(state, model_id)
+    if target is None:
+        return False, "model_not_found", False, 0, False
+    was_active = model_id == active_model_id
+
+    filename = str(target.get("filename") or "")
+    models = state.get("models", [])
+    assert isinstance(models, list)
+
+    same_filename_elsewhere = any(
+        isinstance(item, dict)
+        and str(item.get("id") or "") != model_id
+        and str(item.get("filename") or "") == filename
+        for item in models
+    )
+
+    deleted_file = False
+    freed_bytes = 0
+    if filename and not same_filename_elsewhere:
+        candidate_paths = (
+            _model_file_path(runtime, filename),
+            _model_file_path(runtime, filename + ".part"),
+        )
+        for candidate_path in candidate_paths:
+            if not candidate_path.exists():
+                continue
+            try:
+                file_size = max(0, candidate_path.stat().st_size)
+            except OSError:
+                file_size = 0
+            try:
+                candidate_path.unlink(missing_ok=True)
+                deleted_file = True
+                freed_bytes += file_size
+            except OSError:
+                return False, "delete_failed", False, 0, was_active
+
+    remaining_models = [
+        item
+        for item in models
+        if not (isinstance(item, dict) and str(item.get("id") or "") == model_id)
+    ]
+    state["models"] = remaining_models
+    if str(state.get("current_download_model_id") or "") == model_id:
+        state["current_download_model_id"] = None
+    if was_active:
+        next_active_id: str | None = None
+        for item in remaining_models:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("id") or "")
+            candidate_name = str(item.get("filename") or "")
+            if candidate_id and model_file_present(runtime, candidate_name):
+                next_active_id = candidate_id
+                break
+        if next_active_id is None:
+            for item in remaining_models:
+                if isinstance(item, dict) and item.get("id"):
+                    next_active_id = str(item["id"])
+                    break
+        if next_active_id is None:
+            next_active_id = str(state.get("default_model_id") or "default")
+        state["active_model_id"] = next_active_id
+    save_models_state(runtime, state)
+    return True, "deleted", deleted_file, freed_bytes, was_active
+
+
+async def purge_all_models(
+    app: FastAPI,
+    runtime: RuntimeConfig,
+    *,
+    reset_bootstrap_flag: bool = False,
+) -> dict[str, Any]:
+    cancelled_download = False
+    cancelled_upload = False
+    restarted = False
+    restart_reason = "not_required"
+    deleted_files = 0
+    freed_bytes = 0
+
+    async with app.state.download_lock:
+        task = app.state.model_download_task
+        if is_download_task_active(task):
+            proc = app.state.model_download_process
+            if proc is not None and proc.returncode is None:
+                proc.terminate()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            cancelled_download = True
+        app.state.model_download_task = None
+        app.state.model_download_process = None
+
+    upload_lock = app.state.model_upload_lock
+    upload_wait_required = bool(app.state.model_upload_state.get("active")) or bool(upload_lock.locked())
+    upload_lock_acquired = False
+    if upload_wait_required:
+        app.state.model_upload_cancel_requested = True
+        cancelled_upload = True
+    try:
+        await asyncio.wait_for(upload_lock.acquire(), timeout=MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS)
+        upload_lock_acquired = True
+    except asyncio.TimeoutError:
+        return {
+            "purged": False,
+            "reason": "upload_cancel_timeout",
+            "deleted_files": int(max(0, deleted_files)),
+            "freed_bytes": int(max(0, freed_bytes)),
+            "cancelled_download": cancelled_download,
+            "cancelled_upload": cancelled_upload,
+            "restarted": restarted,
+            "restart_reason": restart_reason,
+            "reset_bootstrap_flag": bool(reset_bootstrap_flag),
+        }
+
+    try:
+        app.state.model_upload_state = _empty_model_upload_state()
+        app.state.model_upload_cancel_requested = False
+
+        restarted, restart_reason = await restart_managed_llama_process(app)
+
+        models_dir = runtime.base_dir / "models"
+        if models_dir.exists():
+            for path in models_dir.iterdir():
+                if not path.is_file():
+                    continue
+                try:
+                    file_size = max(0, int(path.stat().st_size))
+                except OSError:
+                    file_size = 0
+                try:
+                    path.unlink(missing_ok=True)
+                    deleted_files += 1
+                    freed_bytes += file_size
+                except OSError:
+                    logger.warning("Could not delete model file during purge: %s", path, exc_info=True)
+
+        for state_path in (
+            runtime.download_state_path,
+            runtime.download_state_path.with_suffix(runtime.download_state_path.suffix + ".curl.err"),
+        ):
+            try:
+                state_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not delete state file during purge: %s", state_path, exc_info=True)
+
+        previous = ensure_models_state(runtime)
+        countdown_enabled = bool(previous.get("countdown_enabled", True))
+        downloaded_once = bool(previous.get("default_model_downloaded_once", False))
+        if reset_bootstrap_flag:
+            downloaded_once = False
+
+        reset_state = {
+            "version": MODELS_STATE_VERSION,
+            "countdown_enabled": countdown_enabled,
+            "default_model_downloaded_once": downloaded_once,
+            "active_model_id": "default",
+            "default_model_id": "default",
+            "current_download_model_id": None,
+            "models": [_default_model_record(runtime)],
+        }
+        save_models_state(runtime, reset_state)
+        runtime.model_path = _model_file_path(runtime, MODEL_FILENAME)
+
+        return {
+            "purged": True,
+            "reason": "purged",
+            "deleted_files": int(max(0, deleted_files)),
+            "freed_bytes": int(max(0, freed_bytes)),
+            "cancelled_download": cancelled_download,
+            "cancelled_upload": cancelled_upload,
+            "restarted": restarted,
+            "restart_reason": restart_reason,
+            "reset_bootstrap_flag": bool(reset_bootstrap_flag),
+        }
+    finally:
+        if upload_lock_acquired:
+            upload_lock.release()
+
+
+def _safe_upload_filename(name: str) -> str:
+    cleaned = _sanitize_filename(name)
+    if not cleaned.lower().endswith(".gguf"):
+        raise ValueError("gguf_required")
+    return cleaned
 
 
 async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
     while True:
         try:
-            has_model = model_present(runtime)
+            models_state = ensure_models_state(runtime)
+            active_model, active_model_path = resolve_active_model(models_state, runtime)
             download_active = is_download_task_active(app.state.model_download_task)
+            default_model = get_model_by_id(
+                models_state,
+                str(models_state.get("default_model_id") or "default"),
+            )
+            default_model_present = False
+            default_model_is_bootstrap_target = False
+            if isinstance(default_model, dict):
+                default_filename = str(default_model.get("filename") or "")
+                default_model_present = model_file_present(runtime, default_filename)
+                default_model_is_bootstrap_target = default_filename == MODEL_FILENAME
 
             if should_auto_start_download(
                 runtime,
-                model_present=has_model,
+                model_present=default_model_present,
                 download_active=download_active,
                 startup_monotonic=app.state.startup_monotonic,
                 now_monotonic=get_monotonic_time(),
+                countdown_enabled=bool(models_state.get("countdown_enabled", True)),
+                default_model_downloaded_once=bool(models_state.get("default_model_downloaded_once", False))
+                or not default_model_is_bootstrap_target,
             ):
-                await start_model_download(app, runtime, trigger="idle")
+                await start_model_download(
+                    app,
+                    runtime,
+                    trigger="idle",
+                    model_id=str(models_state.get("default_model_id") or "default"),
+                )
 
-            if model_present(runtime):
+            active_model_is_present = False
+            try:
+                active_model_is_present = active_model_path.exists() and active_model_path.stat().st_size > 0
+            except OSError:
+                active_model_is_present = False
+
+            if active_model_is_present:
                 llama_process = app.state.llama_process
                 if llama_process is None or llama_process.returncode is not None:
                     if runtime.start_llama_script.exists():
@@ -1063,6 +1975,14 @@ CHAT_HTML = """<!doctype html>
       background: #22c55e;
     }
 
+    .indicator-dot.loading {
+      background: #f59e0b;
+    }
+
+    .indicator-dot.failed {
+      background: #dc2626;
+    }
+
     .indicator-dot.offline {
       background: #ef4444;
     }
@@ -1192,6 +2112,18 @@ CHAT_HTML = """<!doctype html>
       color: #0f766e;
       border-color: rgba(16, 185, 129, 0.45);
       background: rgba(16, 185, 129, 0.12);
+    }
+
+    .badge.loading {
+      color: #92400e;
+      border-color: rgba(245, 158, 11, 0.45);
+      background: rgba(245, 158, 11, 0.12);
+    }
+
+    .badge.failed {
+      color: #7f1d1d;
+      border-color: rgba(220, 38, 38, 0.5);
+      background: rgba(220, 38, 38, 0.14);
     }
 
     .badge.offline {
@@ -1551,6 +2483,13 @@ CHAT_HTML = """<!doctype html>
       resize: vertical;
     }
 
+    #seed:disabled {
+      background: var(--panel);
+      color: var(--text-muted);
+      opacity: 0.75;
+      cursor: not-allowed;
+    }
+
     .settings-grid .full {
       grid-column: 1 / -1;
     }
@@ -1564,6 +2503,51 @@ CHAT_HTML = """<!doctype html>
     .settings-action-row .ghost-btn {
       width: 100%;
       text-align: center;
+    }
+
+    .model-row {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel-muted);
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .model-row-head {
+      font-size: 12px;
+      color: var(--text);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .model-row-name {
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+
+    .model-status-pill {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      background: var(--panel);
+      white-space: nowrap;
+    }
+
+    .model-row-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .model-row-actions .ghost-btn {
+      width: auto;
+      font-size: 12px;
+      padding: 5px 10px;
     }
 
     .danger-btn {
@@ -1796,6 +2780,7 @@ CHAT_HTML = """<!doctype html>
             <div id="runtimeDetailCpuClock">CPU clock: --</div>
             <div id="runtimeDetailMemory">Memory: --</div>
             <div id="runtimeDetailSwap">Swap: --</div>
+            <div id="runtimeDetailStorage">Storage free: --</div>
             <div id="runtimeDetailTemp">Temperature: --</div>
             <div id="runtimeDetailGpu">GPU clock: --</div>
             <div id="runtimeDetailThrottle">Throttling: --</div>
@@ -1813,6 +2798,31 @@ CHAT_HTML = """<!doctype html>
           <label class="full">Loaded Model
             <input id="modelName" type="text" value="Checking..." readonly>
           </label>
+          <label class="full">Auto-download default model
+            <select id="downloadCountdownEnabled">
+              <option value="true">Enabled</option>
+              <option value="false">Paused</option>
+            </select>
+          </label>
+          <label class="full">Add model by URL
+            <input id="modelUrlInput" type="url" placeholder="https://.../model.gguf">
+          </label>
+          <div class="settings-action-row full">
+            <button id="registerModelBtn" class="ghost-btn" type="button">Add URL model</button>
+          </div>
+          <label class="full">Upload local GGUF to Pi
+            <input id="modelUploadInput" type="file" accept=".gguf,application/octet-stream">
+          </label>
+          <div class="settings-action-row full">
+            <button id="uploadModelBtn" class="ghost-btn" type="button">Upload model</button>
+            <button id="cancelUploadBtn" class="ghost-btn" type="button" hidden>Cancel upload</button>
+            <button id="purgeModelsBtn" class="ghost-btn danger-btn" type="button">Delete all models</button>
+          </div>
+          <div id="modelUploadStatus" class="runtime-compact full">No upload in progress.</div>
+          <div class="full">
+            <h3 style="margin: 0 0 8px; font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Available Models</h3>
+            <div id="modelsList" class="runtime-details"></div>
+          </div>
           <label>Streaming
             <select id="stream">
               <option value="true">true</option>
@@ -1864,7 +2874,7 @@ CHAT_HTML = """<!doctype html>
         <div class="header-actions">
           <span id="statusBadge" class="badge offline">
             <span id="statusDot" class="indicator-dot offline" aria-hidden="true"></span>
-            <span id="statusLabel">DISCONNECTED:Local Model</span>
+            <span id="statusLabel">DISCONNECTED:llama.cpp</span>
           </span>
           <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch theme">
             <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1948,6 +2958,8 @@ CHAT_HTML = """<!doctype html>
     let statusChipHideTimer = null;
     let latestStatus = null;
     let downloadStartInFlight = false;
+    let modelActionInFlight = false;
+    let uploadRequest = null;
     let runtimeResetInFlight = false;
     let runtimeReconnectWatchActive = false;
     let runtimeReconnectWatchTimer = null;
@@ -2032,6 +3044,7 @@ CHAT_HTML = """<!doctype html>
       const seedField = document.getElementById("seed");
       if (!seedField) return;
       seedField.disabled = generationMode !== "deterministic";
+      seedField.title = seedField.disabled ? "Seed is only used in deterministic mode" : "";
     }
 
     function resolveSeedForRequest(settings) {
@@ -2572,6 +3585,7 @@ CHAT_HTML = """<!doctype html>
       document.querySelectorAll("details input, details select, details textarea").forEach((el) => {
         el.addEventListener("change", persistSettingsFromInputs);
       });
+      document.getElementById("seed").addEventListener("input", persistSettingsFromInputs);
       document.getElementById("generationMode").addEventListener("change", (event) => {
         const generationMode = normalizeGenerationMode(event.target?.value);
         updateSeedFieldState(generationMode);
@@ -2901,18 +3915,37 @@ CHAT_HTML = """<!doctype html>
         || statusPayload?.backend?.mode
         || ""
       ).toLowerCase();
+      const modelFilename = String(statusPayload?.model?.filename || "").trim();
+      const modelSuffix = modelFilename ? `:${modelFilename}` : "";
       const isReady = String(statusPayload?.state || "").toUpperCase() === "READY";
+      const statusState = String(statusPayload?.state || "").toUpperCase();
+      const hasModel = statusPayload?.model_present === true;
+      const llamaHealthy = statusPayload?.llama_server?.healthy === true;
       const isHealthy = isLocalModelConnected(statusPayload) || (backendMode === "fake" && isReady);
-      badge.classList.remove("online", "offline");
-      dot.classList.remove("online", "offline");
-      if (isHealthy) {
+      const isLoading = backendMode === "llama" && hasModel && !llamaHealthy && statusState === "BOOTING";
+      const isFailed = backendMode === "llama" && statusState === "ERROR";
+      badge.classList.remove("online", "loading", "failed", "offline");
+      dot.classList.remove("online", "loading", "failed", "offline");
+      if (backendMode === "fake" && isReady) {
         badge.classList.add("online");
         dot.classList.add("online");
-        label.textContent = "CONNECTED:Local Model";
+        label.textContent = "CONNECTED:Fake Backend";
+      } else if (isHealthy) {
+        badge.classList.add("online");
+        dot.classList.add("online");
+        label.textContent = `CONNECTED:llama.cpp${modelSuffix}`;
+      } else if (isLoading) {
+        badge.classList.add("loading");
+        dot.classList.add("loading");
+        label.textContent = `LOADING:llama.cpp${modelSuffix}`;
+      } else if (isFailed) {
+        badge.classList.add("failed");
+        dot.classList.add("failed");
+        label.textContent = `FAILED:llama.cpp${modelSuffix}`;
       } else {
         badge.classList.add("offline");
         dot.classList.add("offline");
-        label.textContent = "DISCONNECTED:Local Model";
+        label.textContent = "DISCONNECTED:llama.cpp";
       }
     }
 
@@ -2933,8 +3966,19 @@ CHAT_HTML = """<!doctype html>
       }
 
       prompt.hidden = false;
+      const countdownEnabled = statusPayload?.download?.countdown_enabled !== false;
       const autoStartRemaining = Number(statusPayload.download.auto_start_remaining_seconds);
-      if (Number.isFinite(autoStartRemaining) && autoStartRemaining > 0) {
+      const freeBytes = Number(statusPayload?.system?.storage_free_bytes);
+      const downloadError = String(statusPayload?.download?.error || "");
+      if (
+        downloadError === "insufficient_storage"
+        || (Number.isFinite(freeBytes) && freeBytes < 512 * 1024 * 1024)
+      ) {
+        const free = formatBytes(statusPayload?.system?.storage_free_bytes);
+        hint.textContent = `Not enough free storage for this model. Free space: ${free}. Delete model files and retry.`;
+      } else if (!countdownEnabled) {
+        hint.textContent = "Auto-download is paused. Start manually or re-enable it in settings.";
+      } else if (Number.isFinite(autoStartRemaining) && autoStartRemaining > 0) {
         hint.textContent = `Auto-download starts in ${formatCountdownSeconds(autoStartRemaining)} if idle.`;
       } else {
         hint.textContent = "Auto-download starts soon if idle.";
@@ -2976,6 +4020,7 @@ CHAT_HTML = """<!doctype html>
       const cpuClockDetail = document.getElementById("runtimeDetailCpuClock");
       const memoryDetail = document.getElementById("runtimeDetailMemory");
       const swapDetail = document.getElementById("runtimeDetailSwap");
+      const storageDetail = document.getElementById("runtimeDetailStorage");
       const tempDetail = document.getElementById("runtimeDetailTemp");
       const gpuDetail = document.getElementById("runtimeDetailGpu");
       const throttleDetail = document.getElementById("runtimeDetailThrottle");
@@ -2989,6 +4034,7 @@ CHAT_HTML = """<!doctype html>
         if (cpuClockDetail) cpuClockDetail.textContent = "CPU clock: --";
         if (memoryDetail) memoryDetail.textContent = "Memory: --";
         if (swapDetail) swapDetail.textContent = "Swap: --";
+        if (storageDetail) storageDetail.textContent = "Storage free: --";
         if (tempDetail) tempDetail.textContent = "Temperature: --";
         if (gpuDetail) gpuDetail.textContent = "GPU clock: --";
         if (throttleDetail) throttleDetail.textContent = "Throttling: --";
@@ -2997,6 +4043,7 @@ CHAT_HTML = """<!doctype html>
         applyRuntimeMetricSeverity(cpuClockDetail, Number.NaN);
         applyRuntimeMetricSeverity(memoryDetail, Number.NaN);
         applyRuntimeMetricSeverity(swapDetail, Number.NaN);
+        applyRuntimeMetricSeverity(storageDetail, Number.NaN);
         applyRuntimeMetricSeverity(tempDetail, Number.NaN);
         applyRuntimeMetricSeverity(gpuDetail, Number.NaN);
         return;
@@ -3016,8 +4063,10 @@ CHAT_HTML = """<!doctype html>
         ? `${gpuCore.replace(" MHz", "")}/${gpuV3d.replace(" MHz", "")} MHz`
         : "--";
       const swapPercent = formatPercent(systemPayload?.swap_percent, 0);
+      const storageFree = formatBytes(systemPayload?.storage_free_bytes);
+      const storagePercent = formatPercent(systemPayload?.storage_percent, 0);
       const throttlingNow = systemPayload?.throttling?.any_current === true ? "Yes" : "No";
-      compact.textContent = `CPU ${cpuTotal} @ ${cpuClock} | Cores ${coresText} | GPU ${gpuCompact} | Swap ${swapPercent} | Throttle ${throttlingNow}`;
+      compact.textContent = `CPU ${cpuTotal} @ ${cpuClock} | Cores ${coresText} | GPU ${gpuCompact} | Swap ${swapPercent} | Free ${storageFree} | Throttle ${throttlingNow}`;
 
       if (cpuDetail) cpuDetail.textContent = `CPU total: ${cpuTotal}`;
       if (coresDetail) coresDetail.textContent = `CPU cores: ${coresText}`;
@@ -3034,6 +4083,11 @@ CHAT_HTML = """<!doctype html>
       const swapTotal = formatBytes(systemPayload?.swap_total_bytes);
       if (swapDetail) swapDetail.textContent = `Swap: ${swapUsed} / ${swapTotal} (${swapPercent})`;
       applyRuntimeMetricSeverity(swapDetail, systemPayload?.swap_percent);
+
+      const storageUsed = formatBytes(systemPayload?.storage_used_bytes);
+      const storageTotal = formatBytes(systemPayload?.storage_total_bytes);
+      if (storageDetail) storageDetail.textContent = `Storage free: ${storageFree} (${storageUsed} / ${storageTotal} used, ${storagePercent})`;
+      applyRuntimeMetricSeverity(storageDetail, systemPayload?.storage_percent);
 
       const tempRaw = systemPayload?.temperature_c;
       const tempValue = typeof tempRaw === "number" ? tempRaw : Number.NaN;
@@ -3076,6 +4130,347 @@ CHAT_HTML = """<!doctype html>
       }
     }
 
+    function setModelUploadStatus(message) {
+      const el = document.getElementById("modelUploadStatus");
+      if (!el) return;
+      el.textContent = String(message || "No upload in progress.");
+    }
+
+    function findModelInLatestStatus(modelId) {
+      const models = Array.isArray(latestStatus?.models) ? latestStatus.models : [];
+      return models.find((item) => String(item?.id || "") === String(modelId || "")) || null;
+    }
+
+    function formatModelStatusLabel(rawStatus) {
+      const normalized = String(rawStatus || "unknown").trim().toLowerCase();
+      if (!normalized) return "unknown";
+      return normalized.replaceAll("_", " ");
+    }
+
+    async function postJson(url, payload) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload || {}),
+      });
+      const body = await res.json().catch(() => ({}));
+      return { res, body };
+    }
+
+    function renderModelsList(statusPayload) {
+      const container = document.getElementById("modelsList");
+      if (!container) return;
+      const models = Array.isArray(statusPayload?.models) ? statusPayload.models : [];
+      container.replaceChildren();
+      if (models.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "runtime-compact";
+        empty.textContent = "No models registered yet.";
+        container.appendChild(empty);
+        return;
+      }
+
+      for (const model of models) {
+        const row = document.createElement("div");
+        row.className = "model-row";
+        row.dataset.modelId = String(model?.id || "");
+
+        const head = document.createElement("div");
+        head.className = "model-row-head";
+        const name = document.createElement("span");
+        name.className = "model-row-name";
+        name.textContent = String(model?.filename || "unknown.gguf");
+        const status = document.createElement("span");
+        status.className = "model-status-pill";
+        status.textContent = formatModelStatusLabel(model?.status);
+        head.appendChild(name);
+        head.appendChild(status);
+
+        const actions = document.createElement("div");
+        actions.className = "model-row-actions";
+        if (model?.status === "downloading") {
+          const cancelBtn = document.createElement("button");
+          cancelBtn.type = "button";
+          cancelBtn.className = "ghost-btn";
+          cancelBtn.dataset.action = "cancel-download";
+          cancelBtn.textContent = "Stop download";
+          cancelBtn.title = "Stop the active download for this model";
+          actions.appendChild(cancelBtn);
+        } else if (model?.status !== "ready" && model?.source_type === "url") {
+          const downloadBtn = document.createElement("button");
+          downloadBtn.type = "button";
+          downloadBtn.className = "ghost-btn";
+          downloadBtn.dataset.action = "download";
+          downloadBtn.textContent = "Download";
+          actions.appendChild(downloadBtn);
+        }
+        if (model?.is_active !== true && model?.status === "ready") {
+          const activeBtn = document.createElement("button");
+          activeBtn.type = "button";
+          activeBtn.className = "ghost-btn";
+          activeBtn.dataset.action = "activate";
+          activeBtn.textContent = "Set active";
+          actions.appendChild(activeBtn);
+        }
+        if (String(model?.id || "").length > 0) {
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "ghost-btn danger-btn";
+          deleteBtn.dataset.action = "delete";
+          if (model?.status === "downloading") {
+            deleteBtn.textContent = "Cancel + delete";
+            deleteBtn.title = "Cancel the download and remove any partial data for this model";
+          } else {
+            deleteBtn.textContent = "Delete model";
+            deleteBtn.title = "Delete the model file (if present) and remove it from the list";
+          }
+          actions.appendChild(deleteBtn);
+        }
+        if (model?.is_active === true) {
+          const activeLabel = document.createElement("span");
+          activeLabel.className = "runtime-compact";
+          activeLabel.textContent = "Active model";
+          actions.appendChild(activeLabel);
+        }
+        if (model?.status === "downloading") {
+          const progress = document.createElement("span");
+          progress.className = "runtime-compact";
+          progress.textContent = `Downloading ${Number(model?.percent || 0)}% (${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)})`;
+          actions.appendChild(progress);
+        }
+        row.appendChild(head);
+        row.appendChild(actions);
+        container.appendChild(row);
+      }
+    }
+
+    function renderUploadState(statusPayload) {
+      const upload = statusPayload?.upload || {};
+      const cancelBtn = document.getElementById("cancelUploadBtn");
+      if (upload?.active) {
+        if (cancelBtn) cancelBtn.hidden = false;
+        const percent = Number(upload.percent || 0);
+        setModelUploadStatus(`Uploading model... ${percent}% (${formatBytes(upload.bytes_received)} / ${formatBytes(upload.bytes_total)})`);
+        return;
+      }
+      if (cancelBtn) cancelBtn.hidden = true;
+      if (upload?.error) {
+        setModelUploadStatus(`Upload state: ${upload.error}`);
+      } else {
+        setModelUploadStatus("No upload in progress.");
+      }
+    }
+
+    async function updateCountdownPreference(enabled) {
+      const { res, body } = await postJson("/internal/download-countdown", { enabled });
+      if (!res.ok) {
+        appendMessage("assistant", `Could not update auto-download: ${body?.reason || res.status}`);
+      }
+      await pollStatus();
+    }
+
+    async function registerModelFromUrl() {
+      if (modelActionInFlight) return;
+      const input = document.getElementById("modelUrlInput");
+      const sourceUrl = String(input?.value || "").trim();
+      if (!sourceUrl) {
+        appendMessage("assistant", "Enter a model URL ending with .gguf.");
+        return;
+      }
+      modelActionInFlight = true;
+      try {
+        const { res, body } = await postJson("/internal/models/register", { source_url: sourceUrl });
+        if (!res.ok) {
+          appendMessage("assistant", `Could not add model URL (${body?.reason || res.status}).`);
+          return;
+        }
+        if (input) input.value = "";
+      } catch (err) {
+        appendMessage("assistant", `Could not add model URL: ${err}`);
+      } finally {
+        modelActionInFlight = false;
+        await pollStatus();
+      }
+    }
+
+    async function startModelDownloadForModel(modelId) {
+      if (!modelId) return;
+      if (modelActionInFlight) return;
+      modelActionInFlight = true;
+      try {
+        const { res, body } = await postJson("/internal/models/download", { model_id: modelId });
+        if (!res.ok) {
+          appendMessage("assistant", `Could not start model download (${body?.reason || res.status}).`);
+          return;
+        }
+        if (!body?.started && body?.reason === "insufficient_storage") {
+          setComposerActivity("Model likely too large for free storage. Delete files and retry.");
+        }
+      } catch (err) {
+        appendMessage("assistant", `Could not start model download: ${err}`);
+      } finally {
+        modelActionInFlight = false;
+        await pollStatus();
+      }
+    }
+
+    async function cancelActiveModelDownload(modelId = null) {
+      if (modelActionInFlight) return;
+      const targetModel = findModelInLatestStatus(modelId) || findModelInLatestStatus(latestStatus?.download?.current_model_id);
+      const targetName = String(targetModel?.filename || "this model");
+      const confirmed = window.confirm(`Stop the current download for ${targetName}?`);
+      if (!confirmed) return;
+      modelActionInFlight = true;
+      try {
+        const { res, body } = await postJson("/internal/models/cancel-download", {});
+        if (!res.ok) {
+          appendMessage("assistant", `Could not cancel model download (${body?.reason || res.status}).`);
+        }
+      } catch (err) {
+        appendMessage("assistant", `Could not cancel model download: ${err}`);
+      } finally {
+        modelActionInFlight = false;
+        await pollStatus();
+      }
+    }
+
+    async function activateSelectedModel(modelId) {
+      if (!modelId) return;
+      if (modelActionInFlight) return;
+      modelActionInFlight = true;
+      try {
+        const { res, body } = await postJson("/internal/models/activate", { model_id: modelId });
+        if (!res.ok) {
+          appendMessage("assistant", `Could not activate model (${body?.reason || res.status}).`);
+          return;
+        }
+        setComposerActivity("Switching active model...");
+      } catch (err) {
+        appendMessage("assistant", `Could not activate model: ${err}`);
+      } finally {
+        modelActionInFlight = false;
+        await pollStatus();
+      }
+    }
+
+    async function deleteSelectedModel(modelId) {
+      if (!modelId) return;
+      if (modelActionInFlight) return;
+      const targetModel = findModelInLatestStatus(modelId);
+      const targetName = String(targetModel?.filename || "this model");
+      const isDownloading = targetModel?.status === "downloading";
+      const confirmMessage = isDownloading
+        ? `Cancel the download for ${targetName} and delete any partially downloaded data?`
+        : `Delete ${targetName} and remove it from the model list?`;
+      const confirmed = window.confirm(confirmMessage);
+      if (!confirmed) return;
+      modelActionInFlight = true;
+      try {
+        const { res, body } = await postJson("/internal/models/delete", { model_id: modelId });
+        if (!res.ok) {
+          appendMessage("assistant", `Could not delete model (${body?.reason || res.status}).`);
+          return;
+        }
+      } catch (err) {
+        appendMessage("assistant", `Could not delete model: ${err}`);
+      } finally {
+        modelActionInFlight = false;
+        await pollStatus();
+      }
+    }
+
+    async function purgeAllModels() {
+      if (modelActionInFlight) return;
+      const confirmed = window.confirm(
+        "Delete ALL model files and clear model/download metadata now?"
+      );
+      if (!confirmed) return;
+      modelActionInFlight = true;
+      try {
+        const { res, body } = await postJson("/internal/models/purge", { reset_bootstrap_flag: false });
+        if (!res.ok || body?.purged !== true) {
+          appendMessage("assistant", `Could not purge models (${body?.reason || res.status}).`);
+          return;
+        }
+        setComposerActivity("All models and metadata were cleared.");
+      } catch (err) {
+        appendMessage("assistant", `Could not purge models: ${err}`);
+      } finally {
+        modelActionInFlight = false;
+        await pollStatus();
+      }
+    }
+
+    async function uploadLocalModel() {
+      if (uploadRequest) return;
+      const input = document.getElementById("modelUploadInput");
+      const file = input?.files?.[0];
+      if (!file) {
+        appendMessage("assistant", "Pick a .gguf file to upload.");
+        return;
+      }
+      if (!String(file.name || "").toLowerCase().endsWith(".gguf")) {
+        appendMessage("assistant", "Only .gguf model files are supported.");
+        return;
+      }
+
+      const xhr = new XMLHttpRequest();
+      uploadRequest = xhr;
+      const cancelBtn = document.getElementById("cancelUploadBtn");
+      if (cancelBtn) cancelBtn.hidden = false;
+      setModelUploadStatus("Uploading model... 0%");
+
+      xhr.open("POST", "/internal/models/upload");
+      xhr.setRequestHeader("x-potato-filename", file.name);
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          const percent = Math.round((event.loaded * 100) / event.total);
+          setModelUploadStatus(`Uploading model... ${percent}% (${formatBytes(event.loaded)} / ${formatBytes(event.total)})`);
+        } else {
+          setModelUploadStatus("Uploading model...");
+        }
+      };
+      xhr.onerror = async () => {
+        uploadRequest = null;
+        if (cancelBtn) cancelBtn.hidden = true;
+        setModelUploadStatus("Upload failed.");
+        await pollStatus();
+      };
+      xhr.onabort = async () => {
+        uploadRequest = null;
+        if (cancelBtn) cancelBtn.hidden = true;
+        setModelUploadStatus("Upload cancelled.");
+        await postJson("/internal/models/cancel-upload", {});
+        await pollStatus();
+      };
+      xhr.onload = async () => {
+        uploadRequest = null;
+        if (cancelBtn) cancelBtn.hidden = true;
+        const body = (() => {
+          try {
+            return JSON.parse(xhr.responseText || "{}");
+          } catch (_err) {
+            return {};
+          }
+        })();
+        if (xhr.status < 200 || xhr.status >= 300) {
+          setModelUploadStatus(`Upload failed (${body?.reason || xhr.status}).`);
+        } else if (body?.uploaded) {
+          if (input) input.value = "";
+          setModelUploadStatus("Upload completed.");
+        } else {
+          setModelUploadStatus(`Upload did not complete (${body?.reason || "unknown"}).`);
+        }
+        await pollStatus();
+      };
+      xhr.send(file);
+    }
+
+    function cancelLocalModelUpload() {
+      if (!uploadRequest) return;
+      uploadRequest.abort();
+    }
+
     async function startModelDownload() {
       if (downloadStartInFlight) return;
       downloadStartInFlight = true;
@@ -3095,6 +4490,8 @@ CHAT_HTML = """<!doctype html>
           setComposerActivity("Model download already running.");
         } else if (!body?.started && body?.reason === "model_present") {
           setComposerActivity("Model already present.");
+        } else if (!body?.started && body?.reason === "insufficient_storage") {
+          setComposerActivity("Model likely too large for free storage. Delete files and retry.");
         } else if (body?.started) {
           setComposerActivity("Model download started.");
         }
@@ -3295,9 +4692,15 @@ CHAT_HTML = """<!doctype html>
         const modelName = statusPayload?.model?.filename || "Unknown model";
         modelNameField.value = statusPayload?.model_present ? modelName : `${modelName} (not loaded)`;
       }
+      const countdownSelect = document.getElementById("downloadCountdownEnabled");
+      if (countdownSelect) {
+        countdownSelect.value = statusPayload?.download?.countdown_enabled === false ? "false" : "true";
+      }
       updateLlamaIndicator(statusPayload);
       renderDownloadPrompt(statusPayload);
       renderSystemRuntime(statusPayload?.system);
+      renderModelsList(statusPayload);
+      renderUploadState(statusPayload);
       setSendEnabled();
     }
 
@@ -3323,8 +4726,15 @@ CHAT_HTML = """<!doctype html>
         }
         statusPollAppliedSeq = seq;
         const statusErrText = err?.name === "AbortError" ? "request timeout" : String(err);
+        if (latestStatus && typeof latestStatus === "object" && latestStatus.state && latestStatus.state !== "DOWN") {
+          document.getElementById("statusText").textContent = `Status warning: ${statusErrText}`;
+          return latestStatus;
+        }
         latestStatus = {
           state: "DOWN",
+          model_present: false,
+          model: { filename: "Unknown model", active_model_id: null },
+          models: [],
           download: {
             percent: 0,
             bytes_downloaded: 0,
@@ -3332,6 +4742,16 @@ CHAT_HTML = """<!doctype html>
             active: false,
             auto_start_seconds: 0,
             auto_start_remaining_seconds: 0,
+            countdown_enabled: true,
+            current_model_id: null,
+          },
+          upload: {
+            active: false,
+            model_id: null,
+            bytes_total: 0,
+            bytes_received: 0,
+            percent: 0,
+            error: null,
           },
           system: {
             available: false,
@@ -3359,6 +4779,8 @@ CHAT_HTML = """<!doctype html>
         updateLlamaIndicator(latestStatus);
         renderDownloadPrompt(latestStatus);
         renderSystemRuntime(latestStatus.system);
+        renderModelsList(latestStatus);
+        renderUploadState(latestStatus);
         setSendEnabled();
         return latestStatus;
       } finally {
@@ -3733,6 +5155,31 @@ CHAT_HTML = """<!doctype html>
       setRuntimeDetailsExpanded(!runtimeDetailsExpanded);
     });
     document.getElementById("startDownloadBtn").addEventListener("click", startModelDownload);
+    document.getElementById("downloadCountdownEnabled").addEventListener("change", (event) => {
+      const enabled = event.target?.value !== "false";
+      updateCountdownPreference(enabled);
+    });
+    document.getElementById("registerModelBtn").addEventListener("click", registerModelFromUrl);
+    document.getElementById("uploadModelBtn").addEventListener("click", uploadLocalModel);
+    document.getElementById("cancelUploadBtn").addEventListener("click", cancelLocalModelUpload);
+    document.getElementById("purgeModelsBtn").addEventListener("click", purgeAllModels);
+    document.getElementById("modelsList").addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const action = target.dataset?.action;
+      if (!action) return;
+      const row = target.closest(".model-row");
+      const modelId = row?.dataset?.modelId;
+      if (action === "download") {
+        startModelDownloadForModel(modelId);
+      } else if (action === "cancel-download") {
+        cancelActiveModelDownload(modelId);
+      } else if (action === "activate") {
+        activateSelectedModel(modelId);
+      } else if (action === "delete") {
+        deleteSelectedModel(modelId);
+      }
+    });
     document.getElementById("resetRuntimeBtn").addEventListener("click", resetRuntimeHeavy);
     document.getElementById("attachImageBtn").addEventListener("click", openImagePicker);
     document.getElementById("cancelBtn").addEventListener("click", cancelCurrentWork);
@@ -3774,9 +5221,13 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.state.runtime = runtime or RuntimeConfig.from_env()
     app.state.llama_process = None
     app.state.model_download_task = None
+    app.state.model_download_process = None
     app.state.system_metrics_task = None
     app.state.system_metrics_snapshot = default_system_metrics_snapshot()
     app.state.download_lock = asyncio.Lock()
+    app.state.model_upload_lock = asyncio.Lock()
+    app.state.model_upload_cancel_requested = False
+    app.state.model_upload_state = _empty_model_upload_state()
     app.state.startup_monotonic = None
     app.state.orchestrator_task = None
     app.state.chat_repository = ChatRepositoryManager(
@@ -3790,6 +5241,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     @app.on_event("startup")
     async def _startup() -> None:
         app.state.startup_monotonic = get_monotonic_time()
+        ensure_models_state(app.state.runtime)
         prime_system_metrics_counters()
         app.state.system_metrics_snapshot = collect_system_metrics_snapshot()
         app.state.system_metrics_task = asyncio.create_task(
@@ -3843,6 +5295,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         return JSONResponse(
             await build_status(
                 runtime_cfg,
+                app=request.app,
                 download_active=download_active,
                 auto_start_remaining_seconds=auto_start_remaining,
                 system_snapshot=request.app.state.system_metrics_snapshot,
@@ -3898,6 +5351,342 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         status_code = 202 if started else 200
         return JSONResponse(status_code=status_code, content={"started": started, "reason": reason})
 
+    @app.post("/internal/download-countdown")
+    async def set_download_countdown(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"updated": False, "reason": "orchestrator_disabled"},
+            )
+        payload = await request.json()
+        enabled = bool(payload.get("enabled", True))
+        state = set_download_countdown_enabled(runtime_cfg, enabled)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "updated": True,
+                "countdown_enabled": bool(state.get("countdown_enabled", True)),
+            },
+        )
+
+    @app.post("/internal/models/register")
+    async def register_model_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        payload = await request.json()
+        source_url = str(payload.get("source_url") or "").strip()
+        alias_raw = payload.get("alias")
+        alias = str(alias_raw).strip() if isinstance(alias_raw, str) and alias_raw.strip() else None
+        ok, reason, model = register_model_url(runtime_cfg, source_url=source_url, alias=alias)
+        if not ok:
+            return JSONResponse(status_code=400, content={"ok": False, "reason": reason})
+        return JSONResponse(status_code=200, content={"ok": True, "reason": reason, "model": model})
+
+    @app.post("/internal/models/download")
+    async def start_selected_model_download(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"started": False, "reason": "orchestrator_disabled"},
+            )
+        payload = await request.json()
+        model_id = str(payload.get("model_id") or "").strip()
+        if not model_id:
+            return JSONResponse(status_code=400, content={"started": False, "reason": "model_id_required"})
+        started, reason = await start_model_download(
+            app,
+            runtime_cfg,
+            trigger="manual-model",
+            model_id=model_id,
+        )
+        status_code = 202 if started else 200
+        return JSONResponse(status_code=status_code, content={"started": started, "reason": reason, "model_id": model_id})
+
+    @app.post("/internal/models/cancel-download")
+    async def cancel_selected_model_download(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"cancelled": False, "reason": "orchestrator_disabled"},
+            )
+        cancelled, reason = await cancel_model_download(app, runtime_cfg)
+        return JSONResponse(status_code=200, content={"cancelled": cancelled, "reason": reason})
+
+    @app.post("/internal/models/activate")
+    async def activate_model_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"switched": False, "reason": "orchestrator_disabled"},
+            )
+        payload = await request.json()
+        model_id = str(payload.get("model_id") or "").strip()
+        if not model_id:
+            return JSONResponse(status_code=400, content={"switched": False, "reason": "model_id_required"})
+        switched, reason, restarted = await activate_model(app, runtime_cfg, model_id=model_id)
+        status_code = 200 if switched else (409 if reason in {"model_not_ready", "model_not_found"} else 400)
+        return JSONResponse(
+            status_code=status_code,
+            content={"switched": switched, "reason": reason, "restarted": restarted, "model_id": model_id},
+        )
+
+    @app.post("/internal/models/delete")
+    async def delete_model_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"deleted": False, "reason": "orchestrator_disabled"},
+            )
+        payload = await request.json()
+        model_id = str(payload.get("model_id") or "").strip()
+        if not model_id:
+            return JSONResponse(status_code=400, content={"deleted": False, "reason": "model_id_required"})
+        cancelled_download = False
+        async with app.state.download_lock:
+            models_state = ensure_models_state(runtime_cfg)
+            current_download_model_id = str(models_state.get("current_download_model_id") or "").strip()
+            if current_download_model_id == model_id and is_download_task_active(app.state.model_download_task):
+                cancelled_download, cancel_reason = await _cancel_model_download_locked(
+                    app,
+                    runtime_cfg,
+                    expected_model_id=model_id,
+                    timeout_seconds=MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS,
+                )
+                if not cancelled_download:
+                    reason = "delete_cancel_timeout" if cancel_reason == "cancel_timeout" else "delete_cancel_failed"
+                    status_code = 409 if reason == "delete_cancel_timeout" else 400
+                    return JSONResponse(
+                        status_code=status_code,
+                        content={
+                            "deleted": False,
+                            "reason": reason,
+                            "model_id": model_id,
+                            "deleted_file": False,
+                            "freed_bytes": 0,
+                            "cancelled_download": False,
+                        },
+                    )
+            deleted, reason, deleted_file, freed_bytes, deleted_active = delete_model(runtime_cfg, model_id=model_id)
+        restarted = False
+        restart_reason = "not_required"
+        if deleted and deleted_active:
+            models_state = ensure_models_state(runtime_cfg)
+            resolve_active_model(models_state, runtime_cfg)
+            restarted, restart_reason = await restart_managed_llama_process(app)
+        if deleted:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "deleted": True,
+                    "reason": reason,
+                    "model_id": model_id,
+                    "deleted_file": deleted_file,
+                    "freed_bytes": int(max(0, freed_bytes)),
+                    "deleted_active": deleted_active,
+                    "cancelled_download": cancelled_download,
+                    "restarted": restarted,
+                    "restart_reason": restart_reason,
+                },
+            )
+        status_code = 404 if reason == "model_not_found" else 400
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "deleted": False,
+                "reason": reason,
+                "model_id": model_id,
+                "deleted_file": False,
+                "freed_bytes": 0,
+                "cancelled_download": False,
+            },
+        )
+
+    @app.post("/internal/models/purge")
+    async def purge_models_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"purged": False, "reason": "orchestrator_disabled"},
+            )
+        payload = await request.json()
+        reset_bootstrap_flag = bool(payload.get("reset_bootstrap_flag", True))
+        result = await purge_all_models(app, runtime_cfg, reset_bootstrap_flag=reset_bootstrap_flag)
+        return JSONResponse(status_code=200, content=result)
+
+    @app.post("/internal/models/upload")
+    async def upload_model_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"uploaded": False, "reason": "orchestrator_disabled"},
+            )
+
+        raw_filename = request.headers.get("x-potato-filename", "")
+        try:
+            filename = _safe_upload_filename(raw_filename)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"uploaded": False, "reason": str(exc)})
+
+        async with app.state.model_upload_lock:
+            if app.state.model_upload_state.get("active"):
+                return JSONResponse(status_code=409, content={"uploaded": False, "reason": "upload_already_running"})
+
+            declared_total = max(0, _safe_int(request.headers.get("content-length"), 0))
+            max_upload_bytes = get_model_upload_max_bytes()
+            app.state.model_upload_cancel_requested = False
+            app.state.model_upload_state = {
+                "active": True,
+                "model_id": None,
+                "bytes_total": declared_total,
+                "bytes_received": 0,
+                "percent": 0,
+                "error": None,
+            }
+            if max_upload_bytes is not None and declared_total > 0 and declared_total > max_upload_bytes:
+                app.state.model_upload_state.update({"active": False, "error": "upload_too_large"})
+                return JSONResponse(status_code=413, content={"uploaded": False, "reason": "upload_too_large"})
+
+            state = ensure_models_state(runtime_cfg)
+            existing_names = {
+                str(item.get("filename"))
+                for item in state.get("models", [])
+                if isinstance(item, dict)
+            }
+            final_filename = _unique_filename(filename, existing_names)
+            tmp_path = _model_file_path(runtime_cfg, final_filename + ".part")
+            final_path = _model_file_path(runtime_cfg, final_filename)
+            tmp_path.parent.mkdir(parents=True, exist_ok=True)
+            total_received = 0
+            error_reason: str | None = None
+            upload_completed = False
+
+            def _cleanup_partial_upload() -> None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not delete partial upload file: %s", tmp_path, exc_info=True)
+
+            try:
+                with tmp_path.open("wb") as handle:
+                    async for chunk in request.stream():
+                        if app.state.model_upload_cancel_requested:
+                            error_reason = "upload_cancelled"
+                            break
+                        if not chunk:
+                            continue
+                        total_received += len(chunk)
+                        if max_upload_bytes is not None and total_received > max_upload_bytes:
+                            error_reason = "upload_too_large"
+                            break
+                        handle.write(chunk)
+                        state_total = app.state.model_upload_state.get("bytes_total") or 0
+                        percent = int((total_received * 100 / state_total)) if state_total else 0
+                        app.state.model_upload_state.update(
+                            {
+                                "bytes_received": total_received,
+                                "percent": max(0, min(100, percent)),
+                            }
+                        )
+
+                if error_reason == "upload_too_large":
+                    _cleanup_partial_upload()
+                    return JSONResponse(status_code=413, content={"uploaded": False, "reason": error_reason})
+                if error_reason == "upload_cancelled":
+                    _cleanup_partial_upload()
+                    return JSONResponse(status_code=200, content={"uploaded": False, "reason": error_reason})
+                if total_received <= 0:
+                    error_reason = "upload_empty"
+                    _cleanup_partial_upload()
+                    return JSONResponse(status_code=400, content={"uploaded": False, "reason": error_reason})
+
+                tmp_path.replace(final_path)
+                models = state.get("models", [])
+                assert isinstance(models, list)
+                existing_ids = {
+                    str(item.get("id"))
+                    for item in models
+                    if isinstance(item, dict)
+                }
+                model_id = _unique_model_id(_slugify_id(Path(final_filename).stem), existing_ids)
+                record = {
+                    "id": model_id,
+                    "filename": final_filename,
+                    "source_url": None,
+                    "source_type": "upload",
+                    "status": "ready",
+                    "error": None,
+                }
+                models.append(record)
+                state["active_model_id"] = model_id
+                saved = save_models_state(runtime_cfg, state)
+                runtime_cfg.model_path = final_path
+                restarted, _reason = await restart_managed_llama_process(app)
+                app.state.model_upload_state.update(
+                    {
+                        "active": False,
+                        "error": None,
+                        "model_id": model_id,
+                        "bytes_total": total_received,
+                        "bytes_received": total_received,
+                        "percent": 100,
+                    }
+                )
+                upload_completed = True
+                model = get_model_by_id(saved, model_id)
+                return JSONResponse(
+                    status_code=200,
+                    content={"uploaded": True, "model": model, "switched": True, "restarted": restarted},
+                )
+            except OSError:
+                if error_reason is None:
+                    error_reason = "upload_write_failed"
+                _cleanup_partial_upload()
+                logger.warning("Model upload failed during file write: %s", final_filename, exc_info=True)
+                return JSONResponse(status_code=500, content={"uploaded": False, "reason": error_reason})
+            except Exception:
+                _cleanup_partial_upload()
+                raise
+            finally:
+                if not upload_completed:
+                    app.state.model_upload_state.update(
+                        {
+                            "active": False,
+                            "model_id": None,
+                            "error": error_reason,
+                        }
+                    )
+
+    @app.post("/internal/models/cancel-upload")
+    async def cancel_model_upload(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"cancelled": False, "reason": "orchestrator_disabled"},
+            )
+        if not app.state.model_upload_state.get("active"):
+            return JSONResponse(status_code=200, content={"cancelled": False, "reason": "not_running"})
+        app.state.model_upload_cancel_requested = True
+        return JSONResponse(status_code=200, content={"cancelled": True, "reason": "cancel_requested"})
+
     @app.post("/internal/reset-runtime")
     async def reset_runtime_now(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
         if not runtime_cfg.enable_orchestrator:
@@ -3939,6 +5728,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         download_active, auto_start_remaining = get_status_download_context(request.app, runtime_cfg)
         status_payload = await build_status(
             runtime_cfg,
+            app=request.app,
             download_active=download_active,
             auto_start_remaining_seconds=auto_start_remaining,
             system_snapshot=request.app.state.system_metrics_snapshot,

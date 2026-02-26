@@ -4,6 +4,7 @@ set -euo pipefail
 rsync -a files/ "${ROOTFS_DIR}/"
 
 install -d -m 0755 "${ROOTFS_DIR}/opt/potato" "${ROOTFS_DIR}/opt/potato"/{app,bin,models,state,config,llama,nginx,systemd}
+chmod 0755 "${ROOTFS_DIR}/opt" "${ROOTFS_DIR}/opt/potato" "${ROOTFS_DIR}/opt/potato"/{app,bin,models,state,config,llama,nginx,systemd}
 
 chmod +x "${ROOTFS_DIR}"/opt/potato/bin/*.sh
 
@@ -62,6 +63,7 @@ fi
 /opt/potato/venv/bin/pip install -r /opt/potato/app/requirements.txt
 
 chown -R potato:potato /opt/potato
+chmod 0755 /opt /opt/potato
 
 cat > /etc/sudoers.d/potato-runtime-reset <<'SUDOERS'
 potato ALL=(root) NOPASSWD: /bin/systemctl start --no-block potato-runtime-reset.service

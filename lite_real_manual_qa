@@ -116,7 +116,7 @@ fi
 read -r -a SSH_OPTION_ARGS <<< "${PI_SSH_OPTIONS}"
 run_memory_preflight
 SSHPASS="${PI_PASSWORD}" sshpass -e ssh "${SSH_OPTION_ARGS[@]}" "${PI_USER}@${TARGET_HOST}" \
-  "mkdir -p '${REMOTE_QA_ROOT}/app'"
+  "mkdir -p '${REMOTE_QA_ROOT}/app' '${REMOTE_QA_ROOT}/state'"
 
 echo "[lite] Syncing only runtime app files to ${TARGET_HOST}:${REMOTE_QA_ROOT} ..."
 SSHPASS="${PI_PASSWORD}" sshpass -e rsync -az --delete \
@@ -167,6 +167,7 @@ SSHPASS="${PI_PASSWORD}" exec sshpass -e ssh -tt "${SSH_OPTION_ARGS[@]}" -L "${P
    POTATO_ALLOW_FAKE_FALLBACK=0 \
    POTATO_BASE_DIR=/opt/potato \
    POTATO_MODEL_PATH=/opt/potato/models/Qwen3-VL-4B-Instruct-Q4_K_M.gguf \
-   POTATO_DOWNLOAD_STATE_PATH=/opt/potato/state/download.json \
+   POTATO_DOWNLOAD_STATE_PATH=/tmp/potato-qa/state/download.json \
+   POTATO_MODELS_STATE_PATH=/tmp/potato-qa/state/models.json \
    POTATO_LLAMA_BASE_URL=http://127.0.0.1:8080 \
    /opt/potato/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port '${PI_QA_PORT}'"
