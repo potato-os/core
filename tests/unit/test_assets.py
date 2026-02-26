@@ -651,8 +651,29 @@ def test_chat_ui_shows_pi_runtime_compact_with_details_toggle_above_settings():
     assert "CPU clock:" in CHAT_HTML
     assert "Storage free:" in CHAT_HTML
     assert 'id="runtimeDetailStorage"' in CHAT_HTML
+    assert 'id="runtimeDetailPiModel"' in CHAT_HTML
+    assert 'id="runtimeDetailOs"' in CHAT_HTML
+    assert 'id="runtimeDetailKernel"' in CHAT_HTML
+    assert 'id="runtimeDetailBootloader"' in CHAT_HTML
+    assert 'id="runtimeDetailFirmware"' in CHAT_HTML
+    assert 'id="runtimeDetailPower"' in CHAT_HTML
+    assert 'id="runtimeDetailPowerRaw"' in CHAT_HTML
+    assert 'id="runtimeDetailPowerNote"' in CHAT_HTML
+    assert 'class="runtime-detail-prominent"' in CHAT_HTML
+    assert "Power (estimated total):" in CHAT_HTML
+    assert "Power (PMIC raw):" in CHAT_HTML
+    assert "Bootloader:" in CHAT_HTML
+    assert "Firmware:" in CHAT_HTML
+    assert CHAT_HTML.index('id="runtimeDetailPower"') < CHAT_HTML.index('id="runtimeDetailCpu"')
     assert "renderSystemRuntime(statusPayload?.system)" in CHAT_HTML
     assert CHAT_HTML.index('id="systemRuntimeCard"') < CHAT_HTML.index('<details class="settings"')
+    assert 'id="powerCalibrationWallWatts"' in CHAT_HTML
+    assert 'id="capturePowerCalibrationSampleBtn"' in CHAT_HTML
+    assert 'id="fitPowerCalibrationBtn"' in CHAT_HTML
+    assert 'id="resetPowerCalibrationBtn"' in CHAT_HTML
+    assert "/internal/power-calibration/sample" in CHAT_HTML
+    assert "/internal/power-calibration/fit" in CHAT_HTML
+    assert "/internal/power-calibration/reset" in CHAT_HTML
 
 
 def test_chat_ui_supports_image_upload_for_vision_messages():

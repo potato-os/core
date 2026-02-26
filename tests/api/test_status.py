@@ -114,6 +114,31 @@ def test_status_includes_large_model_override_setting(client):
     assert "override_enabled" in body["compatibility"]
 
 
+def test_status_includes_platform_version_and_power_fields_under_system(client):
+    response = client.get("/status")
+    assert response.status_code == 200
+    body = response.json()
+
+    system = body["system"]
+    assert "pi_model_name" in system
+    assert "os_pretty_name" in system
+    assert "kernel_release" in system
+    assert "kernel_version" in system
+    assert "bootloader_version" in system
+    assert "firmware_version" in system
+    assert "power_estimate" in system
+
+    power = system["power_estimate"]
+    assert power["method"] == "pmic_read_adc"
+    assert "PMIC" in power["label"]
+    assert "estimate" in power["label"].lower()
+    assert "disclaimer" in power
+    assert "raw_total_watts" in power
+    assert "adjusted_total_watts" in power
+    assert "calibration" in power
+    assert power["calibration"]["mode"] in {"default", "custom"}
+
+
 def test_status_stays_ready_when_active_model_healthy_and_download_error_is_from_side_model(
     client,
     runtime,

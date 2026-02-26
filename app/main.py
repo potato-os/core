@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
+import platform
 import re
 import subprocess
 import time
@@ -53,6 +55,10 @@ LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME = ".potato-llama-runtime-bundle.json"
 MAX_MODEL_UPLOAD_BYTES = MODEL_UPLOAD_LIMIT_16GB_BYTES
 MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS = 20.0
 MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
+# Default Pi5 power correction tuned from real wall-meter calibration on a Raspberry Pi 5 16GB.
+POWER_CALIBRATION_DEFAULT_A = 1.260204
+POWER_CALIBRATION_DEFAULT_B = 0.704251
+POWER_CALIBRATION_MAX_SAMPLES = 64
 
 DEFAULT_CHAT_SETTINGS = {
     "temperature": 0.7,
@@ -75,6 +81,16 @@ THROTTLE_HISTORY_BITS = {
     17: "Frequency capped occurred",
     18: "Throttling occurred",
     19: "Soft temp limit occurred",
+}
+
+SYSTEM_STATIC_INFO_CACHE_TTL_SECONDS = 60
+SYSTEM_POWER_ESTIMATE_DISCLAIMER = (
+    "Estimated from PMIC rails; excludes main 5V input current/peripherals/HATs and conversion losses."
+)
+
+_SYSTEM_STATIC_INFO_CACHE: dict[str, Any] = {
+    "expires_at_unix": 0,
+    "value": None,
 }
 
 
@@ -491,6 +507,153 @@ def normalize_allow_unsupported_large_models(raw_value: Any) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _safe_positive_float(raw_value: Any) -> float | None:
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+
+def _get_power_calibration_default_coefficients() -> tuple[float, float]:
+    raw_a = os.getenv("POTATO_POWER_ESTIMATE_ADJUST_A", "").strip()
+    raw_b = os.getenv("POTATO_POWER_ESTIMATE_ADJUST_B", "").strip()
+    a = _safe_positive_float(raw_a) if raw_a else None
+    b = None
+    if raw_b:
+        try:
+            parsed_b = float(raw_b)
+            if math.isfinite(parsed_b):
+                b = parsed_b
+        except (TypeError, ValueError):
+            b = None
+    return (
+        a if a is not None else POWER_CALIBRATION_DEFAULT_A,
+        b if b is not None else POWER_CALIBRATION_DEFAULT_B,
+    )
+
+
+def _default_power_calibration_settings() -> dict[str, Any]:
+    default_a, default_b = _get_power_calibration_default_coefficients()
+    return {
+        "mode": "default",
+        "a": default_a,
+        "b": default_b,
+        "fitted_at_unix": None,
+        "sample_count": 0,
+        "samples": [],
+    }
+
+
+def _normalize_power_calibration_samples(raw_samples: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_samples, list):
+        return []
+    samples: list[dict[str, Any]] = []
+    for item in raw_samples:
+        if not isinstance(item, dict):
+            continue
+        raw_pmic_watts = _safe_positive_float(item.get("raw_pmic_watts"))
+        wall_watts = _safe_positive_float(item.get("wall_watts"))
+        if raw_pmic_watts is None or wall_watts is None:
+            continue
+        samples.append(
+            {
+                "raw_pmic_watts": round(raw_pmic_watts, 4),
+                "wall_watts": round(wall_watts, 4),
+                "captured_at_unix": _safe_int(item.get("captured_at_unix"), 0) or None,
+            }
+        )
+    if len(samples) > POWER_CALIBRATION_MAX_SAMPLES:
+        samples = samples[-POWER_CALIBRATION_MAX_SAMPLES:]
+    return samples
+
+
+def normalize_power_calibration_settings(raw_value: Any) -> dict[str, Any]:
+    defaults = _default_power_calibration_settings()
+    raw = raw_value if isinstance(raw_value, dict) else {}
+    mode_raw = str(raw.get("mode") or "").strip().lower()
+    mode = "custom" if mode_raw == "custom" else "default"
+    a = raw.get("a")
+    b = raw.get("b")
+    try:
+        a_value = float(a)
+    except (TypeError, ValueError):
+        a_value = defaults["a"]
+    try:
+        b_value = float(b)
+    except (TypeError, ValueError):
+        b_value = defaults["b"]
+    if not math.isfinite(a_value) or a_value <= 0:
+        a_value = defaults["a"]
+    if not math.isfinite(b_value):
+        b_value = defaults["b"]
+    samples = _normalize_power_calibration_samples(raw.get("samples"))
+    sample_count = _safe_int(raw.get("sample_count"), len(samples))
+    if sample_count < len(samples):
+        sample_count = len(samples)
+    fitted_at_unix = _safe_int(raw.get("fitted_at_unix"), 0) or None
+    if mode != "custom":
+        fitted_at_unix = None
+    return {
+        "mode": mode,
+        "a": round(float(a_value), 6),
+        "b": round(float(b_value), 6),
+        "fitted_at_unix": fitted_at_unix,
+        "sample_count": max(0, int(sample_count)),
+        "samples": samples,
+    }
+
+
+def _fit_linear_power_calibration(samples: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if len(samples) < 2:
+        return None
+    xs: list[float] = []
+    ys: list[float] = []
+    for item in samples:
+        raw = _safe_positive_float(item.get("raw_pmic_watts"))
+        wall = _safe_positive_float(item.get("wall_watts"))
+        if raw is None or wall is None:
+            continue
+        xs.append(raw)
+        ys.append(wall)
+    if len(xs) < 2:
+        return None
+    x_mean = sum(xs) / len(xs)
+    y_mean = sum(ys) / len(ys)
+    var_x = sum((x - x_mean) ** 2 for x in xs)
+    if var_x <= 0:
+        return None
+    cov_xy = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys))
+    a = cov_xy / var_x
+    b = y_mean - (a * x_mean)
+    if not math.isfinite(a) or not math.isfinite(b) or a <= 0:
+        return None
+    return {
+        "a": round(float(a), 6),
+        "b": round(float(b), 6),
+        "sample_count": len(xs),
+    }
+
+
+def _apply_power_calibration(raw_pmic_watts: Any, *, a: Any, b: Any) -> float | None:
+    raw = _safe_positive_float(raw_pmic_watts)
+    if raw is None:
+        return None
+    try:
+        a_val = float(a)
+        b_val = float(b)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(a_val) or not math.isfinite(b_val):
+        return None
+    adjusted = (raw * a_val) + b_val
+    if not math.isfinite(adjusted) or adjusted <= 0:
+        return None
+    return adjusted
+
+
 def read_llama_runtime_settings(runtime: RuntimeConfig) -> dict[str, Any]:
     path = _llama_runtime_settings_path(runtime)
     try:
@@ -505,6 +668,7 @@ def read_llama_runtime_settings(runtime: RuntimeConfig) -> dict[str, Any]:
         "allow_unsupported_large_models": normalize_allow_unsupported_large_models(
             raw.get("allow_unsupported_large_models")
         ),
+        "power_calibration": normalize_power_calibration_settings(raw.get("power_calibration")),
         "updated_at_unix": _safe_int(raw.get("updated_at_unix"), 0) or None,
     }
 
@@ -514,6 +678,7 @@ def write_llama_runtime_settings(
     *,
     memory_loading_mode: str | None = None,
     allow_unsupported_large_models: bool | None = None,
+    power_calibration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     current = read_llama_runtime_settings(runtime)
     payload = {
@@ -524,6 +689,9 @@ def write_llama_runtime_settings(
             current.get("allow_unsupported_large_models")
             if allow_unsupported_large_models is None
             else allow_unsupported_large_models
+        ),
+        "power_calibration": normalize_power_calibration_settings(
+            current.get("power_calibration") if power_calibration is None else power_calibration
         ),
         "updated_at_unix": int(time.time()),
     }
@@ -557,6 +725,106 @@ def build_llama_large_model_override_status(runtime: RuntimeConfig) -> dict[str,
         "label": "Try unsupported large model anyway" if enabled else "Use compatibility warnings (default)",
         "updated_at_unix": settings.get("updated_at_unix"),
     }
+
+
+def build_power_calibration_status(runtime: RuntimeConfig) -> dict[str, Any]:
+    settings = read_llama_runtime_settings(runtime)
+    calibration = normalize_power_calibration_settings(settings.get("power_calibration"))
+    mode = str(calibration.get("mode") or "default")
+    return {
+        "mode": "custom" if mode == "custom" else "default",
+        "a": calibration.get("a"),
+        "b": calibration.get("b"),
+        "sample_count": _safe_int(calibration.get("sample_count"), 0),
+        "fitted_at_unix": calibration.get("fitted_at_unix"),
+        "label": "Meter-calibrated" if mode == "custom" else "Default correction",
+    }
+
+
+def _append_power_calibration_sample(
+    runtime: RuntimeConfig,
+    *,
+    raw_pmic_watts: float,
+    wall_watts: float,
+    captured_at_unix: int | None = None,
+) -> dict[str, Any]:
+    current = read_llama_runtime_settings(runtime)
+    calibration = normalize_power_calibration_settings(current.get("power_calibration"))
+    samples = list(calibration.get("samples") or [])
+    samples.append(
+        {
+            "raw_pmic_watts": round(float(raw_pmic_watts), 4),
+            "wall_watts": round(float(wall_watts), 4),
+            "captured_at_unix": int(time.time()) if captured_at_unix is None else int(captured_at_unix),
+        }
+    )
+    samples = _normalize_power_calibration_samples(samples)
+    calibration["samples"] = samples
+    calibration["sample_count"] = len(samples)
+    saved = write_llama_runtime_settings(runtime, power_calibration=calibration)
+    return normalize_power_calibration_settings(saved.get("power_calibration"))
+
+
+def _fit_and_persist_power_calibration(runtime: RuntimeConfig) -> tuple[bool, str, dict[str, Any]]:
+    current = read_llama_runtime_settings(runtime)
+    calibration = normalize_power_calibration_settings(current.get("power_calibration"))
+    samples = list(calibration.get("samples") or [])
+    if len(samples) < 2:
+        return False, "insufficient_samples", calibration
+    fit = _fit_linear_power_calibration(samples)
+    if fit is None:
+        return False, "degenerate_samples", calibration
+    calibration.update(
+        {
+            "mode": "custom",
+            "a": fit["a"],
+            "b": fit["b"],
+            "sample_count": fit["sample_count"],
+            "fitted_at_unix": int(time.time()),
+            "samples": _normalize_power_calibration_samples(samples),
+        }
+    )
+    saved = write_llama_runtime_settings(runtime, power_calibration=calibration)
+    return True, "power_calibration_fitted", normalize_power_calibration_settings(saved.get("power_calibration"))
+
+
+def _reset_power_calibration(runtime: RuntimeConfig) -> dict[str, Any]:
+    calibration = _default_power_calibration_settings()
+    saved = write_llama_runtime_settings(runtime, power_calibration=calibration)
+    return normalize_power_calibration_settings(saved.get("power_calibration"))
+
+
+def build_power_estimate_status(runtime: RuntimeConfig, power_snapshot: Any) -> dict[str, Any]:
+    base = _default_power_estimate_snapshot()
+    if isinstance(power_snapshot, dict):
+        payload = {**base, **power_snapshot}
+    else:
+        payload = base
+
+    raw_watts = None
+    if isinstance(payload.get("total_watts"), (int, float)) and math.isfinite(float(payload["total_watts"])):
+        raw_watts = round(float(payload["total_watts"]), 3)
+    payload["total_watts"] = raw_watts
+    payload["raw_total_watts"] = raw_watts
+
+    calibration = build_power_calibration_status(runtime)
+    payload["calibration"] = calibration
+    payload["confidence"] = "meter-calibrated" if calibration.get("mode") == "custom" else "experimental-default"
+
+    adjusted = _apply_power_calibration(raw_watts, a=calibration.get("a"), b=calibration.get("b"))
+    payload["adjusted_total_watts"] = round(adjusted, 3) if adjusted is not None else None
+    if payload["adjusted_total_watts"] is not None:
+        payload["adjusted_label"] = "Estimated total power"
+    else:
+        payload["adjusted_label"] = None
+
+    note = (
+        "PMIC raw excludes direct 5V loads (USB/HAT/NVMe); estimated total uses "
+        + ("meter-calibrated" if calibration.get("mode") == "custom" else "default")
+        + " correction."
+    )
+    payload["estimated_total_disclaimer"] = note
+    return payload
 
 
 def read_llama_runtime_bundle_marker(runtime: RuntimeConfig) -> dict[str, Any] | None:
@@ -893,6 +1161,13 @@ def default_system_metrics_snapshot() -> dict[str, Any]:
     return {
         "available": False,
         "updated_at_unix": None,
+        "pi_model_name": None,
+        "os_pretty_name": None,
+        "kernel_release": None,
+        "kernel_version": None,
+        "bootloader_version": _default_bootloader_version_snapshot(),
+        "firmware_version": _default_firmware_version_snapshot(),
+        "power_estimate": _default_power_estimate_snapshot(),
         "cpu_percent": None,
         "cpu_cores_percent": [],
         "cpu_clock_arm_hz": None,
@@ -939,6 +1214,41 @@ def decode_throttled_bits(raw_value: int) -> dict[str, Any]:
     }
 
 
+def _default_bootloader_version_snapshot() -> dict[str, Any]:
+    return {
+        "available": False,
+        "date": None,
+        "version": None,
+        "timestamp": None,
+        "update_time": None,
+        "capabilities": None,
+        "raw": None,
+    }
+
+
+def _default_firmware_version_snapshot() -> dict[str, Any]:
+    return {
+        "available": False,
+        "date": None,
+        "build_info": None,
+        "version": None,
+        "raw": None,
+    }
+
+
+def _default_power_estimate_snapshot() -> dict[str, Any]:
+    return {
+        "available": False,
+        "updated_at_unix": None,
+        "total_watts": None,
+        "rails_paired_count": 0,
+        "method": "pmic_read_adc",
+        "label": "PMIC rails estimate",
+        "disclaimer": SYSTEM_POWER_ESTIMATE_DISCLAIMER,
+        "error": None,
+    }
+
+
 def _run_vcgencmd(*args: str) -> str | None:
     try:
         result = subprocess.run(
@@ -953,6 +1263,170 @@ def _run_vcgencmd(*args: str) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip()
+
+
+def _parse_vcgencmd_bootloader_version(raw_text: str | None) -> dict[str, Any]:
+    payload = _default_bootloader_version_snapshot()
+    if not raw_text:
+        return payload
+    lines = [line.strip() for line in str(raw_text).splitlines() if line.strip()]
+    if not lines:
+        return payload
+    payload["raw"] = str(raw_text)
+    payload["date"] = lines[0]
+    for line in lines[1:]:
+        if " " not in line:
+            continue
+        key, value = line.split(" ", 1)
+        value = value.strip() or None
+        if key == "version":
+            payload["version"] = value
+        elif key == "timestamp":
+            parsed = _safe_int(value, default=-1) if value is not None else -1
+            if parsed >= 0:
+                payload["timestamp"] = parsed
+        elif key in {"update-time", "update_time"}:
+            parsed = _safe_int(value, default=-1) if value is not None else -1
+            if parsed >= 0:
+                payload["update_time"] = parsed
+        elif key == "capabilities":
+            payload["capabilities"] = value
+    payload["available"] = bool(payload["date"] or payload["version"])
+    return payload
+
+
+def _parse_vcgencmd_firmware_version(raw_text: str | None) -> dict[str, Any]:
+    payload = _default_firmware_version_snapshot()
+    if not raw_text:
+        return payload
+    lines = [line.strip() for line in str(raw_text).splitlines() if line.strip()]
+    if not lines:
+        return payload
+    payload["raw"] = str(raw_text)
+    payload["date"] = lines[0]
+    if len(lines) >= 3:
+        payload["build_info"] = " | ".join(lines[1:-1]) or None
+        last_line = lines[-1]
+        payload["version"] = last_line.replace("version ", "", 1) if last_line.startswith("version ") else last_line
+    elif len(lines) == 2:
+        payload["build_info"] = lines[1]
+    payload["available"] = bool(payload["date"] or payload["version"])
+    return payload
+
+
+def _parse_vcgencmd_pmic_read_adc(raw_text: str | None) -> dict[str, Any]:
+    payload = _default_power_estimate_snapshot()
+    if not raw_text:
+        payload["error"] = "vcgencmd_unavailable"
+        return payload
+
+    voltages: dict[str, float] = {}
+    currents: dict[str, float] = {}
+    for line in str(raw_text).splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        match = re.match(r"^([A-Za-z0-9_]+)\s+[^=]+=([0-9]+(?:\.[0-9]+)?)([AV])$", text)
+        if not match:
+            continue
+        label = match.group(1)
+        value = _safe_float(match.group(2), default=float("nan"))
+        unit = match.group(3)
+        if not math.isfinite(value):
+            continue
+        if unit == "V" and label.endswith("_V"):
+            voltages[label[:-2]] = value
+        elif unit == "A" and label.endswith("_A"):
+            currents[label[:-2]] = value
+
+    paired_keys = sorted(set(voltages.keys()) & set(currents.keys()))
+    if not paired_keys:
+        payload["error"] = "no_paired_rails"
+        return payload
+
+    total_watts = sum(voltages[key] * currents[key] for key in paired_keys)
+    payload["available"] = True
+    payload["rails_paired_count"] = len(paired_keys)
+    payload["total_watts"] = total_watts
+    payload["error"] = None
+    return payload
+
+
+def _read_os_release_pretty_name() -> str | None:
+    path = Path("/etc/os-release")
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in raw.splitlines():
+        text = line.strip()
+        if not text.startswith("PRETTY_NAME="):
+            continue
+        value = text.split("=", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        return value or None
+    return None
+
+
+def _read_kernel_version_info() -> dict[str, str | None]:
+    try:
+        uname = os.uname()
+        raw_release = getattr(uname, "release", "")
+        raw_version = getattr(uname, "version", "")
+        kernel_release = str(raw_release).strip() or None
+        kernel_version = str(raw_version).strip() or None
+    except Exception:
+        kernel_release = None
+        kernel_version = None
+    if kernel_release is None:
+        try:
+            kernel_release = platform.release() or None
+        except Exception:
+            kernel_release = None
+    if kernel_version is None:
+        try:
+            kernel_version = platform.version() or None
+        except Exception:
+            kernel_version = None
+    return {
+        "kernel_release": kernel_release,
+        "kernel_version": kernel_version,
+    }
+
+
+def _collect_static_platform_info_uncached() -> dict[str, Any]:
+    kernel_info = _read_kernel_version_info()
+    return {
+        "pi_model_name": _read_pi_device_model_name(),
+        "os_pretty_name": _read_os_release_pretty_name(),
+        "kernel_release": kernel_info.get("kernel_release"),
+        "kernel_version": kernel_info.get("kernel_version"),
+        "bootloader_version": _parse_vcgencmd_bootloader_version(_run_vcgencmd("bootloader_version")),
+        "firmware_version": _parse_vcgencmd_firmware_version(_run_vcgencmd("version")),
+    }
+
+
+def _collect_static_platform_info_cached(*, now_unix: int | None = None) -> dict[str, Any]:
+    now = int(time.time()) if now_unix is None else int(now_unix)
+    cached_value = _SYSTEM_STATIC_INFO_CACHE.get("value")
+    cached_expires = _safe_int(_SYSTEM_STATIC_INFO_CACHE.get("expires_at_unix"), default=0)
+    if isinstance(cached_value, dict) and now < cached_expires:
+        return dict(cached_value)
+
+    value = _collect_static_platform_info_uncached()
+    _SYSTEM_STATIC_INFO_CACHE["value"] = dict(value)
+    _SYSTEM_STATIC_INFO_CACHE["expires_at_unix"] = now + SYSTEM_STATIC_INFO_CACHE_TTL_SECONDS
+    return value
+
+
+def _build_power_estimate_snapshot(*, now_unix: int | None = None) -> dict[str, Any]:
+    now = int(time.time()) if now_unix is None else int(now_unix)
+    payload = _parse_vcgencmd_pmic_read_adc(_run_vcgencmd("pmic_read_adc"))
+    payload["updated_at_unix"] = now
+    if isinstance(payload.get("total_watts"), (int, float)):
+        payload["total_watts"] = round(float(payload["total_watts"]), 3)
+    return payload
 
 
 def _parse_vcgencmd_temp(raw_text: str | None) -> float | None:
@@ -1000,8 +1474,27 @@ def prime_system_metrics_counters() -> None:
 def collect_system_metrics_snapshot() -> dict[str, Any]:
     snapshot = default_system_metrics_snapshot()
     snapshot["updated_at_unix"] = int(time.time())
+    now_unix = int(snapshot["updated_at_unix"])
 
     metrics_collected = False
+
+    static_info = _collect_static_platform_info_cached(now_unix=now_unix)
+    if isinstance(static_info, dict):
+        snapshot["pi_model_name"] = static_info.get("pi_model_name")
+        snapshot["os_pretty_name"] = static_info.get("os_pretty_name")
+        snapshot["kernel_release"] = static_info.get("kernel_release")
+        snapshot["kernel_version"] = static_info.get("kernel_version")
+        bootloader = static_info.get("bootloader_version")
+        firmware = static_info.get("firmware_version")
+        if isinstance(bootloader, dict):
+            snapshot["bootloader_version"] = {**_default_bootloader_version_snapshot(), **bootloader}
+            metrics_collected = metrics_collected or bool(snapshot["bootloader_version"].get("available"))
+        if isinstance(firmware, dict):
+            snapshot["firmware_version"] = {**_default_firmware_version_snapshot(), **firmware}
+            metrics_collected = metrics_collected or bool(snapshot["firmware_version"].get("available"))
+        metrics_collected = metrics_collected or any(
+            bool(snapshot.get(key)) for key in ("pi_model_name", "os_pretty_name", "kernel_release", "kernel_version")
+        )
 
     if psutil is not None:
         try:
@@ -1059,6 +1552,12 @@ def collect_system_metrics_snapshot() -> dict[str, Any]:
         if match:
             raw_value = int(match.group(1), 16)
             snapshot["throttling"] = decode_throttled_bits(raw_value)
+            metrics_collected = True
+
+    power_estimate = _build_power_estimate_snapshot(now_unix=now_unix)
+    if isinstance(power_estimate, dict):
+        snapshot["power_estimate"] = {**_default_power_estimate_snapshot(), **power_estimate}
+        if snapshot["power_estimate"].get("available") is True:
             metrics_collected = True
 
     snapshot["available"] = bool(metrics_collected)
@@ -1464,6 +1963,13 @@ async def build_status(
         model_size_bytes=active_model_size_bytes or None,
     )
 
+    raw_system_snapshot = system_snapshot if isinstance(system_snapshot, dict) else default_system_metrics_snapshot()
+    system_payload = dict(raw_system_snapshot)
+    system_payload["power_estimate"] = build_power_estimate_status(
+        runtime,
+        raw_system_snapshot.get("power_estimate") if isinstance(raw_system_snapshot, dict) else None,
+    )
+
     return {
         "state": state,
         "model_present": has_model,
@@ -1486,7 +1992,7 @@ async def build_status(
         },
         "compatibility": compatibility,
         "llama_runtime": build_llama_runtime_status(runtime, app=app),
-        "system": system_snapshot if isinstance(system_snapshot, dict) else default_system_metrics_snapshot(),
+        "system": system_payload,
     }
 
 
@@ -2415,6 +2921,14 @@ CHAT_HTML = """<!doctype html>
       display: none;
     }
 
+    .runtime-detail-prominent {
+      font-size: 13.5px;
+      line-height: 1.35;
+      font-weight: 680;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+
     .runtime-metric-normal {
       color: var(--metric-normal);
     }
@@ -3333,6 +3847,9 @@ CHAT_HTML = """<!doctype html>
           </div>
           <div id="runtimeCompact" class="runtime-compact">CPU -- | Cores -- | GPU -- | Swap -- | Throttle --</div>
           <div id="runtimeDetails" class="runtime-details" hidden>
+            <div id="runtimeDetailPower" class="runtime-detail-prominent">Power (estimated total): --</div>
+            <div id="runtimeDetailPowerRaw">Power (PMIC raw): --</div>
+            <div id="runtimeDetailPowerNote">Power note: --</div>
             <div id="runtimeDetailCpu">CPU total: --</div>
             <div id="runtimeDetailCores">CPU cores: --</div>
             <div id="runtimeDetailCpuClock">CPU clock: --</div>
@@ -3340,6 +3857,11 @@ CHAT_HTML = """<!doctype html>
             <div id="runtimeDetailSwap">Swap: --</div>
             <div id="runtimeDetailStorage">Storage free: --</div>
             <div id="runtimeDetailTemp">Temperature: --</div>
+            <div id="runtimeDetailPiModel">Pi model: --</div>
+            <div id="runtimeDetailOs">OS: --</div>
+            <div id="runtimeDetailKernel">Kernel: --</div>
+            <div id="runtimeDetailBootloader">Bootloader: --</div>
+            <div id="runtimeDetailFirmware">Firmware: --</div>
             <div id="runtimeDetailGpu">GPU clock: --</div>
             <div id="runtimeDetailThrottle">Throttling: --</div>
             <div id="runtimeDetailThrottleHistory">Throttling history: --</div>
@@ -3374,6 +3896,19 @@ CHAT_HTML = """<!doctype html>
               <button id="applyLlamaMemoryLoadingBtn" class="ghost-btn" type="button">Apply memory loading + restart</button>
             </div>
             <div id="llamaMemoryLoadingStatus" class="runtime-compact">Current memory loading: unknown</div>
+          </div>
+          <div class="full">
+            <h3 style="margin: 0 0 8px; font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Power Calibration (Pi 5)</h3>
+            <div id="powerCalibrationLiveStatus" class="runtime-compact">Current PMIC raw power: --</div>
+            <label class="full">Wall meter reading (W)
+              <input id="powerCalibrationWallWatts" type="number" min="0" step="0.01" placeholder="e.g. 9.4">
+            </label>
+            <div class="settings-action-row full">
+              <button id="capturePowerCalibrationSampleBtn" class="ghost-btn" type="button">Capture calibration sample</button>
+              <button id="fitPowerCalibrationBtn" class="ghost-btn" type="button">Compute calibration</button>
+              <button id="resetPowerCalibrationBtn" class="ghost-btn danger-btn" type="button">Reset calibration</button>
+            </div>
+            <div id="powerCalibrationStatus" class="runtime-compact">Power calibration: default correction</div>
           </div>
           <label class="full">System Prompt (optional)
             <textarea id="systemPrompt" placeholder="Set assistant behavior for this chat"></textarea>
@@ -3564,6 +4099,7 @@ CHAT_HTML = """<!doctype html>
     let llamaRuntimeSwitchInFlight = false;
     let llamaMemoryLoadingApplyInFlight = false;
     let largeModelOverrideApplyInFlight = false;
+    let powerCalibrationActionInFlight = false;
     let uploadRequest = null;
     let runtimeResetInFlight = false;
     let runtimeReconnectWatchActive = false;
@@ -4683,6 +5219,14 @@ CHAT_HTML = """<!doctype html>
       const swapDetail = document.getElementById("runtimeDetailSwap");
       const storageDetail = document.getElementById("runtimeDetailStorage");
       const tempDetail = document.getElementById("runtimeDetailTemp");
+      const piModelDetail = document.getElementById("runtimeDetailPiModel");
+      const osDetail = document.getElementById("runtimeDetailOs");
+      const kernelDetail = document.getElementById("runtimeDetailKernel");
+      const bootloaderDetail = document.getElementById("runtimeDetailBootloader");
+      const firmwareDetail = document.getElementById("runtimeDetailFirmware");
+      const powerDetail = document.getElementById("runtimeDetailPower");
+      const powerRawDetail = document.getElementById("runtimeDetailPowerRaw");
+      const powerNoteDetail = document.getElementById("runtimeDetailPowerNote");
       const gpuDetail = document.getElementById("runtimeDetailGpu");
       const throttleDetail = document.getElementById("runtimeDetailThrottle");
       const throttleHistoryDetail = document.getElementById("runtimeDetailThrottleHistory");
@@ -4697,6 +5241,14 @@ CHAT_HTML = """<!doctype html>
         if (swapDetail) swapDetail.textContent = "Swap: --";
         if (storageDetail) storageDetail.textContent = "Storage free: --";
         if (tempDetail) tempDetail.textContent = "Temperature: --";
+        if (piModelDetail) piModelDetail.textContent = "Pi model: --";
+        if (osDetail) osDetail.textContent = "OS: --";
+        if (kernelDetail) kernelDetail.textContent = "Kernel: --";
+        if (bootloaderDetail) bootloaderDetail.textContent = "Bootloader: --";
+        if (firmwareDetail) firmwareDetail.textContent = "Firmware: --";
+        if (powerDetail) powerDetail.textContent = "Power (estimated total): --";
+        if (powerRawDetail) powerRawDetail.textContent = "Power (PMIC raw): --";
+        if (powerNoteDetail) powerNoteDetail.textContent = "Power note: --";
         if (gpuDetail) gpuDetail.textContent = "GPU clock: --";
         if (throttleDetail) throttleDetail.textContent = "Throttling: --";
         if (throttleHistoryDetail) throttleHistoryDetail.textContent = "Throttling history: --";
@@ -4758,6 +5310,74 @@ CHAT_HTML = """<!doctype html>
           : "Temperature: --";
       }
       applyRuntimeMetricSeverity(tempDetail, tempValue);
+
+      const piModelName = String(systemPayload?.pi_model_name || "").trim();
+      if (piModelDetail) {
+        piModelDetail.textContent = piModelName ? `Pi model: ${piModelName}` : "Pi model: --";
+      }
+
+      const osPrettyName = String(systemPayload?.os_pretty_name || "").trim();
+      if (osDetail) {
+        osDetail.textContent = osPrettyName ? `OS: ${osPrettyName}` : "OS: --";
+      }
+
+      const kernelRelease = String(systemPayload?.kernel_release || "").trim();
+      const kernelVersion = String(systemPayload?.kernel_version || "").trim();
+      if (kernelDetail) {
+        if (kernelRelease && kernelVersion) {
+          kernelDetail.textContent = `Kernel: ${kernelRelease} | ${kernelVersion}`;
+        } else if (kernelRelease || kernelVersion) {
+          kernelDetail.textContent = `Kernel: ${kernelRelease || kernelVersion}`;
+        } else {
+          kernelDetail.textContent = "Kernel: --";
+        }
+      }
+
+      const bootloader = systemPayload?.bootloader_version || {};
+      const bootloaderDate = String(bootloader?.date || "").trim();
+      const bootloaderVersion = String(bootloader?.version || "").trim();
+      if (bootloaderDetail) {
+        if (bootloaderDate && bootloaderVersion) {
+          bootloaderDetail.textContent = `Bootloader: ${bootloaderDate} | ${bootloaderVersion}`;
+        } else if (bootloaderDate || bootloaderVersion) {
+          bootloaderDetail.textContent = `Bootloader: ${bootloaderDate || bootloaderVersion}`;
+        } else {
+          bootloaderDetail.textContent = "Bootloader: --";
+        }
+      }
+
+      const firmware = systemPayload?.firmware_version || {};
+      const firmwareDate = String(firmware?.date || "").trim();
+      const firmwareVersion = String(firmware?.version || "").trim();
+      if (firmwareDetail) {
+        if (firmwareDate && firmwareVersion) {
+          firmwareDetail.textContent = `Firmware: ${firmwareDate} | ${firmwareVersion}`;
+        } else if (firmwareDate || firmwareVersion) {
+          firmwareDetail.textContent = `Firmware: ${firmwareDate || firmwareVersion}`;
+        } else {
+          firmwareDetail.textContent = "Firmware: --";
+        }
+      }
+
+      const powerEstimate = systemPayload?.power_estimate || {};
+      const rawPowerWatts = Number(powerEstimate?.raw_total_watts ?? powerEstimate?.total_watts);
+      const adjustedPowerWatts = Number(powerEstimate?.adjusted_total_watts);
+      if (powerDetail) {
+        powerDetail.textContent = Number.isFinite(adjustedPowerWatts) && powerEstimate?.available === true
+          ? `Power (estimated total): ${adjustedPowerWatts.toFixed(3)} W`
+          : "Power (estimated total): --";
+      }
+      if (powerRawDetail) {
+        powerRawDetail.textContent = Number.isFinite(rawPowerWatts) && powerEstimate?.available === true
+          ? `Power (PMIC raw): ${rawPowerWatts.toFixed(3)} W`
+          : "Power (PMIC raw): --";
+      }
+      if (powerNoteDetail) {
+        const note = String(powerEstimate?.estimated_total_disclaimer || powerEstimate?.disclaimer || "").trim();
+        powerNoteDetail.textContent = (powerEstimate?.available === true || Number.isFinite(adjustedPowerWatts)) && note
+          ? `Power note: ${note}`
+          : "Power note: --";
+      }
 
       if (gpuDetail) gpuDetail.textContent = `GPU clock: core ${gpuCore}, v3d ${gpuV3d}`;
       const gpuPeakHz = Math.max(
@@ -4847,6 +5467,18 @@ CHAT_HTML = """<!doctype html>
       el.textContent = String(message || "Compatibility override: default warnings");
     }
 
+    function setPowerCalibrationStatus(message) {
+      const el = document.getElementById("powerCalibrationStatus");
+      if (!el) return;
+      el.textContent = String(message || "Power calibration: default correction");
+    }
+
+    function setPowerCalibrationLiveStatus(message) {
+      const el = document.getElementById("powerCalibrationLiveStatus");
+      if (!el) return;
+      el.textContent = String(message || "Current PMIC raw power: --");
+    }
+
     function setLlamaRuntimeSwitchButtonState(inFlight) {
       const btn = document.getElementById("switchLlamaRuntimeBtn");
       if (!btn) return;
@@ -4871,6 +5503,25 @@ CHAT_HTML = """<!doctype html>
       if (quickBtn) {
         quickBtn.disabled = Boolean(inFlight);
         quickBtn.textContent = inFlight ? "Applying..." : "Try anyway";
+      }
+    }
+
+    function setPowerCalibrationButtonsState(inFlight) {
+      const captureBtn = document.getElementById("capturePowerCalibrationSampleBtn");
+      const fitBtn = document.getElementById("fitPowerCalibrationBtn");
+      const resetBtn = document.getElementById("resetPowerCalibrationBtn");
+      for (const btn of [captureBtn, fitBtn, resetBtn]) {
+        if (!btn) continue;
+        btn.disabled = Boolean(inFlight);
+      }
+      if (captureBtn) {
+        captureBtn.textContent = inFlight ? "Capturing..." : "Capture calibration sample";
+      }
+      if (fitBtn) {
+        fitBtn.textContent = inFlight ? "Computing..." : "Compute calibration";
+      }
+      if (resetBtn) {
+        resetBtn.textContent = inFlight ? "Resetting..." : "Reset calibration";
       }
     }
 
@@ -4958,6 +5609,28 @@ CHAT_HTML = """<!doctype html>
         setLargeModelOverrideStatus("Compatibility override: default warnings");
       }
 
+      const powerEstimate = statusPayload?.system?.power_estimate || {};
+      const calibration = powerEstimate?.calibration || {};
+      const rawPower = Number(powerEstimate?.raw_total_watts ?? powerEstimate?.total_watts);
+      if (Number.isFinite(rawPower) && powerEstimate?.available === true) {
+        setPowerCalibrationLiveStatus(`Current PMIC raw power: ${rawPower.toFixed(3)} W`);
+      } else {
+        setPowerCalibrationLiveStatus("Current PMIC raw power: --");
+      }
+      const mode = String(calibration?.mode || "default");
+      const sampleCount = Number(calibration?.sample_count || 0);
+      const coeffA = Number(calibration?.a);
+      const coeffB = Number(calibration?.b);
+      if (mode === "custom") {
+        setPowerCalibrationStatus(
+          `Power calibration: meter-calibrated (${sampleCount} samples, a=${Number.isFinite(coeffA) ? coeffA.toFixed(4) : "--"}, b=${Number.isFinite(coeffB) ? coeffB.toFixed(4) : "--"})`
+        );
+      } else {
+        setPowerCalibrationStatus(
+          `Power calibration: default correction (${sampleCount} stored samples${sampleCount >= 2 ? ", ready to fit" : ""})`
+        );
+      }
+
       const switchState = runtimePayload?.switch || {};
       if (switchState?.active) {
         const target = String(switchState?.target_bundle_path || "selected bundle");
@@ -4973,6 +5646,7 @@ CHAT_HTML = """<!doctype html>
       setLlamaRuntimeSwitchButtonState(llamaRuntimeSwitchInFlight || switchState?.active === true);
       setLlamaMemoryLoadingButtonState(llamaMemoryLoadingApplyInFlight);
       setLargeModelOverrideButtonState(largeModelOverrideApplyInFlight);
+      setPowerCalibrationButtonsState(powerCalibrationActionInFlight);
     }
 
     function findModelInLatestStatus(modelId) {
@@ -5110,6 +5784,95 @@ CHAT_HTML = """<!doctype html>
     async function applyLargeModelOverrideFromSettings() {
       const checkbox = document.getElementById("largeModelOverrideEnabled");
       await applyLargeModelCompatibilityOverride(checkbox?.checked === true);
+    }
+
+    async function capturePowerCalibrationSample() {
+      if (powerCalibrationActionInFlight) return;
+      const input = document.getElementById("powerCalibrationWallWatts");
+      const wallWatts = Number(input?.value);
+      if (!Number.isFinite(wallWatts) || wallWatts <= 0) {
+        appendMessage("assistant", "Enter a valid wall meter reading in watts before capturing a sample.");
+        setPowerCalibrationStatus("Power calibration error: invalid wall meter reading");
+        return;
+      }
+
+      powerCalibrationActionInFlight = true;
+      setPowerCalibrationButtonsState(true);
+      setPowerCalibrationStatus("Capturing power calibration sample...");
+      try {
+        const { res, body } = await postJson("/internal/power-calibration/sample", { wall_watts: wallWatts });
+        if (!res.ok || body?.captured !== true) {
+          appendMessage("assistant", `Could not capture power sample (${body?.reason || res.status}).`);
+          setPowerCalibrationStatus(`Power calibration error: ${body?.reason || res.status}`);
+          return;
+        }
+        appendMessage(
+          "assistant",
+          `Captured power calibration sample (wall ${Number(wallWatts).toFixed(2)} W vs raw ${Number(body?.sample?.raw_pmic_watts || 0).toFixed(3)} W).`
+        );
+      } catch (err) {
+        appendMessage("assistant", `Could not capture power calibration sample: ${err}`);
+        setPowerCalibrationStatus(`Power calibration error: ${err}`);
+      } finally {
+        powerCalibrationActionInFlight = false;
+        setPowerCalibrationButtonsState(false);
+        await pollStatus();
+      }
+    }
+
+    async function fitPowerCalibrationModel() {
+      if (powerCalibrationActionInFlight) return;
+      powerCalibrationActionInFlight = true;
+      setPowerCalibrationButtonsState(true);
+      setPowerCalibrationStatus("Computing power calibration...");
+      try {
+        const { res, body } = await postJson("/internal/power-calibration/fit", {});
+        if (!res.ok || body?.updated !== true) {
+          appendMessage("assistant", `Could not compute power calibration (${body?.reason || res.status}).`);
+          setPowerCalibrationStatus(`Power calibration error: ${body?.reason || res.status}`);
+          return;
+        }
+        const cal = body?.calibration || {};
+        appendMessage(
+          "assistant",
+          `Power calibration updated (a=${Number(cal?.a || 0).toFixed(4)}, b=${Number(cal?.b || 0).toFixed(4)}, samples=${Number(cal?.sample_count || 0)}).`
+        );
+      } catch (err) {
+        appendMessage("assistant", `Could not compute power calibration: ${err}`);
+        setPowerCalibrationStatus(`Power calibration error: ${err}`);
+      } finally {
+        powerCalibrationActionInFlight = false;
+        setPowerCalibrationButtonsState(false);
+        await pollStatus();
+      }
+    }
+
+    async function resetPowerCalibrationModel() {
+      if (powerCalibrationActionInFlight) return;
+      const confirmed = window.confirm(
+        "Reset power calibration to the default correction model? Saved wall-meter samples will be cleared."
+      );
+      if (!confirmed) return;
+
+      powerCalibrationActionInFlight = true;
+      setPowerCalibrationButtonsState(true);
+      setPowerCalibrationStatus("Resetting power calibration...");
+      try {
+        const { res, body } = await postJson("/internal/power-calibration/reset", {});
+        if (!res.ok || body?.updated !== true) {
+          appendMessage("assistant", `Could not reset power calibration (${body?.reason || res.status}).`);
+          setPowerCalibrationStatus(`Power calibration error: ${body?.reason || res.status}`);
+          return;
+        }
+        appendMessage("assistant", "Power calibration reset. Using default correction again.");
+      } catch (err) {
+        appendMessage("assistant", `Could not reset power calibration: ${err}`);
+        setPowerCalibrationStatus(`Power calibration error: ${err}`);
+      } finally {
+        powerCalibrationActionInFlight = false;
+        setPowerCalibrationButtonsState(false);
+        await pollStatus();
+      }
     }
 
     async function allowUnsupportedLargeModelFromWarning() {
@@ -6186,6 +6949,9 @@ CHAT_HTML = """<!doctype html>
     document.getElementById("compatibilityOverrideBtn").addEventListener("click", allowUnsupportedLargeModelFromWarning);
     document.getElementById("applyLlamaMemoryLoadingBtn").addEventListener("click", applyLlamaMemoryLoadingMode);
     document.getElementById("switchLlamaRuntimeBtn").addEventListener("click", switchLlamaRuntimeBundle);
+    document.getElementById("capturePowerCalibrationSampleBtn").addEventListener("click", capturePowerCalibrationSample);
+    document.getElementById("fitPowerCalibrationBtn").addEventListener("click", fitPowerCalibrationModel);
+    document.getElementById("resetPowerCalibrationBtn").addEventListener("click", resetPowerCalibrationModel);
     document.getElementById("modelsList").addEventListener("click", (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
@@ -6524,6 +7290,78 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 },
                 "compatibility": compatibility,
                 "saved": saved,
+            },
+        )
+
+    @app.post("/internal/power-calibration/sample")
+    async def capture_power_calibration_sample(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        payload = await request.json()
+        wall_watts = _safe_positive_float(payload.get("wall_watts"))
+        if wall_watts is None:
+            return JSONResponse(
+                status_code=400,
+                content={"captured": False, "reason": "invalid_wall_watts"},
+            )
+
+        current_power = _build_power_estimate_snapshot()
+        raw_watts = _safe_positive_float(current_power.get("total_watts"))
+        if raw_watts is None:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "captured": False,
+                    "reason": "power_unavailable",
+                    "power_estimate": build_power_estimate_status(runtime_cfg, current_power),
+                },
+            )
+
+        calibration = _append_power_calibration_sample(
+            runtime_cfg,
+            raw_pmic_watts=raw_watts,
+            wall_watts=wall_watts,
+        )
+        power_status = build_power_estimate_status(runtime_cfg, current_power)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "captured": True,
+                "reason": "power_calibration_sample_captured",
+                "sample": calibration.get("samples", [])[-1] if calibration.get("samples") else None,
+                "calibration": build_power_calibration_status(runtime_cfg),
+                "power_estimate": power_status,
+            },
+        )
+
+    @app.post("/internal/power-calibration/fit")
+    async def fit_power_calibration(
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        ok, reason, calibration = _fit_and_persist_power_calibration(runtime_cfg)
+        status_code = 200 if ok else 400
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "updated": ok,
+                "reason": reason,
+                "calibration": build_power_calibration_status(runtime_cfg) if ok else calibration,
+            },
+        )
+
+    @app.post("/internal/power-calibration/reset")
+    async def reset_power_calibration(
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        calibration = _reset_power_calibration(runtime_cfg)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "updated": True,
+                "reason": "power_calibration_reset",
+                "calibration": build_power_calibration_status(runtime_cfg),
+                "saved": calibration,
             },
         )
 

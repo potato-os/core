@@ -274,6 +274,69 @@ def test_set_large_model_override_persists_without_restart(runtime, monkeypatch)
     assert after_body["llama_runtime"]["large_model_override"]["enabled"] is True
 
 
+def test_power_calibration_sample_fit_and_reset_persist_in_status(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    power_state = {"value": 4.0}
+
+    def _fake_power_snapshot(*, now_unix=None):
+        power_state["value"] += 1.5
+        watts = power_state["value"]
+        return {
+            "available": True,
+            "updated_at_unix": now_unix,
+            "total_watts": watts,
+            "rails_paired_count": 2,
+            "method": "pmic_read_adc",
+            "label": "PMIC rails estimate",
+            "disclaimer": "test",
+            "error": None,
+        }
+
+    monkeypatch.setattr("app.main._build_power_estimate_snapshot", _fake_power_snapshot)
+
+    with TestClient(app) as client:
+        s1 = client.post("/internal/power-calibration/sample", json={"wall_watts": 6.5})
+        s2 = client.post("/internal/power-calibration/sample", json={"wall_watts": 10.1})
+        fit = client.post("/internal/power-calibration/fit")
+        status = client.get("/status")
+        reset = client.post("/internal/power-calibration/reset")
+        status_after_reset = client.get("/status")
+
+    assert s1.status_code == 200
+    assert s1.json()["captured"] is True
+    assert s2.status_code == 200
+    assert s2.json()["captured"] is True
+    assert fit.status_code == 200
+    assert fit.json()["updated"] is True
+    assert fit.json()["calibration"]["mode"] == "custom"
+
+    power = status.json()["system"]["power_estimate"]
+    assert "raw_total_watts" in power
+    assert "adjusted_total_watts" in power
+    assert power["calibration"]["mode"] == "custom"
+    assert power["calibration"]["sample_count"] >= 2
+
+    assert reset.status_code == 200
+    assert reset.json()["updated"] is True
+    assert reset.json()["calibration"]["mode"] == "default"
+    assert status_after_reset.json()["system"]["power_estimate"]["calibration"]["mode"] == "default"
+
+
+def test_power_calibration_fit_requires_two_samples(runtime):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    with TestClient(app) as client:
+        response = client.post("/internal/power-calibration/fit")
+
+    assert response.status_code == 400
+    assert response.json()["reason"] == "insufficient_samples"
+
+
 def test_delete_model_removes_file_and_registry(runtime):
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)

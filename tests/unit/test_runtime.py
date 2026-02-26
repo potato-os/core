@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import httpx
 import pytest
+import app.main as app_main
 
 from app.main import (
     LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
     RuntimeConfig,
+    build_power_estimate_status,
     build_large_model_compatibility,
     check_llama_health,
+    collect_system_metrics_snapshot,
     compute_required_download_bytes,
     compute_auto_download_remaining_seconds,
     classify_runtime_device,
@@ -16,6 +19,12 @@ from app.main import (
     fetch_remote_content_length_bytes,
     get_large_model_warn_threshold_bytes,
     is_likely_too_large_for_storage,
+    normalize_power_calibration_settings,
+    _apply_power_calibration,
+    _fit_linear_power_calibration,
+    _parse_vcgencmd_bootloader_version,
+    _parse_vcgencmd_firmware_version,
+    _parse_vcgencmd_pmic_read_adc,
     probe_llama_inference_slot,
     read_download_progress,
     request_llama_slot_cancel,
@@ -390,6 +399,173 @@ def test_decode_throttled_bits_reports_soft_temp_history():
     assert decoded["raw"] == "0x80000"
     assert decoded["any_current"] is False
     assert "Soft temp limit occurred" in decoded["history_flags"]
+
+
+def test_parse_vcgencmd_bootloader_version_parses_structured_fields():
+    raw = "\n".join(
+        [
+            "2024/02/16 15:33:41",
+            "version 1234567890abcdef1234567890abcdef12345678 (release)",
+            "timestamp 1708097621",
+            "update-time 1708097621",
+            "capabilities 0x0000007f",
+        ]
+    )
+
+    payload = _parse_vcgencmd_bootloader_version(raw)
+
+    assert payload["available"] is True
+    assert payload["date"] == "2024/02/16 15:33:41"
+    assert payload["version"].startswith("1234567890abcdef")
+    assert payload["timestamp"] == 1708097621
+    assert payload["update_time"] == 1708097621
+    assert payload["capabilities"] == "0x0000007f"
+    assert payload["raw"] == raw
+
+
+def test_parse_vcgencmd_firmware_version_parses_structured_fields():
+    raw = "\n".join(
+        [
+            "Nov 19 2025 12:34:56",
+            "Copyright (c) 2012 Broadcom",
+            "version abcdef1234567890 (release) (start)",
+        ]
+    )
+
+    payload = _parse_vcgencmd_firmware_version(raw)
+
+    assert payload["available"] is True
+    assert payload["date"] == "Nov 19 2025 12:34:56"
+    assert payload["build_info"] == "Copyright (c) 2012 Broadcom"
+    assert payload["version"] == "abcdef1234567890 (release) (start)"
+    assert payload["raw"] == raw
+
+
+def test_parse_vcgencmd_pmic_read_adc_sums_paired_rails_and_ignores_unmatched():
+    raw = "\n".join(
+        [
+            "VDD_CORE_V volt(2)=0.900000V",
+            "VDD_CORE_A current(2)=1.500000A",
+            "VDD_SOC_V volt(3)=0.850000V",
+            "VDD_SOC_A current(3)=0.700000A",
+            "EXT5V_V volt(4)=5.020000V",
+        ]
+    )
+
+    payload = _parse_vcgencmd_pmic_read_adc(raw)
+
+    assert payload["available"] is True
+    assert payload["method"] == "pmic_read_adc"
+    assert payload["rails_paired_count"] == 2
+    assert payload["total_watts"] == pytest.approx((0.9 * 1.5) + (0.85 * 0.7), rel=0, abs=1e-6)
+    assert "excludes main 5V input current" in payload["disclaimer"]
+    assert payload["error"] is None
+
+
+def test_collect_system_metrics_snapshot_includes_platform_and_power_fields(monkeypatch):
+    monkeypatch.setitem(app_main._SYSTEM_STATIC_INFO_CACHE, "expires_at_unix", 0)
+    monkeypatch.setitem(app_main._SYSTEM_STATIC_INFO_CACHE, "value", None)
+    monkeypatch.setattr("app.main.psutil", None)
+    monkeypatch.setattr("app.main._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.1")
+    monkeypatch.setattr("app.main._read_os_release_pretty_name", lambda: "Debian GNU/Linux 12 (bookworm)")
+    monkeypatch.setattr(
+        "app.main._read_kernel_version_info",
+        lambda: {
+            "kernel_release": "6.12.62+rpt-rpi-2712",
+            "kernel_version": "#1 SMP PREEMPT Debian 6.12.62-1+rpt1",
+        },
+    )
+
+    def _fake_vcgencmd(*args):
+        if args == ("pmic_read_adc",):
+            return "\n".join(
+                [
+                    "VDD_CORE_V volt(2)=0.900000V",
+                    "VDD_CORE_A current(2)=1.500000A",
+                ]
+            )
+        if args == ("bootloader_version",):
+            return "2024/02/16 15:33:41\nversion deadbeef\ntimestamp 1708097621"
+        if args == ("version",):
+            return "Nov 19 2025 12:34:56\nCopyright (c) 2012 Broadcom\nversion abc123"
+        return None
+
+    monkeypatch.setattr("app.main._run_vcgencmd", _fake_vcgencmd)
+    monkeypatch.setattr("app.main._read_sysfs_temp", lambda: None)
+
+    snapshot = collect_system_metrics_snapshot()
+
+    assert "pi_model_name" in snapshot
+    assert snapshot["pi_model_name"] == "Raspberry Pi 5 Model B Rev 1.1"
+    assert snapshot["os_pretty_name"] == "Debian GNU/Linux 12 (bookworm)"
+    assert snapshot["kernel_release"] == "6.12.62+rpt-rpi-2712"
+    assert snapshot["kernel_version"].startswith("#1 SMP")
+    assert snapshot["bootloader_version"]["available"] is True
+    assert snapshot["firmware_version"]["available"] is True
+    assert snapshot["power_estimate"]["available"] is True
+    assert snapshot["power_estimate"]["total_watts"] == pytest.approx(1.35, rel=0, abs=1e-6)
+
+
+def test_fit_linear_power_calibration_from_two_samples():
+    fit = _fit_linear_power_calibration(
+        [
+            {"raw_pmic_watts": 5.0, "wall_watts": 6.5},
+            {"raw_pmic_watts": 8.0, "wall_watts": 9.8},
+        ]
+    )
+
+    assert fit is not None
+    assert fit["sample_count"] == 2
+    assert fit["a"] > 0
+    assert isinstance(fit["b"], float)
+
+
+def test_fit_linear_power_calibration_rejects_degenerate_samples():
+    fit = _fit_linear_power_calibration(
+        [
+            {"raw_pmic_watts": 5.0, "wall_watts": 6.0},
+            {"raw_pmic_watts": 5.0, "wall_watts": 7.0},
+        ]
+    )
+    assert fit is None
+
+
+def test_apply_power_calibration_uses_linear_model():
+    adjusted = _apply_power_calibration(5.0, a=1.2, b=0.5)
+    assert adjusted == pytest.approx(6.5, rel=0, abs=1e-6)
+
+
+def test_normalize_power_calibration_settings_defaults_and_preserves_samples():
+    payload = normalize_power_calibration_settings(
+        {
+            "mode": "custom",
+            "a": 1.23,
+            "b": 0.45,
+            "fitted_at_unix": 123,
+            "samples": [{"raw_pmic_watts": 4.2, "wall_watts": 5.9, "captured_at_unix": 111}],
+        }
+    )
+    assert payload["mode"] == "custom"
+    assert payload["a"] == pytest.approx(1.23)
+    assert payload["b"] == pytest.approx(0.45)
+    assert payload["sample_count"] == 1
+    assert len(payload["samples"]) == 1
+
+
+def test_build_power_estimate_status_adds_adjusted_power_and_calibration(runtime):
+    status = build_power_estimate_status(
+        runtime,
+        {
+            "available": True,
+            "total_watts": 5.0,
+            "label": "PMIC rails estimate",
+            "method": "pmic_read_adc",
+        },
+    )
+    assert status["raw_total_watts"] == 5.0
+    assert status["adjusted_total_watts"] is not None
+    assert status["calibration"]["mode"] in {"default", "custom"}
+    assert "estimated_total_disclaimer" in status
 
 
 def test_classify_runtime_device_identifies_pi5_16gb():
