@@ -10,6 +10,7 @@ from app.main import (
     compute_required_download_bytes,
     compute_auto_download_remaining_seconds,
     decode_throttled_bits,
+    fetch_remote_content_length_bytes,
     is_likely_too_large_for_storage,
     probe_llama_inference_slot,
     read_download_progress,
@@ -200,6 +201,51 @@ async def test_request_llama_slot_cancel_returns_false_when_all_actions_fail(run
 
     assert cancelled is False
     assert action == "none"
+
+
+@pytest.mark.anyio
+async def test_fetch_remote_content_length_uses_streaming_range_fallback_without_body_download(monkeypatch):
+    class _HeadResponse:
+        headers: dict[str, str] = {}
+
+    class _RangeResponse:
+        status_code = 200
+        headers = {"content-length": "1234567890"}
+
+    class _StreamCtx:
+        def __init__(self, response):
+            self._response = response
+
+        async def __aenter__(self):
+            return self._response
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def head(self, _url):
+            return _HeadResponse()
+
+        def get(self, *_args, **_kwargs):  # pragma: no cover - test should fail before this
+            raise AssertionError("fallback must not use body-reading client.get")
+
+        def stream(self, method, url, headers=None):
+            assert method == "GET"
+            assert url == "https://example.com/model.gguf"
+            assert headers == {"range": "bytes=0-0"}
+            return _StreamCtx(_RangeResponse())
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", lambda timeout, follow_redirects: _Client())
+
+    size_bytes = await fetch_remote_content_length_bytes("https://example.com/model.gguf")
+
+    assert size_bytes == 1234567890
 
 
 def test_runtime_from_env_defaults_to_llama_and_disables_fake_fallback(monkeypatch):

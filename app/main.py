@@ -661,20 +661,21 @@ async def fetch_remote_content_length_bytes(source_url: str) -> int:
         except (httpx.HTTPError, ValueError):
             pass
         try:
-            response = await client.get(source_url, headers={"range": "bytes=0-0"})
+            async with client.stream("GET", source_url, headers={"range": "bytes=0-0"}) as response:
+                content_range = response.headers.get("content-range", "")
+                if "/" in content_range:
+                    try:
+                        return max(0, int(content_range.split("/")[-1]))
+                    except ValueError:
+                        return 0
+                header = response.headers.get("content-length")
+                try:
+                    return max(0, int(header)) if header else 0
+                except ValueError:
+                    return 0
         except httpx.HTTPError:
             return 0
-        content_range = response.headers.get("content-range", "")
-        if "/" in content_range:
-            try:
-                return max(0, int(content_range.split("/")[-1]))
-            except ValueError:
-                return 0
-        header = response.headers.get("content-length")
-        try:
-            return max(0, int(header)) if header else 0
-        except ValueError:
-            return 0
+        return 0
 
 
 async def check_llama_health(runtime: RuntimeConfig, *, busy_is_healthy: bool = True) -> bool:
