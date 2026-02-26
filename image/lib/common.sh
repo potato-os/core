@@ -226,6 +226,7 @@ run_build() {
   require_cmd rsync
   require_cmd tar
   require_cmd curl
+  require_cmd python3
 
   local repo_root
   repo_root="$(resolve_repo_root)"
@@ -337,5 +338,16 @@ run_build() {
 
   cp -f "${built_artifact}" "${out_image}"
   sha256_file "${out_image}" > "${output_dir}/SHA256SUMS"
+  case "${out_image}" in
+    *.img|*.img.xz)
+      python3 "${repo_root}/bin/generate_imager_manifest.py" \
+        --image "${out_image}" \
+        --output "${output_dir}/potato-${variant}.rpi-imager-manifest" \
+        --name "Potato OS (${variant}, Raspberry Pi 5)"
+      ;;
+    *)
+      info "Skipping Raspberry Pi Imager manifest generation for unsupported artifact type: ${out_image}"
+      ;;
+  esac
   info "Built image: ${out_image}"
 }
