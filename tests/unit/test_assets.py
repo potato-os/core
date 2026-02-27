@@ -9,7 +9,9 @@ def test_start_llama_contains_required_flags():
     script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
 
     assert "--ctx-size" in script
-    assert 'CTX_SIZE="${POTATO_CTX_SIZE:-16384}"' in script
+    assert 'CTX_SIZE_DEFAULT="16384"' in script
+    assert 'CTX_SIZE="${POTATO_CTX_SIZE:-${CTX_SIZE_DEFAULT}}"' in script
+    assert "Applying Qwen3.5-35B-A3B runtime profile" in script
     assert 'CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-0}"' in script
     assert "--cache-ram" in script
     assert "--jinja" in script
@@ -104,6 +106,9 @@ def test_install_script_uses_reference_llama_bundle_sync():
 
     assert "references/old_reference_design/llama_cpp_binary" in script
     assert "POTATO_LLAMA_BUNDLE_SRC" in script
+    assert "POTATO_LLAMA_BUNDLE_SELECT" in script
+    assert 'LLAMA_BUNDLE_SELECT="${POTATO_LLAMA_BUNDLE_SELECT:-}"' in script
+    assert 'llama_server_bundle_*${LLAMA_BUNDLE_SELECT}*' in script
     assert "llama_server_bundle_" in script
     assert "TARGET_ROOT}/llama" in script
     assert "apt-get install -y \\" in script
@@ -147,6 +152,19 @@ def test_prepare_imager_bundle_script_wires_first_boot_installer():
     assert "bundle_install.done" in script
 
 
+def test_build_llama_bundle_pi5_script_supports_baseline_and_pi5_opt_profiles():
+    script = Path("bin/build_llama_bundle_pi5.sh").read_text(encoding="utf-8")
+
+    assert "--profile baseline|pi5-opt" in script
+    assert 'PROFILE="${POTATO_LLAMA_BUILD_PROFILE:-pi5-opt}"' in script
+    assert "GGML_CPU_KLEIDIAI=ON" in script
+    assert "GGML_NATIVE=ON" in script
+    assert "GGML_LTO=ON" in script
+    assert "GGML_CPU_KLEIDIAI=OFF" in script
+    assert "GGML_BLAS_VENDOR=OpenBLAS" in script
+    assert "Raspberry Pi 5" in script
+
+
 def test_local_image_build_script_collects_artifacts_for_flash_test():
     script = Path("bin/build_local_image.sh").read_text(encoding="utf-8")
 
@@ -173,6 +191,21 @@ def test_local_image_build_script_collects_artifacts_for_flash_test():
     assert "Previous artifacts found" in script
     assert "Remove them before build? [y/N]:" in script
     assert "CLEAN_ARTIFACTS_MODE" in script
+
+
+def test_clean_image_build_artifacts_script_cleans_outputs_and_optional_caches():
+    script = Path("bin/clean_image_build_artifacts.sh").read_text(encoding="utf-8")
+
+    assert "output/images" in script
+    assert ".cache/potato-image-build" in script
+    assert ".cache/potato-image-cache" in script
+    assert ".cache/pi-gen-arm64" in script
+    assert "--deep" in script
+    assert "--include-download-cache" in script
+    assert "--include-pi-gen-checkout" in script
+    assert "docker container inspect" in script
+    assert "pigen_work potato-pigen-lite potato-pigen-full" in script
+    assert "find \"${target}\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +" in script
 
 
 def test_imager_manifest_generator_is_pi5_only():
@@ -202,6 +235,9 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "POTATO_IMAGE_OUTPUT_DIR" in common
     assert "potato-lite" in common
     assert "potato-full" in common
+    assert "generate_imager_manifest.py" in common
+    assert "potato-${variant}.rpi-imager-manifest" in common
+    assert "Potato OS (${variant}, Raspberry Pi 5)" in common
     assert "uv run --script" in all_in_one
     assert "--variant" in uv_script
     assert "https://github.com/RPi-Distro/pi-gen.git" in uv_script
@@ -213,6 +249,9 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "docker rm -f" in common
     assert "Git does not preserve directory modes" in common
     assert "chmod 0755 \"${files_root}/opt\"" in common
+    assert "${potato_root}/llama-bundles" in common
+    assert "llama-bundles/${bundle_name}/" in common
+    assert "find \"${bundle_root}\" -mindepth 1 -maxdepth 1 -type d -name 'llama_server_bundle_*' | sort" in common
     assert "docker context use default" in uv_script
     assert "colima start" in uv_script
     assert "except RuntimeError as exc" in uv_script
@@ -390,6 +429,12 @@ def test_chat_ui_copy_and_stats_footnote_contract():
 
 
 def test_chat_ui_runtime_details_hide_compact_and_apply_metric_threshold_classes():
+    assert 'id="compatibilityWarnings"' in CHAT_HTML
+    assert 'id="compatibilityWarningsText"' in CHAT_HTML
+    assert 'id="compatibilityOverrideBtn"' in CHAT_HTML
+    assert "function renderCompatibilityWarnings(" in CHAT_HTML
+    assert "statusPayload?.compatibility?.warnings" in CHAT_HTML
+    assert "statusPayload?.compatibility?.override_enabled" in CHAT_HTML
     assert 'id="runtimeCompact"' in CHAT_HTML
     assert "compact.hidden = runtimeDetailsExpanded;" in CHAT_HTML
     assert 'toggle.textContent = runtimeDetailsExpanded ? "Show compact" : "Show details";' in CHAT_HTML
@@ -406,6 +451,50 @@ def test_chat_ui_runtime_details_hide_compact_and_apply_metric_threshold_classes
     assert 'case "tool_calls"' in CHAT_HTML
     assert "content_filter" not in CHAT_HTML
     assert "function_call" not in CHAT_HTML
+
+
+def test_chat_ui_exposes_llama_runtime_bundle_switch_controls():
+    assert "Llama Runtime Bundle" in CHAT_HTML
+    assert 'id="llamaRuntimeBundleSelect"' in CHAT_HTML
+    assert 'id="switchLlamaRuntimeBtn"' in CHAT_HTML
+    assert 'id="llamaRuntimeCurrent"' in CHAT_HTML
+    assert 'id="llamaRuntimeSwitchStatus"' in CHAT_HTML
+    assert "function renderLlamaRuntimeStatus(" in CHAT_HTML
+    assert "function switchLlamaRuntimeBundle(" in CHAT_HTML
+    assert "/internal/llama-runtime/switch" in CHAT_HTML
+    assert "statusPayload?.llama_runtime" in CHAT_HTML
+
+
+def test_chat_ui_exposes_llama_memory_loading_controls():
+    assert "Model Memory Loading" in CHAT_HTML
+    assert 'id="llamaMemoryLoadingMode"' in CHAT_HTML
+    assert 'id="applyLlamaMemoryLoadingBtn"' in CHAT_HTML
+    assert 'id="llamaMemoryLoadingStatus"' in CHAT_HTML
+    assert "function applyLlamaMemoryLoadingMode(" in CHAT_HTML
+
+
+def test_chat_ui_exposes_large_model_compatibility_override_controls():
+    assert "Allow unsupported large models (try anyway)" in CHAT_HTML
+    assert 'id="largeModelOverrideEnabled"' in CHAT_HTML
+    assert 'id="applyLargeModelOverrideBtn"' in CHAT_HTML
+    assert 'id="largeModelOverrideStatus"' in CHAT_HTML
+    assert "function applyLargeModelCompatibilityOverride(" in CHAT_HTML
+    assert "/internal/compatibility/large-model-override" in CHAT_HTML
+    assert "/internal/llama-runtime/memory-loading" in CHAT_HTML
+    assert "memory_loading" in CHAT_HTML
+
+
+def test_chat_ui_has_potato_chat_brand_and_thinking_toggle():
+    assert "🥔 Potato Chat" in CHAT_HTML
+    assert "Smart Search" not in CHAT_HTML
+    assert 'id="thinkingToggleBtn"' in CHAT_HTML
+    assert "Deep thinking" in CHAT_HTML
+    assert "thinking_enabled: false" in CHAT_HTML
+    assert "function normalizeThinkingEnabled(" in CHAT_HTML
+    assert "function setThinkingToggleState(" in CHAT_HTML
+    assert "function toggleThinkingMode(" in CHAT_HTML
+    assert "chat_template_kwargs" in CHAT_HTML
+    assert "enable_thinking" in CHAT_HTML
 
 
 def test_chat_ui_supports_stop_generation_button_and_abort_controller():
@@ -498,7 +587,8 @@ def test_chat_ui_uses_continuous_chat_history_in_openai_messages_format():
     assert "const userMessage = { role: \"user\", content: buildUserMessageContent(content) };" in CHAT_HTML
     assert "chatHistory.push(userMessage);" in CHAT_HTML
     assert CHAT_HTML.index("reqBody.messages.push(userMessage);") < CHAT_HTML.index("chatHistory.push(userMessage);")
-    assert "chatHistory.push({ role: \"assistant\", content: assistantText.trim() || \"(empty response)\" });" in CHAT_HTML
+    assert "const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);" in CHAT_HTML
+    assert "chatHistory.push({ role: \"assistant\", content: finalAssistantText });" in CHAT_HTML
     assert "chatHistory.push({ role: \"assistant\", content: msg });" in CHAT_HTML
 
 

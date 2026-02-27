@@ -18,6 +18,7 @@ def test_shell_scripts_have_valid_bash_syntax():
     scripts = [
         REPO_ROOT / "bin" / "run.sh",
         REPO_ROOT / "bin" / "prepare_imager_bundle.sh",
+        REPO_ROOT / "bin" / "build_llama_bundle_pi5.sh",
         REPO_ROOT / "bin" / "ensure_model.sh",
         REPO_ROOT / "bin" / "start_llama.sh",
         REPO_ROOT / "bin" / "reset_runtime.sh",
@@ -302,6 +303,168 @@ printf '%s\n' "$@" > "$ARGS_OUT"
     assert "--model" in args
     assert str(model_path) in args
     assert "--mmproj" not in args
+
+
+def test_start_llama_qwen35_a3b_uses_smaller_default_ctx_without_mmproj(tmp_path: Path):
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    args_out = tmp_path / "args.txt"
+    model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
+    model_path.write_bytes(b"gguf")
+
+    _write_stub(
+        fakebin / "fake-llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["LLAMA_SERVER_BIN"] = str(fakebin / "fake-llama-server")
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--model" in args
+    assert str(model_path) in args
+    assert "--mmproj" not in args
+    assert "--ctx-size" in args
+    assert "4096" in args
+    assert "16384" not in args
+
+
+def test_start_llama_qwen35_a3b_honors_explicit_ctx_override(tmp_path: Path):
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    args_out = tmp_path / "args.txt"
+    model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
+    model_path.write_bytes(b"gguf")
+
+    _write_stub(
+        fakebin / "fake-llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["LLAMA_SERVER_BIN"] = str(fakebin / "fake-llama-server")
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_CTX_SIZE"] = "8192"
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--ctx-size" in args
+    assert "8192" in args
+    assert "4096" not in args
+
+
+def test_start_llama_qwen35_a3b_pi5_16gb_auto_disables_mmap(tmp_path: Path):
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    args_out = tmp_path / "args.txt"
+    model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
+    model_path.write_bytes(b"gguf")
+
+    _write_stub(
+        fakebin / "fake-llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["LLAMA_SERVER_BIN"] = str(fakebin / "fake-llama-server")
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_PI_MODEL_OVERRIDE"] = "Raspberry Pi 5 Model B Rev 1.1"
+    env["POTATO_TOTAL_MEMORY_BYTES_OVERRIDE"] = str(16 * 1024 * 1024 * 1024)
+    env["ARGS_OUT"] = str(args_out)
+    runtime_dir = tmp_path / "llama"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / ".potato-llama-runtime-bundle.json").write_text(
+        '{"profile":"pi5-opt"}',
+        encoding="utf-8",
+    )
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--no-mmap" in args
+
+
+def test_start_llama_qwen35_a3b_no_mmap_can_be_disabled_explicitly(tmp_path: Path):
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    args_out = tmp_path / "args.txt"
+    model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
+    model_path.write_bytes(b"gguf")
+
+    _write_stub(
+        fakebin / "fake-llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["LLAMA_SERVER_BIN"] = str(fakebin / "fake-llama-server")
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_PI_MODEL_OVERRIDE"] = "Raspberry Pi 5 Model B Rev 1.1"
+    env["POTATO_TOTAL_MEMORY_BYTES_OVERRIDE"] = str(16 * 1024 * 1024 * 1024)
+    env["POTATO_LLAMA_NO_MMAP"] = "0"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--no-mmap" not in args
+
+
+def test_start_llama_qwen35_a3b_auto_no_mmap_skips_unknown_runtime_profile(tmp_path: Path):
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    args_out = tmp_path / "args.txt"
+    model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
+    model_path.write_bytes(b"gguf")
+
+    _write_stub(
+        fakebin / "fake-llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["LLAMA_SERVER_BIN"] = str(fakebin / "fake-llama-server")
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_PI_MODEL_OVERRIDE"] = "Raspberry Pi 5 Model B Rev 1.1"
+    env["POTATO_TOTAL_MEMORY_BYTES_OVERRIDE"] = str(16 * 1024 * 1024 * 1024)
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--no-mmap" not in args
 
 
 def test_start_llama_vision_name_flag_can_disable_vl_heuristic(tmp_path: Path):

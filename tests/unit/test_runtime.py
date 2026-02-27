@@ -5,12 +5,16 @@ import httpx
 import pytest
 
 from app.main import (
+    LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
     RuntimeConfig,
+    build_large_model_compatibility,
     check_llama_health,
     compute_required_download_bytes,
     compute_auto_download_remaining_seconds,
+    classify_runtime_device,
     decode_throttled_bits,
     fetch_remote_content_length_bytes,
+    get_large_model_warn_threshold_bytes,
     is_likely_too_large_for_storage,
     probe_llama_inference_slot,
     read_download_progress,
@@ -386,3 +390,67 @@ def test_decode_throttled_bits_reports_soft_temp_history():
     assert decoded["raw"] == "0x80000"
     assert decoded["any_current"] is False
     assert "Soft temp limit occurred" in decoded["history_flags"]
+
+
+def test_classify_runtime_device_identifies_pi5_16gb():
+    device = classify_runtime_device(
+        total_memory_bytes=16 * 1024 * 1024 * 1024,
+        pi_model_name="Raspberry Pi 5 Model B Rev 1.1",
+    )
+    assert device == "pi5-16gb"
+
+
+def test_classify_runtime_device_identifies_pi5_8gb():
+    device = classify_runtime_device(
+        total_memory_bytes=8 * 1024 * 1024 * 1024,
+        pi_model_name="Raspberry Pi 5 Model B Rev 1.0",
+    )
+    assert device == "pi5-8gb"
+
+
+def test_classify_runtime_device_identifies_other_pi():
+    device = classify_runtime_device(
+        total_memory_bytes=8 * 1024 * 1024 * 1024,
+        pi_model_name="Raspberry Pi 4 Model B Rev 1.5",
+    )
+    assert device == "other-pi"
+
+
+def test_large_model_warn_threshold_defaults_to_5gib(monkeypatch):
+    monkeypatch.delenv("POTATO_UNSUPPORTED_PI_LARGE_MODEL_WARN_BYTES", raising=False)
+    assert get_large_model_warn_threshold_bytes() == LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT
+
+
+def test_large_model_warn_threshold_honors_env_override(monkeypatch):
+    monkeypatch.setenv("POTATO_UNSUPPORTED_PI_LARGE_MODEL_WARN_BYTES", "12345")
+    assert get_large_model_warn_threshold_bytes() == 12345
+
+
+def test_build_large_model_compatibility_warns_on_unsupported_large_model(monkeypatch, runtime):
+    monkeypatch.setattr("app.main._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("app.main._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+
+    payload = build_large_model_compatibility(
+        runtime,
+        model_filename="Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf",
+        model_size_bytes=6 * 1024 * 1024 * 1024,
+    )
+
+    assert payload["device_class"] == "pi5-8gb"
+    assert payload["large_model_warn_threshold_bytes"] == LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT
+    assert payload["warnings"]
+    assert "Pi 5 16GB" in payload["warnings"][0]["message"]
+
+
+def test_build_large_model_compatibility_no_warning_on_pi5_16gb(monkeypatch, runtime):
+    monkeypatch.setattr("app.main._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.1")
+    monkeypatch.setattr("app.main._detect_total_memory_bytes", lambda: 16 * 1024 * 1024 * 1024)
+
+    payload = build_large_model_compatibility(
+        runtime,
+        model_filename="Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf",
+        model_size_bytes=6 * 1024 * 1024 * 1024,
+    )
+
+    assert payload["device_class"] == "pi5-16gb"
+    assert payload["warnings"] == []

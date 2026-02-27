@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from fastapi.testclient import TestClient
 
@@ -71,6 +72,32 @@ def test_activate_model_blocks_non_ready(runtime):
     assert activate.json()["reason"] == "model_not_ready"
 
 
+def test_register_model_url_returns_warning_for_large_model_on_unsupported_pi(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    async def _fake_size(_url: str) -> int:
+        return 6 * 1024 * 1024 * 1024
+
+    monkeypatch.setattr("app.main.fetch_remote_content_length_bytes", _fake_size)
+    monkeypatch.setattr("app.main._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
+    monkeypatch.setattr("app.main._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("app.main.get_large_model_warn_threshold_bytes", lambda: 1)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/internal/models/register",
+            json={"source_url": "https://example.com/Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["warnings"]
+    assert body["warnings"][0]["code"] == "large_model_unsupported_pi_warning"
+
+
 def test_upload_rejects_non_gguf(runtime):
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
@@ -85,6 +112,31 @@ def test_upload_rejects_non_gguf(runtime):
 
     assert response.status_code == 400
     assert response.json()["reason"] == "gguf_required"
+
+
+def test_upload_returns_warning_for_large_model_on_unsupported_pi(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    monkeypatch.setattr("app.main._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
+    monkeypatch.setattr("app.main._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("app.main.get_large_model_warn_threshold_bytes", lambda: 1)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/internal/models/upload",
+            headers={
+                "x-potato-filename": "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf",
+            },
+            content=b"gguf",
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["uploaded"] is True
+    assert body["warnings"]
+    assert body["warnings"][0]["code"] == "large_model_unsupported_pi_warning"
 
 
 def test_upload_sets_uploaded_model_active(runtime):
@@ -109,6 +161,117 @@ def test_upload_sets_uploaded_model_active(runtime):
     status_body = status.json()
     assert status_body["model"]["filename"] == "new-upload.gguf"
     assert any(m["filename"] == "new-upload.gguf" and m["is_active"] for m in status_body["models"])
+
+
+def test_switch_llama_runtime_bundle_copies_selected_bundle_and_reports_status(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    bundle = runtime.base_dir / "bundle-root" / "llama_server_bundle_test_pi5-opt"
+    (bundle / "bin").mkdir(parents=True)
+    (bundle / "lib").mkdir(parents=True)
+    (bundle / "bin" / "llama-server").write_text("binary", encoding="utf-8")
+    (bundle / "README.txt").write_text("Profile: pi5-opt\n", encoding="utf-8")
+
+    install_calls: list[str] = []
+
+    async def _fake_install(_runtime, bundle_dir):
+        install_calls.append(str(bundle_dir))
+        install_dir = _runtime.base_dir / "llama"
+        install_dir.mkdir(parents=True, exist_ok=True)
+        (install_dir / "bin").mkdir(exist_ok=True)
+        (install_dir / "lib").mkdir(exist_ok=True)
+        (install_dir / "bin" / "llama-server").write_text("installed", encoding="utf-8")
+        return {"ok": True, "install_dir": str(install_dir)}
+
+    async def _fake_restart(_app):
+        return False, "no_running_process"
+
+    monkeypatch.setattr("app.main.install_llama_runtime_bundle", _fake_install)
+    monkeypatch.setattr("app.main.restart_managed_llama_process", _fake_restart)
+    monkeypatch.setattr("app.main._default_llama_runtime_bundle_roots", lambda _runtime: [bundle.parent])
+
+    with TestClient(app) as client:
+        response = client.post("/internal/llama-runtime/switch", json={"bundle_path": str(bundle)})
+        status = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["switched"] is True
+    assert body["bundle"]["path"] == str(bundle)
+    assert install_calls == [str(bundle)]
+
+    status_body = status.json()
+    assert "llama_runtime" in status_body
+    assert status_body["llama_runtime"]["current"]["source_bundle_path"] == str(bundle)
+    marker_path = runtime.base_dir / "llama" / ".potato-llama-runtime-bundle.json"
+    assert marker_path.exists()
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["source_bundle_path"] == str(bundle)
+
+
+def test_set_llama_memory_loading_mode_persists_and_restarts(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    async def _fake_restart(_app):
+        return True, "terminated_running_process"
+
+    monkeypatch.setattr("app.main.restart_managed_llama_process", _fake_restart)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/internal/llama-runtime/memory-loading",
+            json={"mode": "full_ram"},
+        )
+        status = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["updated"] is True
+    assert body["memory_loading"]["mode"] == "full_ram"
+    assert body["memory_loading"]["no_mmap_env"] == "1"
+    assert body["restarted"] is True
+
+    status_body = status.json()
+    assert status_body["llama_runtime"]["memory_loading"]["mode"] == "full_ram"
+    assert status_body["llama_runtime"]["memory_loading"]["no_mmap_env"] == "1"
+
+
+def test_set_large_model_override_persists_without_restart(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+    monkeypatch.setattr("app.main._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
+    monkeypatch.setattr("app.main._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("app.main.get_large_model_warn_threshold_bytes", lambda: 1)
+    with runtime.model_path.open("wb") as handle:
+        handle.seek((6 * 1024 * 1024 * 1024) - 1)
+        handle.write(b"x")
+
+    with TestClient(app) as client:
+        before = client.get("/status")
+        response = client.post(
+            "/internal/compatibility/large-model-override",
+            json={"enabled": True},
+        )
+        after = client.get("/status")
+
+    assert before.status_code == 200
+    assert before.json()["compatibility"]["warnings"]
+    assert response.status_code == 200
+    body = response.json()
+    assert body["updated"] is True
+    assert body["override"]["enabled"] is True
+    assert body["compatibility"]["override_enabled"] is True
+    assert body["compatibility"]["warnings"] == []
+    assert after.status_code == 200
+    after_body = after.json()
+    assert after_body["compatibility"]["override_enabled"] is True
+    assert after_body["compatibility"]["warnings"] == []
+    assert after_body["llama_runtime"]["large_model_override"]["enabled"] is True
 
 
 def test_delete_model_removes_file_and_registry(runtime):
