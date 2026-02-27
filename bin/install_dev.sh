@@ -11,6 +11,7 @@ POTATO_ENFORCE_HOSTNAME="${POTATO_ENFORCE_HOSTNAME:-1}"
 LLAMA_RUNTIME_DIR="${POTATO_LLAMA_RUNTIME_DIR:-${TARGET_ROOT}/llama}"
 LLAMA_BUNDLE_ROOT="${POTATO_LLAMA_BUNDLE_ROOT:-${REPO_ROOT}/references/old_reference_design/llama_cpp_binary}"
 LLAMA_BUNDLE_SRC="${POTATO_LLAMA_BUNDLE_SRC:-}"
+LLAMA_BUNDLE_SELECT="${POTATO_LLAMA_BUNDLE_SELECT:-}"
 REQUIRE_LLAMA_BUNDLE="${POTATO_REQUIRE_LLAMA_BUNDLE:-1}"
 
 run_sudo() {
@@ -45,6 +46,17 @@ resolve_llama_bundle_src() {
   fi
 
   if [ ! -d "${LLAMA_BUNDLE_ROOT}" ]; then
+    return
+  fi
+
+  if [ -n "${LLAMA_BUNDLE_SELECT}" ]; then
+    if [ -d "${LLAMA_BUNDLE_SELECT}" ]; then
+      printf '%s\n' "${LLAMA_BUNDLE_SELECT}"
+      return
+    fi
+    find "${LLAMA_BUNDLE_ROOT}" \
+      -mindepth 1 -maxdepth 1 -type d \
+      -name "llama_server_bundle_*${LLAMA_BUNDLE_SELECT}*" | sort | tail -n 1
     return
   fi
 
@@ -134,8 +146,11 @@ if [ -n "${bundle_src}" ] && [ -x "${bundle_src}/bin/llama-server" ] && [ -d "${
     run_sudo chmod +x "${LLAMA_RUNTIME_DIR}/run-llama-server.sh"
   fi
   printf 'Installed llama bundle: %s -> %s\n' "${bundle_src}" "${LLAMA_RUNTIME_DIR}"
+  if [ -n "${LLAMA_BUNDLE_SELECT}" ]; then
+    printf 'Bundle selector: %s\n' "${LLAMA_BUNDLE_SELECT}"
+  fi
 else
-  msg="llama bundle not found. Expected under ${LLAMA_BUNDLE_ROOT} or set POTATO_LLAMA_BUNDLE_SRC."
+  msg="llama bundle not found. Expected under ${LLAMA_BUNDLE_ROOT}, set POTATO_LLAMA_BUNDLE_SRC, or use POTATO_LLAMA_BUNDLE_SELECT."
   if [ "${REQUIRE_LLAMA_BUNDLE}" = "1" ]; then
     printf 'ERROR: %s\n' "${msg}" >&2
     exit 1

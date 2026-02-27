@@ -48,6 +48,8 @@ MODELS_STATE_VERSION = 1
 MODEL_UPLOAD_LIMIT_8GB_BYTES = 8 * 1024 * 1024 * 1024
 MODEL_UPLOAD_LIMIT_16GB_BYTES = 16 * 1024 * 1024 * 1024
 MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES = 12 * 1024 * 1024 * 1024
+LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT = 5 * 1024 * 1024 * 1024
+LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME = ".potato-llama-runtime-bundle.json"
 MAX_MODEL_UPLOAD_BYTES = MODEL_UPLOAD_LIMIT_16GB_BYTES
 MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS = 20.0
 MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
@@ -87,6 +89,17 @@ def _empty_model_upload_state() -> dict[str, Any]:
     }
 
 
+def _empty_llama_runtime_switch_state() -> dict[str, Any]:
+    return {
+        "active": False,
+        "target_bundle_path": None,
+        "started_at_unix": None,
+        "completed_at_unix": None,
+        "error": None,
+        "last_bundle_path": None,
+    }
+
+
 @dataclass
 class RuntimeConfig:
     base_dir: Path
@@ -102,6 +115,7 @@ class RuntimeConfig:
     allow_fake_fallback: bool = False
     ensure_model_script: Path | None = None
     start_llama_script: Path | None = None
+    llama_runtime_settings_path: Path | None = None
     runtime_reset_service: str = "potato-runtime-reset.service"
 
     def __post_init__(self) -> None:
@@ -109,6 +123,8 @@ class RuntimeConfig:
             self.ensure_model_script = self.base_dir / "bin" / "ensure_model.sh"
         if self.start_llama_script is None:
             self.start_llama_script = self.base_dir / "bin" / "start_llama.sh"
+        if self.llama_runtime_settings_path is None:
+            self.llama_runtime_settings_path = self.base_dir / "state" / "llama_runtime.json"
 
     @classmethod
     def from_env(cls) -> "RuntimeConfig":
@@ -138,6 +154,9 @@ class RuntimeConfig:
         start_llama_script = Path(
             os.getenv("POTATO_START_LLAMA_SCRIPT", str(base_dir / "bin" / "start_llama.sh"))
         )
+        llama_runtime_settings_path = Path(
+            os.getenv("POTATO_LLAMA_RUNTIME_SETTINGS_PATH", str(base_dir / "state" / "llama_runtime.json"))
+        )
         runtime_reset_service = os.getenv("POTATO_RUNTIME_RESET_SERVICE", "potato-runtime-reset.service").strip()
         enable_orchestrator = os.getenv("POTATO_ENABLE_ORCHESTRATOR", "1") == "1"
         auto_download_idle_seconds = max(0, _safe_int(os.getenv("POTATO_AUTO_DOWNLOAD_IDLE_SECONDS", "300"), 300))
@@ -154,6 +173,7 @@ class RuntimeConfig:
             llama_port=llama_port,
             ensure_model_script=ensure_model_script,
             start_llama_script=start_llama_script,
+            llama_runtime_settings_path=llama_runtime_settings_path,
             runtime_reset_service=runtime_reset_service,
             enable_orchestrator=enable_orchestrator,
             auto_download_idle_seconds=auto_download_idle_seconds,
@@ -217,6 +237,451 @@ def get_model_upload_max_bytes() -> int | None:
     return MODEL_UPLOAD_LIMIT_8GB_BYTES
 
 
+def _read_pi_device_model_name() -> str | None:
+    path = Path("/proc/device-tree/model")
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    text = raw.replace(b"\x00", b"").decode("utf-8", errors="replace").strip()
+    return text or None
+
+
+def classify_runtime_device(
+    *,
+    total_memory_bytes: int | None = None,
+    pi_model_name: str | None = None,
+) -> str:
+    model_name = (pi_model_name or "").strip().lower()
+    if not model_name:
+        return "unknown"
+    if "raspberry pi" not in model_name:
+        return "unknown"
+    if "raspberry pi 5" in model_name:
+        total = total_memory_bytes if total_memory_bytes is not None else _detect_total_memory_bytes()
+        if total is not None and total >= MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES:
+            return "pi5-16gb"
+        return "pi5-8gb"
+    return "other-pi"
+
+
+def get_large_model_warn_threshold_bytes() -> int:
+    raw = os.getenv("POTATO_UNSUPPORTED_PI_LARGE_MODEL_WARN_BYTES", "").strip()
+    if not raw:
+        return LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT
+    parsed = _safe_int(raw, default=-1)
+    if parsed > 0:
+        return parsed
+    logger.warning(
+        "Invalid POTATO_UNSUPPORTED_PI_LARGE_MODEL_WARN_BYTES=%r; using default %d",
+        raw,
+        LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
+    )
+    return LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT
+
+
+def build_large_model_compatibility(
+    runtime: RuntimeConfig,
+    *,
+    model_filename: str | None = None,
+    model_size_bytes: int | None = None,
+    allow_override: bool | None = None,
+) -> dict[str, Any]:
+    total_memory_bytes = _detect_total_memory_bytes()
+    pi_model_name = _read_pi_device_model_name()
+    device_class = classify_runtime_device(
+        total_memory_bytes=total_memory_bytes,
+        pi_model_name=pi_model_name,
+    )
+    threshold_bytes = get_large_model_warn_threshold_bytes()
+    override_enabled = (
+        normalize_allow_unsupported_large_models(allow_override)
+        if allow_override is not None
+        else normalize_allow_unsupported_large_models(
+            read_llama_runtime_settings(runtime).get("allow_unsupported_large_models")
+        )
+    )
+    size_bytes = int(model_size_bytes) if isinstance(model_size_bytes, int) else _safe_int(model_size_bytes, 0)
+    if size_bytes <= 0:
+        size_bytes = 0
+
+    warnings: list[dict[str, Any]] = []
+    if size_bytes > threshold_bytes and device_class != "pi5-16gb" and not override_enabled:
+        filename = str(model_filename or runtime.model_path.name or "model.gguf")
+        warnings.append(
+            {
+                "code": "large_model_unsupported_pi_warning",
+                "severity": "warning",
+                "message": (
+                    f"{filename} is larger than the unsupported-device warning threshold "
+                    f"({threshold_bytes} bytes). Qwen3.5-35B-A3B is validated on Raspberry Pi 5 16GB only."
+                ),
+                "model_filename": filename,
+                "model_size_bytes": size_bytes,
+            }
+        )
+
+    return {
+        "device_class": device_class,
+        "pi_model_name": pi_model_name,
+        "memory_total_bytes": total_memory_bytes or 0,
+        "large_model_warn_threshold_bytes": threshold_bytes,
+        "supported_target": "raspberry-pi-5-16gb",
+        "override_enabled": override_enabled,
+        "warnings": warnings,
+    }
+
+
+def _default_llama_runtime_bundle_roots(runtime: RuntimeConfig) -> list[Path]:
+    return [
+        runtime.base_dir / "llama-bundles",
+        Path("/tmp/potato-qwen35-ab/references/old_reference_design/llama_cpp_binary"),
+        Path("/tmp/potato-os/references/old_reference_design/llama_cpp_binary"),
+    ]
+
+
+def get_llama_runtime_bundle_roots(runtime: RuntimeConfig) -> list[Path]:
+    raw = os.getenv("POTATO_LLAMA_RUNTIME_BUNDLE_ROOTS", "").strip()
+    candidates: list[Path]
+    if raw:
+        candidates = [Path(part).expanduser() for part in raw.split(os.pathsep) if part.strip()]
+    else:
+        candidates = _default_llama_runtime_bundle_roots(runtime)
+
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(candidate)
+    return roots
+
+
+def _llama_runtime_bundle_profile_from_name(bundle_name: str) -> str | None:
+    lowered = bundle_name.lower()
+    if lowered.endswith("_pi5-opt"):
+        return "pi5-opt"
+    if lowered.endswith("_baseline"):
+        return "baseline"
+    return None
+
+
+def _llama_runtime_bundle_readme_fields(bundle_dir: Path) -> dict[str, str]:
+    readme = bundle_dir / "README.txt"
+    try:
+        text = readme.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+
+    fields: dict[str, str] = {}
+    version_lines: list[str] = []
+    in_version = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if in_version and version_lines:
+                break
+            continue
+        if line.lower().startswith("profile:"):
+            fields["profile"] = line.split(":", 1)[1].strip()
+            continue
+        if line.lower().startswith("llama.cpp commit:"):
+            fields["llama_cpp_commit"] = line.split(":", 1)[1].strip()
+            continue
+        if line.lower() == "version:":
+            in_version = True
+            continue
+        if in_version and not line.lower().startswith("contents:"):
+            version_lines.append(line)
+            continue
+        if in_version and line.lower().startswith("contents:"):
+            break
+    if version_lines:
+        fields["version_summary"] = version_lines[0]
+    return fields
+
+
+def discover_llama_runtime_bundles(runtime: RuntimeConfig) -> list[dict[str, Any]]:
+    bundles: list[dict[str, Any]] = []
+    for root in get_llama_runtime_bundle_roots(runtime):
+        try:
+            if not root.exists() or not root.is_dir():
+                continue
+        except OSError:
+            continue
+        try:
+            children = list(root.iterdir())
+        except OSError:
+            continue
+        for bundle_dir in children:
+            name = bundle_dir.name
+            if not bundle_dir.is_dir() or not name.startswith("llama_server_bundle_"):
+                continue
+            server_path = bundle_dir / "bin" / "llama-server"
+            if not server_path.exists():
+                continue
+            readme_fields = _llama_runtime_bundle_readme_fields(bundle_dir)
+            profile = (
+                str(readme_fields.get("profile") or "").strip()
+                or _llama_runtime_bundle_profile_from_name(name)
+                or "unknown"
+            )
+            try:
+                mtime_unix = int(bundle_dir.stat().st_mtime)
+            except OSError:
+                mtime_unix = 0
+            bundles.append(
+                {
+                    "path": str(bundle_dir),
+                    "name": name,
+                    "root": str(root),
+                    "profile": profile,
+                    "is_pi5_optimized": profile == "pi5-opt",
+                    "has_bench": (bundle_dir / "bin" / "llama-bench").exists(),
+                    "has_lib_dir": (bundle_dir / "lib").is_dir(),
+                    "version_summary": readme_fields.get("version_summary"),
+                    "llama_cpp_commit": readme_fields.get("llama_cpp_commit"),
+                    "mtime_unix": mtime_unix,
+                }
+            )
+    bundles.sort(key=lambda item: (int(item.get("mtime_unix") or 0), str(item.get("name") or "")), reverse=True)
+    return bundles
+
+
+def _llama_runtime_install_dir(runtime: RuntimeConfig) -> Path:
+    return runtime.base_dir / "llama"
+
+
+def _llama_runtime_marker_path(runtime: RuntimeConfig) -> Path:
+    return _llama_runtime_install_dir(runtime) / LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME
+
+
+def _llama_runtime_settings_path(runtime: RuntimeConfig) -> Path:
+    if runtime.llama_runtime_settings_path is not None:
+        return runtime.llama_runtime_settings_path
+    return runtime.base_dir / "state" / "llama_runtime.json"
+
+
+def normalize_llama_memory_loading_mode(raw_mode: Any) -> str:
+    value = str(raw_mode or "").strip().lower()
+    if value in {"full_ram", "no_mmap", "no-mmap", "1", "true", "on"}:
+        return "full_ram"
+    if value in {"mmap", "mapped", "0", "false", "off"}:
+        return "mmap"
+    return "auto"
+
+
+def llama_memory_loading_no_mmap_env(mode: str) -> str:
+    normalized = normalize_llama_memory_loading_mode(mode)
+    if normalized == "full_ram":
+        return "1"
+    if normalized == "mmap":
+        return "0"
+    return "auto"
+
+
+def normalize_allow_unsupported_large_models(raw_value: Any) -> bool:
+    if isinstance(raw_value, bool):
+        return raw_value
+    if raw_value is None:
+        return False
+    value = str(raw_value).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def read_llama_runtime_settings(runtime: RuntimeConfig) -> dict[str, Any]:
+    path = _llama_runtime_settings_path(runtime)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    mode = normalize_llama_memory_loading_mode(raw.get("memory_loading_mode"))
+    return {
+        "memory_loading_mode": mode,
+        "allow_unsupported_large_models": normalize_allow_unsupported_large_models(
+            raw.get("allow_unsupported_large_models")
+        ),
+        "updated_at_unix": _safe_int(raw.get("updated_at_unix"), 0) or None,
+    }
+
+
+def write_llama_runtime_settings(
+    runtime: RuntimeConfig,
+    *,
+    memory_loading_mode: str | None = None,
+    allow_unsupported_large_models: bool | None = None,
+) -> dict[str, Any]:
+    current = read_llama_runtime_settings(runtime)
+    payload = {
+        "memory_loading_mode": normalize_llama_memory_loading_mode(
+            current.get("memory_loading_mode") if memory_loading_mode is None else memory_loading_mode
+        ),
+        "allow_unsupported_large_models": normalize_allow_unsupported_large_models(
+            current.get("allow_unsupported_large_models")
+            if allow_unsupported_large_models is None
+            else allow_unsupported_large_models
+        ),
+        "updated_at_unix": int(time.time()),
+    }
+    _atomic_write_json(_llama_runtime_settings_path(runtime), payload)
+    return payload
+
+
+def build_llama_memory_loading_status(runtime: RuntimeConfig) -> dict[str, Any]:
+    settings = read_llama_runtime_settings(runtime)
+    mode = normalize_llama_memory_loading_mode(settings.get("memory_loading_mode"))
+    no_mmap_env = llama_memory_loading_no_mmap_env(mode)
+    return {
+        "mode": mode,
+        "no_mmap_env": no_mmap_env,
+        "label": (
+            "Full RAM load (--no-mmap)"
+            if mode == "full_ram"
+            else "Memory-mapped (mmap)"
+            if mode == "mmap"
+            else "Automatic (profile-based)"
+        ),
+        "updated_at_unix": settings.get("updated_at_unix"),
+    }
+
+
+def build_llama_large_model_override_status(runtime: RuntimeConfig) -> dict[str, Any]:
+    settings = read_llama_runtime_settings(runtime)
+    enabled = normalize_allow_unsupported_large_models(settings.get("allow_unsupported_large_models"))
+    return {
+        "enabled": enabled,
+        "label": "Try unsupported large model anyway" if enabled else "Use compatibility warnings (default)",
+        "updated_at_unix": settings.get("updated_at_unix"),
+    }
+
+
+def read_llama_runtime_bundle_marker(runtime: RuntimeConfig) -> dict[str, Any] | None:
+    marker_path = _llama_runtime_marker_path(runtime)
+    try:
+        raw = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def write_llama_runtime_bundle_marker(runtime: RuntimeConfig, bundle: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "source_bundle_path": str(bundle.get("path") or ""),
+        "source_bundle_name": str(bundle.get("name") or ""),
+        "profile": str(bundle.get("profile") or "unknown"),
+        "version_summary": bundle.get("version_summary"),
+        "llama_cpp_commit": bundle.get("llama_cpp_commit"),
+        "switched_at_unix": int(time.time()),
+    }
+    _atomic_write_json(_llama_runtime_marker_path(runtime), payload)
+    return payload
+
+
+def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = None) -> dict[str, Any]:
+    install_dir = _llama_runtime_install_dir(runtime)
+    marker = read_llama_runtime_bundle_marker(runtime) or {}
+    current_source_bundle_path = str(marker.get("source_bundle_path") or "")
+    available = discover_llama_runtime_bundles(runtime)
+    for bundle in available:
+        bundle["is_current"] = bool(current_source_bundle_path and bundle.get("path") == current_source_bundle_path)
+
+    switch_snapshot = _empty_llama_runtime_switch_state()
+    if app is not None:
+        raw = getattr(app.state, "llama_runtime_switch_state", None)
+        if isinstance(raw, dict):
+            switch_snapshot.update(
+                {
+                    "active": bool(raw.get("active", False)),
+                    "target_bundle_path": raw.get("target_bundle_path"),
+                    "started_at_unix": raw.get("started_at_unix"),
+                    "completed_at_unix": raw.get("completed_at_unix"),
+                    "error": raw.get("error"),
+                    "last_bundle_path": raw.get("last_bundle_path"),
+                }
+            )
+
+    current = {
+        "install_dir": str(install_dir),
+        "exists": install_dir.exists(),
+        "has_server_binary": (_llama_runtime_install_dir(runtime) / "bin" / "llama-server").exists(),
+        "source_bundle_path": marker.get("source_bundle_path"),
+        "source_bundle_name": marker.get("source_bundle_name"),
+        "profile": marker.get("profile"),
+        "version_summary": marker.get("version_summary"),
+        "llama_cpp_commit": marker.get("llama_cpp_commit"),
+        "switched_at_unix": marker.get("switched_at_unix"),
+    }
+
+    return {
+        "current": current,
+        "available_bundles": available,
+        "switch": switch_snapshot,
+        "memory_loading": build_llama_memory_loading_status(runtime),
+        "large_model_override": build_llama_large_model_override_status(runtime),
+    }
+
+
+async def install_llama_runtime_bundle(runtime: RuntimeConfig, bundle_dir: Path) -> dict[str, Any]:
+    install_dir = _llama_runtime_install_dir(runtime)
+    install_dir.mkdir(parents=True, exist_ok=True)
+
+    rsync = shutil_which("rsync")
+    if not rsync:
+        return {"ok": False, "reason": "rsync_not_available", "install_dir": str(install_dir)}
+
+    proc = await asyncio.create_subprocess_exec(
+        rsync,
+        "-a",
+        "--delete",
+        f"{bundle_dir}/",
+        f"{install_dir}/",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _stderr = await proc.communicate()
+    if stdout:
+        logger.info("llama runtime rsync: %s", stdout.decode("utf-8", errors="replace").rstrip())
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "reason": "rsync_failed",
+            "returncode": proc.returncode,
+            "install_dir": str(install_dir),
+        }
+
+    for rel in ("bin/llama-server", "run-llama-server.sh", "run-llama-bench.sh"):
+        path = install_dir / rel
+        try:
+            if path.exists():
+                path.chmod(path.stat().st_mode | 0o111)
+        except OSError:
+            logger.warning("Could not chmod runtime bundle file: %s", path, exc_info=True)
+
+    return {"ok": True, "reason": "installed", "install_dir": str(install_dir)}
+
+
+def find_llama_runtime_bundle_by_path(runtime: RuntimeConfig, bundle_path: str) -> dict[str, Any] | None:
+    candidate = str(bundle_path or "").strip()
+    if not candidate:
+        return None
+    try:
+        resolved = str(Path(candidate).resolve())
+    except OSError:
+        return None
+    for bundle in discover_llama_runtime_bundles(runtime):
+        try:
+            bundle_resolved = str(Path(str(bundle.get("path") or "")).resolve())
+        except OSError:
+            continue
+        if bundle_resolved == resolved:
+            return bundle
+    return None
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,6 +706,29 @@ def _sanitize_filename(filename: str) -> str:
 def _slugify_id(raw: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
     return slug or "model"
+
+
+def is_qwen35_a3b_filename(filename: str | None) -> bool:
+    value = str(filename or "").strip().lower()
+    return bool(value) and "qwen" in value and "3.5" in value and "35b" in value and "a3b" in value
+
+
+def apply_model_chat_defaults(payload: dict[str, Any], *, active_model_filename: str | None) -> dict[str, Any]:
+    if not is_qwen35_a3b_filename(active_model_filename):
+        return payload
+
+    chat_template_kwargs = payload.get("chat_template_kwargs")
+    if isinstance(chat_template_kwargs, dict) and "enable_thinking" in chat_template_kwargs:
+        return payload
+
+    updated = dict(payload)
+    if isinstance(chat_template_kwargs, dict):
+        merged = dict(chat_template_kwargs)
+    else:
+        merged = {}
+    merged["enable_thinking"] = False
+    updated["chat_template_kwargs"] = merged
+    return updated
 
 
 def _unique_model_id(base_id: str, existing_ids: set[str]) -> str:
@@ -964,6 +1452,18 @@ async def build_status(
                 }
             )
 
+    active_model_size_bytes = 0
+    if has_model:
+        try:
+            active_model_size_bytes = max(0, int(active_model_path.stat().st_size))
+        except OSError:
+            active_model_size_bytes = 0
+    compatibility = build_large_model_compatibility(
+        runtime,
+        model_filename=active_model_path.name,
+        model_size_bytes=active_model_size_bytes or None,
+    )
+
     return {
         "state": state,
         "model_present": has_model,
@@ -984,6 +1484,8 @@ async def build_status(
             "active": active_backend,
             "fallback_active": fallback_active,
         },
+        "compatibility": compatibility,
+        "llama_runtime": build_llama_runtime_status(runtime, app=app),
         "system": system_snapshot if isinstance(system_snapshot, dict) else default_system_metrics_snapshot(),
     }
 
@@ -1034,6 +1536,7 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env["POTATO_CHAT_BACKEND"] = runtime.chat_backend_mode
     env["POTATO_ALLOW_FAKE_FALLBACK"] = "1" if runtime.allow_fake_fallback else "0"
     env["POTATO_LLAMA_PORT"] = str(runtime.llama_port)
+    env["POTATO_LLAMA_NO_MMAP"] = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
     env.setdefault("POTATO_MODEL_URL", MODEL_URL)
     return env
 
@@ -2058,6 +2561,20 @@ CHAT_HTML = """<!doctype html>
       letter-spacing: 0.2px;
     }
 
+    .chat-brand-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      background: color-mix(in srgb, #2563eb 14%, var(--panel));
+      border: 1px solid color-mix(in srgb, #2563eb 26%, var(--border));
+      font-size: 18px;
+      line-height: 1;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.25);
+    }
+
     .header-primary {
       display: inline-flex;
       align-items: center;
@@ -2275,6 +2792,43 @@ CHAT_HTML = """<!doctype html>
       font-size: 13px;
       cursor: pointer;
       transition: transform 120ms ease, border-color 120ms ease, background-color 120ms ease, opacity 120ms ease;
+    }
+
+    .thinking-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(59, 130, 246, 0.38);
+      background: color-mix(in srgb, #2563eb 10%, var(--panel-muted));
+      color: color-mix(in srgb, #2563eb 72%, var(--text) 28%);
+      border-radius: 999px;
+      padding: 7px 13px;
+      font-size: 13px;
+      font-weight: 650;
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, background-color 120ms ease, opacity 120ms ease;
+      user-select: none;
+    }
+
+    .thinking-toggle:hover {
+      transform: translateY(-1px);
+    }
+
+    .thinking-toggle.off {
+      border-color: var(--border);
+      background: var(--panel-muted);
+      color: var(--text-muted);
+      font-weight: 560;
+    }
+
+    .thinking-toggle-icon {
+      display: inline-flex;
+      width: 15px;
+      height: 15px;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      line-height: 1;
     }
 
     .attach-btn {
@@ -2773,6 +3327,10 @@ CHAT_HTML = """<!doctype html>
             <span>Pi Runtime</span>
             <button id="runtimeViewToggle" class="runtime-toggle" type="button" aria-expanded="false">Show details</button>
           </div>
+          <div id="compatibilityWarnings" class="runtime-compact" hidden>
+            <span id="compatibilityWarningsText"></span>
+            <button id="compatibilityOverrideBtn" class="ghost-btn" type="button" hidden>Try anyway</button>
+          </div>
           <div id="runtimeCompact" class="runtime-compact">CPU -- | Cores -- | GPU -- | Swap -- | Throttle --</div>
           <div id="runtimeDetails" class="runtime-details" hidden>
             <div id="runtimeDetailCpu">CPU total: --</div>
@@ -2792,6 +3350,31 @@ CHAT_HTML = """<!doctype html>
       <details class="settings">
         <summary>Settings</summary>
         <div class="settings-grid">
+          <div class="full">
+            <h3 style="margin: 0 0 8px; font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Large Model Compatibility</h3>
+            <label class="full" style="display:flex; align-items:center; gap:8px;">
+              <input id="largeModelOverrideEnabled" type="checkbox">
+              <span>Allow unsupported large models (try anyway)</span>
+            </label>
+            <div class="settings-action-row full">
+              <button id="applyLargeModelOverrideBtn" class="ghost-btn" type="button">Apply compatibility override</button>
+            </div>
+            <div id="largeModelOverrideStatus" class="runtime-compact">Compatibility override: default warnings</div>
+          </div>
+          <div class="full">
+            <h3 style="margin: 0 0 8px; font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Model Memory Loading</h3>
+            <label class="full">GGUF loading mode (requires runtime restart)
+              <select id="llamaMemoryLoadingMode">
+                <option value="auto">Automatic (profile-based)</option>
+                <option value="full_ram">Full RAM load (--no-mmap)</option>
+                <option value="mmap">Memory-mapped (mmap)</option>
+              </select>
+            </label>
+            <div class="settings-action-row full">
+              <button id="applyLlamaMemoryLoadingBtn" class="ghost-btn" type="button">Apply memory loading + restart</button>
+            </div>
+            <div id="llamaMemoryLoadingStatus" class="runtime-compact">Current memory loading: unknown</div>
+          </div>
           <label class="full">System Prompt (optional)
             <textarea id="systemPrompt" placeholder="Set assistant behavior for this chat"></textarea>
           </label>
@@ -2822,6 +3405,19 @@ CHAT_HTML = """<!doctype html>
           <div class="full">
             <h3 style="margin: 0 0 8px; font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Available Models</h3>
             <div id="modelsList" class="runtime-details"></div>
+          </div>
+          <div class="full">
+            <h3 style="margin: 0 0 8px; font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Llama Runtime Bundle</h3>
+            <div id="llamaRuntimeCurrent" class="runtime-compact">Current runtime: unknown</div>
+            <label class="full">Installed/Test Bundles
+              <select id="llamaRuntimeBundleSelect">
+                <option value="">No bundles discovered</option>
+              </select>
+            </label>
+            <div class="settings-action-row full">
+              <button id="switchLlamaRuntimeBtn" class="ghost-btn" type="button">Switch llama runtime</button>
+            </div>
+            <div id="llamaRuntimeSwitchStatus" class="runtime-compact">No runtime switch in progress.</div>
           </div>
           <label>Streaming
             <select id="stream">
@@ -2869,7 +3465,8 @@ CHAT_HTML = """<!doctype html>
           <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Open sidebar" aria-controls="sidebarPanel" aria-expanded="false" hidden>
             <span class="bars" aria-hidden="true">≡</span>
           </button>
-          <h1>Potato OS Chat</h1>
+          <span class="chat-brand-mark" aria-hidden="true">🥔</span>
+          <h1 aria-label="🥔 Potato Chat">Potato Chat</h1>
         </div>
         <div class="header-actions">
           <span id="statusBadge" class="badge offline">
@@ -2894,6 +3491,10 @@ CHAT_HTML = """<!doctype html>
         <textarea id="userPrompt" rows="3" placeholder="Message Potato OS..."></textarea>
         <div class="composer-bottom">
           <div class="composer-left">
+            <button id="thinkingToggleBtn" class="thinking-toggle off" type="button" aria-pressed="false" title="Toggle model reasoning / deep thinking">
+              <span class="thinking-toggle-icon" aria-hidden="true">◌</span>
+              <span id="thinkingToggleLabel">Deep thinking</span>
+            </button>
             <input id="imageInput" class="visually-hidden-file" type="file" accept="image/*">
             <button id="attachImageBtn" class="attach-btn" type="button">Attach image</button>
             <button id="clearImageBtn" class="ghost-btn" type="button" hidden>Remove image</button>
@@ -2928,6 +3529,7 @@ CHAT_HTML = """<!doctype html>
       stream: true,
       generation_mode: "random",
       seed: 42,
+      thinking_enabled: false,
       theme: "light",
       system_prompt: "",
     };
@@ -2959,6 +3561,9 @@ CHAT_HTML = """<!doctype html>
     let latestStatus = null;
     let downloadStartInFlight = false;
     let modelActionInFlight = false;
+    let llamaRuntimeSwitchInFlight = false;
+    let llamaMemoryLoadingApplyInFlight = false;
+    let largeModelOverrideApplyInFlight = false;
     let uploadRequest = null;
     let runtimeResetInFlight = false;
     let runtimeReconnectWatchActive = false;
@@ -3003,6 +3608,59 @@ CHAT_HTML = """<!doctype html>
       return fallback;
     }
 
+    function normalizeThinkingEnabled(rawValue, fallback = defaultSettings.thinking_enabled) {
+      if (rawValue === true || rawValue === false) return rawValue;
+      if (typeof rawValue === "string") {
+        const normalized = rawValue.trim().toLowerCase();
+        if (normalized === "true") return true;
+        if (normalized === "false") return false;
+      }
+      return Boolean(fallback);
+    }
+
+    function isQwen35A3BModelName(rawName) {
+      const value = String(rawName || "").trim().toLowerCase();
+      return Boolean(value)
+        && value.includes("qwen")
+        && value.includes("3.5")
+        && value.includes("35b")
+        && value.includes("a3b");
+    }
+
+    function thinkingToggleSupported(statusPayload = latestStatus) {
+      return isQwen35A3BModelName(statusPayload?.model?.filename);
+    }
+
+    function getThinkingEnabledFromUi() {
+      const btn = document.getElementById("thinkingToggleBtn");
+      if (!btn) return defaultSettings.thinking_enabled;
+      return btn.getAttribute("aria-pressed") === "true";
+    }
+
+    function setThinkingToggleState(rawEnabled, options = {}) {
+      const btn = document.getElementById("thinkingToggleBtn");
+      const label = document.getElementById("thinkingToggleLabel");
+      if (!btn) return;
+      const enabled = normalizeThinkingEnabled(rawEnabled);
+      const supported = thinkingToggleSupported(options.statusPayload);
+      btn.classList.toggle("off", !enabled);
+      btn.setAttribute("aria-pressed", enabled ? "true" : "false");
+      btn.dataset.supported = supported ? "true" : "false";
+      btn.title = supported
+        ? (enabled ? "Deep thinking enabled" : "Deep thinking disabled")
+        : "Deep thinking toggle is used for Qwen3.5 A3B";
+      if (label) {
+        label.textContent = supported
+          ? (enabled ? "Deep thinking on" : "Deep thinking off")
+          : "Deep thinking";
+      }
+    }
+
+    function toggleThinkingMode() {
+      setThinkingToggleState(!getThinkingEnabledFromUi());
+      saveSettings(collectSettings());
+    }
+
     function loadSettings() {
       const raw = localStorage.getItem(settingsKey);
       if (!raw) {
@@ -3014,6 +3672,7 @@ CHAT_HTML = """<!doctype html>
           ...parsed,
           generation_mode: normalizeGenerationMode(parsed.generation_mode),
           seed: normalizeSeedValue(parsed.seed, defaultSettings.seed),
+          thinking_enabled: normalizeThinkingEnabled(parsed.thinking_enabled, defaultSettings.thinking_enabled),
           theme: normalizeTheme(parsed.theme, detectSystemTheme()),
         };
       } catch (_err) {
@@ -3257,6 +3916,7 @@ CHAT_HTML = """<!doctype html>
         stream: document.getElementById("stream").value === "true",
         generation_mode: generationMode,
         seed,
+        thinking_enabled: getThinkingEnabledFromUi(),
         theme: document.documentElement.getAttribute("data-theme") || defaultSettings.theme,
         system_prompt: document.getElementById("systemPrompt").value.trim(),
       };
@@ -3578,6 +4238,7 @@ CHAT_HTML = """<!doctype html>
       document.getElementById("generationMode").value = normalizedGenerationMode;
       document.getElementById("seed").value = String(normalizedSeed);
       document.getElementById("systemPrompt").value = settings.system_prompt;
+      setThinkingToggleState(settings.thinking_enabled);
       updateSeedFieldState(normalizedGenerationMode);
 
       applyTheme(settings.theme);
@@ -4130,10 +4791,188 @@ CHAT_HTML = """<!doctype html>
       }
     }
 
+    function renderCompatibilityWarnings(statusPayload) {
+      const el = document.getElementById("compatibilityWarnings");
+      const textEl = document.getElementById("compatibilityWarningsText");
+      const overrideBtn = document.getElementById("compatibilityOverrideBtn");
+      if (!el) return;
+      const warnings = Array.isArray(statusPayload?.compatibility?.warnings)
+        ? statusPayload.compatibility.warnings
+        : [];
+      const overrideEnabled = statusPayload?.compatibility?.override_enabled === true;
+      if (!warnings.length) {
+        el.hidden = true;
+        if (textEl) textEl.textContent = "";
+        else el.textContent = "";
+        if (overrideBtn) {
+          overrideBtn.hidden = true;
+          overrideBtn.disabled = false;
+          overrideBtn.textContent = "Try anyway";
+        }
+        return;
+      }
+      const text = warnings
+        .map((item) => String(item?.message || "Compatibility warning"))
+        .filter((item) => item.length > 0)
+        .join(" | ");
+      if (textEl) textEl.textContent = text || "Compatibility warning";
+      else el.textContent = text || "Compatibility warning";
+      if (overrideBtn) {
+        overrideBtn.hidden = overrideEnabled;
+      }
+      el.hidden = false;
+    }
+
     function setModelUploadStatus(message) {
       const el = document.getElementById("modelUploadStatus");
       if (!el) return;
       el.textContent = String(message || "No upload in progress.");
+    }
+
+    function setLlamaRuntimeSwitchStatus(message) {
+      const el = document.getElementById("llamaRuntimeSwitchStatus");
+      if (!el) return;
+      el.textContent = String(message || "No runtime switch in progress.");
+    }
+
+    function setLlamaMemoryLoadingStatus(message) {
+      const el = document.getElementById("llamaMemoryLoadingStatus");
+      if (!el) return;
+      el.textContent = String(message || "Current memory loading: unknown");
+    }
+
+    function setLargeModelOverrideStatus(message) {
+      const el = document.getElementById("largeModelOverrideStatus");
+      if (!el) return;
+      el.textContent = String(message || "Compatibility override: default warnings");
+    }
+
+    function setLlamaRuntimeSwitchButtonState(inFlight) {
+      const btn = document.getElementById("switchLlamaRuntimeBtn");
+      if (!btn) return;
+      btn.disabled = Boolean(inFlight);
+      btn.textContent = inFlight ? "Switching..." : "Switch llama runtime";
+    }
+
+    function setLlamaMemoryLoadingButtonState(inFlight) {
+      const btn = document.getElementById("applyLlamaMemoryLoadingBtn");
+      if (!btn) return;
+      btn.disabled = Boolean(inFlight);
+      btn.textContent = inFlight ? "Applying..." : "Apply memory loading + restart";
+    }
+
+    function setLargeModelOverrideButtonState(inFlight) {
+      const btn = document.getElementById("applyLargeModelOverrideBtn");
+      if (btn) {
+        btn.disabled = Boolean(inFlight);
+        btn.textContent = inFlight ? "Applying..." : "Apply compatibility override";
+      }
+      const quickBtn = document.getElementById("compatibilityOverrideBtn");
+      if (quickBtn) {
+        quickBtn.disabled = Boolean(inFlight);
+        quickBtn.textContent = inFlight ? "Applying..." : "Try anyway";
+      }
+    }
+
+    function renderLlamaRuntimeStatus(statusPayload) {
+      const runtimePayload = statusPayload?.llama_runtime || {};
+      const currentEl = document.getElementById("llamaRuntimeCurrent");
+      const selectEl = document.getElementById("llamaRuntimeBundleSelect");
+      if (currentEl) {
+        const current = runtimePayload?.current || {};
+        const sourceName = String(current?.source_bundle_name || "").trim();
+        const profile = String(current?.profile || "").trim();
+        const serverPresent = current?.has_server_binary === true;
+        const parts = [];
+        if (sourceName) parts.push(sourceName);
+        if (profile) parts.push(`profile=${profile}`);
+        if (!parts.length && serverPresent) {
+          parts.push("custom/current install");
+        }
+        currentEl.textContent = `Current runtime: ${parts.join(" | ") || "unknown"}`;
+      }
+
+      if (selectEl) {
+        const bundles = Array.isArray(runtimePayload?.available_bundles) ? runtimePayload.available_bundles : [];
+        const prevValue = String(selectEl.value || "");
+        selectEl.replaceChildren();
+        if (!bundles.length) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "No bundles discovered";
+          selectEl.appendChild(option);
+          selectEl.disabled = true;
+        } else {
+          let selectedApplied = false;
+          for (const bundle of bundles) {
+            const option = document.createElement("option");
+            option.value = String(bundle?.path || "");
+            const labelParts = [String(bundle?.name || "bundle")];
+            if (bundle?.profile) {
+              labelParts.push(`(${bundle.profile})`);
+            }
+            if (bundle?.is_current === true) {
+              labelParts.push("[current]");
+            }
+            option.textContent = labelParts.join(" ");
+            if (option.value && (option.value === prevValue || (!prevValue && bundle?.is_current === true))) {
+              option.selected = true;
+              selectedApplied = true;
+            }
+            selectEl.appendChild(option);
+          }
+          if (!selectedApplied && selectEl.options.length > 0) {
+            selectEl.options[0].selected = true;
+          }
+          selectEl.disabled = false;
+        }
+      }
+
+      const memoryLoadingSelect = document.getElementById("llamaMemoryLoadingMode");
+      const memoryLoading = runtimePayload?.memory_loading || {};
+      if (memoryLoadingSelect) {
+        const mode = String(memoryLoading?.mode || "auto");
+        const normalizedMode = ["auto", "full_ram", "mmap"].includes(mode) ? mode : "auto";
+        memoryLoadingSelect.value = normalizedMode;
+      }
+      if (memoryLoading?.label) {
+        const restartNote = memoryLoading?.no_mmap_env === "1"
+          ? " (full RAM preload enabled)"
+          : memoryLoading?.no_mmap_env === "0"
+          ? " (mmap enabled)"
+          : " (auto)";
+        setLlamaMemoryLoadingStatus(`Current memory loading: ${memoryLoading.label}${restartNote}`);
+      } else {
+        setLlamaMemoryLoadingStatus("Current memory loading: unknown");
+      }
+
+      const largeModelOverrideToggle = document.getElementById("largeModelOverrideEnabled");
+      const largeModelOverride = runtimePayload?.large_model_override || {};
+      const overrideEnabled = largeModelOverride?.enabled === true || statusPayload?.compatibility?.override_enabled === true;
+      if (largeModelOverrideToggle) {
+        largeModelOverrideToggle.checked = overrideEnabled;
+      }
+      if (overrideEnabled) {
+        setLargeModelOverrideStatus("Compatibility override: trying unsupported large models is enabled");
+      } else {
+        setLargeModelOverrideStatus("Compatibility override: default warnings");
+      }
+
+      const switchState = runtimePayload?.switch || {};
+      if (switchState?.active) {
+        const target = String(switchState?.target_bundle_path || "selected bundle");
+        setLlamaRuntimeSwitchStatus(`Switching runtime bundle... ${target}`);
+      } else if (switchState?.error) {
+        setLlamaRuntimeSwitchStatus(`Last runtime switch error: ${switchState.error}`);
+      } else if (runtimePayload?.current?.source_bundle_name) {
+        setLlamaRuntimeSwitchStatus(`Active runtime bundle: ${runtimePayload.current.source_bundle_name}`);
+      } else {
+        setLlamaRuntimeSwitchStatus("No runtime switch in progress.");
+      }
+
+      setLlamaRuntimeSwitchButtonState(llamaRuntimeSwitchInFlight || switchState?.active === true);
+      setLlamaMemoryLoadingButtonState(llamaMemoryLoadingApplyInFlight);
+      setLargeModelOverrideButtonState(largeModelOverrideApplyInFlight);
     }
 
     function findModelInLatestStatus(modelId) {
@@ -4155,6 +4994,131 @@ CHAT_HTML = """<!doctype html>
       });
       const body = await res.json().catch(() => ({}));
       return { res, body };
+    }
+
+    async function switchLlamaRuntimeBundle() {
+      if (llamaRuntimeSwitchInFlight) return;
+      const select = document.getElementById("llamaRuntimeBundleSelect");
+      const bundlePath = String(select?.value || "").trim();
+      if (!bundlePath) {
+        appendMessage("assistant", "No llama runtime bundle selected.");
+        return;
+      }
+      const selectedLabel = select?.selectedOptions?.[0]?.textContent || bundlePath;
+      const confirmed = window.confirm(
+        `Switch llama runtime to:\n${selectedLabel}\n\nThis will restart the local llama runtime process.`
+      );
+      if (!confirmed) return;
+
+      llamaRuntimeSwitchInFlight = true;
+      setLlamaRuntimeSwitchButtonState(true);
+      setLlamaRuntimeSwitchStatus("Switching runtime bundle...");
+      setComposerActivity("Switching llama runtime...");
+      try {
+        const { res, body } = await postJson("/internal/llama-runtime/switch", { bundle_path: bundlePath });
+        if (!res.ok || body?.switched !== true) {
+          appendMessage("assistant", `Could not switch llama runtime (${body?.reason || res.status}).`);
+          return;
+        }
+        appendMessage("assistant", `Switched llama runtime bundle to ${body?.bundle?.name || "selected bundle"}.`);
+        setComposerActivity("Llama runtime switched. Reconnecting...");
+      } catch (err) {
+        appendMessage("assistant", `Could not switch llama runtime: ${err}`);
+      } finally {
+        llamaRuntimeSwitchInFlight = false;
+        setLlamaRuntimeSwitchButtonState(false);
+        await pollStatus();
+      }
+    }
+
+    async function applyLlamaMemoryLoadingMode() {
+      if (llamaMemoryLoadingApplyInFlight) return;
+      const select = document.getElementById("llamaMemoryLoadingMode");
+      const mode = String(select?.value || "auto").trim() || "auto";
+      const label = select?.selectedOptions?.[0]?.textContent || mode;
+      const confirmed = window.confirm(
+        `Apply "${label}" and restart the llama runtime now? ` +
+        "The model will reload and chat will disconnect briefly."
+      );
+      if (!confirmed) return;
+
+      llamaMemoryLoadingApplyInFlight = true;
+      setLlamaMemoryLoadingButtonState(true);
+      setLlamaMemoryLoadingStatus(`Applying memory loading mode: ${label}...`);
+      try {
+        const { res, body } = await postJson("/internal/llama-runtime/memory-loading", { mode });
+        if (!res.ok) {
+          appendMessage(
+            "assistant",
+            `Could not update model memory loading (${res.status}): ${body?.reason || "unknown"}.`
+          );
+          setLlamaMemoryLoadingStatus(`Last memory loading update error: ${body?.reason || res.status}`);
+          return;
+        }
+        appendMessage(
+          "assistant",
+          `Applied model memory loading: ${body?.memory_loading?.label || mode}. ` +
+          `Runtime restart: ${body?.restart_reason || "requested"}.`
+        );
+        await pollStatus();
+      } catch (err) {
+        appendMessage("assistant", `Could not update model memory loading: ${err}`);
+        setLlamaMemoryLoadingStatus(`Last memory loading update error: ${err}`);
+      } finally {
+        llamaMemoryLoadingApplyInFlight = false;
+        setLlamaMemoryLoadingButtonState(false);
+      }
+    }
+
+    async function applyLargeModelCompatibilityOverride(enabled) {
+      if (largeModelOverrideApplyInFlight) return;
+      largeModelOverrideApplyInFlight = true;
+      setLargeModelOverrideButtonState(true);
+      setLargeModelOverrideStatus(
+        enabled
+          ? "Applying compatibility override: try unsupported models..."
+          : "Applying compatibility override: restore warnings..."
+      );
+      try {
+        const { res, body } = await postJson("/internal/compatibility/large-model-override", { enabled: Boolean(enabled) });
+        if (!res.ok || body?.updated !== true) {
+          appendMessage("assistant", `Could not update compatibility override (${body?.reason || res.status}).`);
+          setLargeModelOverrideStatus(`Last compatibility override error: ${body?.reason || res.status}`);
+          return;
+        }
+        appendMessage(
+          "assistant",
+          body?.override?.enabled
+            ? "Enabled compatibility override. Potato will try unsupported large models."
+            : "Disabled compatibility override. Default large-model warnings are active again."
+        );
+        setLargeModelOverrideStatus(
+          body?.override?.enabled
+            ? "Compatibility override: trying unsupported large models is enabled"
+            : "Compatibility override: default warnings"
+        );
+      } catch (err) {
+        appendMessage("assistant", `Could not update compatibility override: ${err}`);
+        setLargeModelOverrideStatus(`Last compatibility override error: ${err}`);
+      } finally {
+        largeModelOverrideApplyInFlight = false;
+        setLargeModelOverrideButtonState(false);
+        await pollStatus();
+      }
+    }
+
+    async function applyLargeModelOverrideFromSettings() {
+      const checkbox = document.getElementById("largeModelOverrideEnabled");
+      await applyLargeModelCompatibilityOverride(checkbox?.checked === true);
+    }
+
+    async function allowUnsupportedLargeModelFromWarning() {
+      const confirmed = window.confirm(
+        "Try loading unsupported large models anyway on this device? " +
+        "This may fail or be unstable, but Potato will stop warning-blocking this attempt."
+      );
+      if (!confirmed) return;
+      await applyLargeModelCompatibilityOverride(true);
     }
 
     function renderModelsList(statusPayload) {
@@ -4606,9 +5570,10 @@ CHAT_HTML = """<!doctype html>
     }
 
     function consumeSseDeltas(state, chunkText) {
-      if (!chunkText) return { deltas: [], events: [] };
+      if (!chunkText) return { deltas: [], reasoningDeltas: [], events: [] };
       state.buffer += chunkText.replace(/\\r\\n/g, "\\n");
       const deltas = [];
+      const reasoningDeltas = [];
       const events = [];
 
       while (true) {
@@ -4634,12 +5599,22 @@ CHAT_HTML = """<!doctype html>
           if (typeof delta === "string") {
             deltas.push(delta);
           }
+          const reasoningDelta = event?.choices?.[0]?.delta?.reasoning_content;
+          if (typeof reasoningDelta === "string") {
+            reasoningDeltas.push(reasoningDelta);
+          }
         } catch (_err) {
           // Ignore partial/non-JSON events and continue.
         }
       }
 
-      return { deltas, events };
+      return { deltas, reasoningDeltas, events };
+    }
+
+    function formatReasoningOnlyMessage(reasoningText) {
+      const text = String(reasoningText || "").trim();
+      if (!text) return "(empty response)";
+      return `Thinking...\\n\\n${text}`;
     }
 
     function formatStopReason(reason) {
@@ -4698,9 +5673,12 @@ CHAT_HTML = """<!doctype html>
       }
       updateLlamaIndicator(statusPayload);
       renderDownloadPrompt(statusPayload);
+      renderCompatibilityWarnings(statusPayload);
+      renderLlamaRuntimeStatus(statusPayload);
       renderSystemRuntime(statusPayload?.system);
       renderModelsList(statusPayload);
       renderUploadState(statusPayload);
+      setThinkingToggleState(getThinkingEnabledFromUi(), { statusPayload });
       setSendEnabled();
     }
 
@@ -4753,6 +5731,27 @@ CHAT_HTML = """<!doctype html>
             percent: 0,
             error: null,
           },
+          compatibility: {
+            device_class: "unknown",
+            large_model_warn_threshold_bytes: 0,
+            warnings: [],
+          },
+          llama_runtime: {
+            current: {
+              install_dir: "",
+              exists: false,
+              has_server_binary: false,
+              source_bundle_path: null,
+              source_bundle_name: null,
+              profile: null,
+            },
+            available_bundles: [],
+            switch: {
+              active: false,
+              target_bundle_path: null,
+              error: null,
+            },
+          },
           system: {
             available: false,
             cpu_percent: null,
@@ -4778,6 +5777,7 @@ CHAT_HTML = """<!doctype html>
         }
         updateLlamaIndicator(latestStatus);
         renderDownloadPrompt(latestStatus);
+        renderCompatibilityWarnings(latestStatus);
         renderSystemRuntime(latestStatus.system);
         renderModelsList(latestStatus);
         renderUploadState(latestStatus);
@@ -4848,6 +5848,11 @@ CHAT_HTML = """<!doctype html>
         if (resolvedSeed !== null) {
           reqBody.seed = resolvedSeed;
         }
+        if (thinkingToggleSupported()) {
+          reqBody.chat_template_kwargs = {
+            enable_thinking: normalizeThinkingEnabled(settings.thinking_enabled),
+          };
+        }
 
         if (settings.system_prompt) {
           reqBody.messages.push({ role: "system", content: settings.system_prompt });
@@ -4886,6 +5891,7 @@ CHAT_HTML = """<!doctype html>
           const decoder = new TextDecoder();
           const state = { buffer: "" };
           let assistantText = "";
+          let assistantReasoningText = "";
 
           while (true) {
             const { done, value } = await reader.read();
@@ -4914,6 +5920,12 @@ CHAT_HTML = """<!doctype html>
               assistantText += delta;
               updateMessage(assistantDiv, assistantText);
             }
+            for (const reasoningDelta of parsed.reasoningDeltas) {
+              assistantReasoningText += reasoningDelta;
+              if (!assistantText.trim()) {
+                updateMessage(assistantDiv, formatReasoningOnlyMessage(assistantReasoningText));
+              }
+            }
             for (const event of parsed.events) {
               const stop = event?.choices?.[0]?.finish_reason;
               if (stop !== null && stop !== undefined) {
@@ -4929,6 +5941,9 @@ CHAT_HTML = """<!doctype html>
           for (const delta of tailParsed.deltas) {
             assistantText += delta;
           }
+          for (const reasoningDelta of tailParsed.reasoningDeltas) {
+            assistantReasoningText += reasoningDelta;
+          }
           for (const event of tailParsed.events) {
             const stop = event?.choices?.[0]?.finish_reason;
             if (stop !== null && stop !== undefined) {
@@ -4943,8 +5958,9 @@ CHAT_HTML = """<!doctype html>
             requestCtx.firstTokenLatencyMs = Math.max(0, performance.now() - requestStartMs);
             markPrefillGenerationStarted(requestCtx);
           }
-          updateMessage(assistantDiv, assistantText.trim() || "(empty response)");
-          chatHistory.push({ role: "assistant", content: assistantText.trim() || "(empty response)" });
+          const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);
+          updateMessage(assistantDiv, finalAssistantText);
+          chatHistory.push({ role: "assistant", content: finalAssistantText });
           const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
           if (requestCtx.stoppedByUser) {
             streamStats.finish_reason = "cancelled";
@@ -4963,7 +5979,9 @@ CHAT_HTML = """<!doctype html>
           requestCtx.firstTokenLatencyMs = Math.max(0, performance.now() - requestStartMs);
           markPrefillGenerationStarted(requestCtx);
         }
-        const msg = body.choices?.[0]?.message?.content || JSON.stringify(body);
+        const message = body?.choices?.[0]?.message || {};
+        const messageContent = typeof message?.content === "string" ? message.content.trim() : "";
+        const msg = messageContent || formatReasoningOnlyMessage(message?.reasoning_content) || JSON.stringify(body);
         chatHistory.push({ role: "assistant", content: msg });
         const assistantDiv = appendMessage("assistant", msg);
         const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
@@ -5142,6 +6160,7 @@ CHAT_HTML = """<!doctype html>
     pollStatus();
 
     document.getElementById("themeToggle").addEventListener("click", toggleTheme);
+    document.getElementById("thinkingToggleBtn").addEventListener("click", toggleThinkingMode);
     document.getElementById("sidebarToggle").addEventListener("click", () => {
       setSidebarOpen(!document.body.classList.contains("sidebar-open"));
     });
@@ -5163,6 +6182,10 @@ CHAT_HTML = """<!doctype html>
     document.getElementById("uploadModelBtn").addEventListener("click", uploadLocalModel);
     document.getElementById("cancelUploadBtn").addEventListener("click", cancelLocalModelUpload);
     document.getElementById("purgeModelsBtn").addEventListener("click", purgeAllModels);
+    document.getElementById("applyLargeModelOverrideBtn").addEventListener("click", applyLargeModelOverrideFromSettings);
+    document.getElementById("compatibilityOverrideBtn").addEventListener("click", allowUnsupportedLargeModelFromWarning);
+    document.getElementById("applyLlamaMemoryLoadingBtn").addEventListener("click", applyLlamaMemoryLoadingMode);
+    document.getElementById("switchLlamaRuntimeBtn").addEventListener("click", switchLlamaRuntimeBundle);
     document.getElementById("modelsList").addEventListener("click", (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
@@ -5228,6 +6251,8 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.state.model_upload_lock = asyncio.Lock()
     app.state.model_upload_cancel_requested = False
     app.state.model_upload_state = _empty_model_upload_state()
+    app.state.llama_runtime_switch_lock = asyncio.Lock()
+    app.state.llama_runtime_switch_state = _empty_llama_runtime_switch_state()
     app.state.startup_monotonic = None
     app.state.orchestrator_task = None
     app.state.chat_repository = ChatRepositoryManager(
@@ -5339,6 +6364,169 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
             content={"restarted": False, "reason": reason},
         )
 
+    @app.post("/internal/llama-runtime/switch")
+    async def switch_llama_runtime_bundle(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"switched": False, "reason": "orchestrator_disabled"},
+            )
+
+        payload = await request.json()
+        bundle_path = str(payload.get("bundle_path") or "").strip()
+        if not bundle_path:
+            return JSONResponse(status_code=400, content={"switched": False, "reason": "bundle_path_required"})
+
+        bundle = find_llama_runtime_bundle_by_path(runtime_cfg, bundle_path)
+        if bundle is None:
+            return JSONResponse(status_code=404, content={"switched": False, "reason": "bundle_not_found"})
+
+        async with app.state.llama_runtime_switch_lock:
+            switch_state = app.state.llama_runtime_switch_state
+            if switch_state.get("active"):
+                return JSONResponse(status_code=409, content={"switched": False, "reason": "switch_already_running"})
+
+            switch_state.update(
+                {
+                    "active": True,
+                    "target_bundle_path": str(bundle.get("path") or bundle_path),
+                    "started_at_unix": int(time.time()),
+                    "completed_at_unix": None,
+                    "error": None,
+                }
+            )
+
+            try:
+                restarted, restart_reason = await restart_managed_llama_process(app)
+                install_result = await install_llama_runtime_bundle(runtime_cfg, Path(str(bundle["path"])))
+                if not install_result.get("ok"):
+                    reason = str(install_result.get("reason") or "install_failed")
+                    switch_state.update(
+                        {
+                            "active": False,
+                            "completed_at_unix": int(time.time()),
+                            "error": reason,
+                            "last_bundle_path": switch_state.get("last_bundle_path"),
+                        }
+                    )
+                    return JSONResponse(
+                        status_code=500,
+                        content={
+                            "switched": False,
+                            "reason": reason,
+                            "bundle": bundle,
+                            "restarted": restarted,
+                            "restart_reason": restart_reason,
+                        },
+                    )
+
+                marker = write_llama_runtime_bundle_marker(runtime_cfg, bundle)
+                switch_state.update(
+                    {
+                        "active": False,
+                        "target_bundle_path": None,
+                        "completed_at_unix": int(time.time()),
+                        "error": None,
+                        "last_bundle_path": str(bundle.get("path") or ""),
+                    }
+                )
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "switched": True,
+                        "reason": "bundle_switched",
+                        "bundle": bundle,
+                        "install": install_result,
+                        "restarted": restarted,
+                        "restart_reason": restart_reason,
+                        "marker": marker,
+                    },
+                )
+            except Exception:
+                switch_state.update(
+                    {
+                        "active": False,
+                        "completed_at_unix": int(time.time()),
+                        "error": "switch_failed",
+                    }
+                )
+                raise
+
+    @app.post("/internal/llama-runtime/memory-loading")
+    async def set_llama_memory_loading_mode(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"updated": False, "reason": "orchestrator_disabled"},
+            )
+
+        payload = await request.json()
+        requested_mode = payload.get("mode", payload.get("memory_loading_mode"))
+        mode = normalize_llama_memory_loading_mode(requested_mode)
+        saved = write_llama_runtime_settings(runtime_cfg, memory_loading_mode=mode)
+        restarted, restart_reason = await restart_managed_llama_process(app)
+        memory_loading = build_llama_memory_loading_status(runtime_cfg)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "updated": True,
+                "reason": "memory_loading_updated",
+                "memory_loading": memory_loading,
+                "saved": saved,
+                "restarted": restarted,
+                "restart_reason": restart_reason,
+            },
+        )
+
+    @app.post("/internal/compatibility/large-model-override")
+    async def set_large_model_override(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"updated": False, "reason": "orchestrator_disabled"},
+            )
+
+        payload = await request.json()
+        enabled = normalize_allow_unsupported_large_models(
+            payload.get("enabled", payload.get("allow_unsupported_large_models"))
+        )
+        saved = write_llama_runtime_settings(
+            runtime_cfg,
+            allow_unsupported_large_models=enabled,
+        )
+        compatibility = build_large_model_compatibility(
+            runtime_cfg,
+            model_filename=runtime_cfg.model_path.name,
+            model_size_bytes=(runtime_cfg.model_path.stat().st_size if runtime_cfg.model_path.exists() else None),
+            allow_override=enabled,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "updated": True,
+                "reason": "large_model_override_updated",
+                "override": {
+                    "enabled": enabled,
+                    "label": (
+                        "Try unsupported large model anyway"
+                        if enabled
+                        else "Use compatibility warnings (default)"
+                    ),
+                },
+                "compatibility": compatibility,
+                "saved": saved,
+            },
+        )
+
     @app.post("/internal/start-model-download")
     async def start_model_download_now(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
         if not runtime_cfg.enable_orchestrator:
@@ -5384,7 +6572,22 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         ok, reason, model = register_model_url(runtime_cfg, source_url=source_url, alias=alias)
         if not ok:
             return JSONResponse(status_code=400, content={"ok": False, "reason": reason})
-        return JSONResponse(status_code=200, content={"ok": True, "reason": reason, "model": model})
+        response_payload: dict[str, Any] = {"ok": True, "reason": reason, "model": model}
+        if isinstance(model, dict):
+            model_filename = str(model.get("filename") or "")
+            model_source_url = str(model.get("source_url") or "")
+            size_bytes = 0
+            if model_source_url:
+                size_bytes = await fetch_remote_content_length_bytes(model_source_url)
+            compatibility = build_large_model_compatibility(
+                runtime_cfg,
+                model_filename=model_filename,
+                model_size_bytes=size_bytes or None,
+            )
+            warnings = compatibility.get("warnings")
+            if isinstance(warnings, list) and warnings:
+                response_payload["warnings"] = warnings
+        return JSONResponse(status_code=200, content=response_payload)
 
     @app.post("/internal/models/download")
     async def start_selected_model_download(
@@ -5652,9 +6855,23 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 )
                 upload_completed = True
                 model = get_model_by_id(saved, model_id)
+                compatibility = build_large_model_compatibility(
+                    runtime_cfg,
+                    model_filename=final_filename,
+                    model_size_bytes=max(total_received, declared_total or 0) or None,
+                )
+                response_payload: dict[str, Any] = {
+                    "uploaded": True,
+                    "model": model,
+                    "switched": True,
+                    "restarted": restarted,
+                }
+                warnings = compatibility.get("warnings")
+                if isinstance(warnings, list) and warnings:
+                    response_payload["warnings"] = warnings
                 return JSONResponse(
                     status_code=200,
-                    content={"uploaded": True, "model": model, "switched": True, "restarted": restarted},
+                    content=response_payload,
                 )
             except OSError:
                 if error_reason is None:
@@ -5742,6 +6959,10 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
             raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
         payload = _merge_defaults(payload)
+        payload = apply_model_chat_defaults(
+            payload,
+            active_model_filename=str(status_payload.get("model", {}).get("filename") or ""),
+        )
         headers = _forward_headers(request)
         active_backend = status_payload["backend"]["active"]
 

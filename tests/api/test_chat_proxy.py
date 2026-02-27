@@ -4,6 +4,8 @@ import json
 
 import respx
 
+from app.main import save_models_state
+
 
 def test_chat_returns_503_when_not_ready(client, monkeypatch):
     monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
@@ -42,6 +44,68 @@ def test_chat_proxies_non_stream_when_ready(client, runtime, monkeypatch):
     assert route.called
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"] == "hello"
+
+
+def test_chat_defaults_qwen35_to_non_thinking_when_not_explicit(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path = runtime.model_path.parent / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
+    runtime.model_path.write_bytes(b"gguf")
+    _set_active_model_ready(runtime, "qwen35-a3b", runtime.model_path.name)
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-qwen35",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+                },
+            )
+        )
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "qwen", "messages": [{"role": "user", "content": "hello"}]},
+        )
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert forwarded["chat_template_kwargs"]["enable_thinking"] is False
+
+
+def test_chat_preserves_explicit_qwen35_thinking_override(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path = runtime.model_path.parent / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
+    runtime.model_path.write_bytes(b"gguf")
+    _set_active_model_ready(runtime, "qwen35-a3b", runtime.model_path.name)
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-qwen35-override",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+                },
+            )
+        )
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen",
+                "messages": [{"role": "user", "content": "hello"}],
+                "chat_template_kwargs": {"enable_thinking": True},
+            },
+        )
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert forwarded["chat_template_kwargs"]["enable_thinking"] is True
 
 
 def test_chat_proxies_stream_when_ready(client, runtime, monkeypatch):
@@ -271,4 +335,24 @@ def _stream_response(status_code: int, payload: bytes):
         status_code,
         headers={"content-type": "text/event-stream"},
         stream=stream,
+    )
+
+
+def _set_active_model_ready(runtime, model_id: str, filename: str) -> None:
+    save_models_state(
+        runtime,
+        {
+            "active_model_id": model_id,
+            "default_model_id": "default",
+            "default_model_downloaded_once": True,
+            "models": [
+                {
+                    "id": model_id,
+                    "filename": filename,
+                    "source_type": "upload",
+                    "status": "ready",
+                    "error": None,
+                }
+            ],
+        },
     )

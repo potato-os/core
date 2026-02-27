@@ -7,7 +7,8 @@ LLAMA_RUNTIME_DIR="${POTATO_LLAMA_RUNTIME_DIR:-${POTATO_BASE_DIR}/llama}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-${LLAMA_RUNTIME_DIR}/bin/llama-server}"
 LLAMA_HOST="${POTATO_LLAMA_HOST:-0.0.0.0}"
 LLAMA_PORT="${POTATO_LLAMA_PORT:-8080}"
-CTX_SIZE="${POTATO_CTX_SIZE:-16384}"
+CTX_SIZE_DEFAULT="16384"
+CTX_SIZE="${POTATO_CTX_SIZE:-${CTX_SIZE_DEFAULT}}"
 LLAMA_PARALLEL="${POTATO_LLAMA_PARALLEL:-1}"
 SLOT_SAVE_PATH="${POTATO_SLOT_SAVE_PATH:-${POTATO_BASE_DIR}/state/llama-slots}"
 CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-0}"
@@ -23,11 +24,89 @@ KV_FLAGS="${POTATO_LLAMA_KV_FLAGS:-}"
 ENABLE_FLASH_ATTN="${POTATO_LLAMA_FLASH_ATTN:-1}"
 USE_JINJA="${POTATO_LLAMA_JINJA:-1}"
 DISABLE_WARMUP="${POTATO_LLAMA_NO_WARMUP:-1}"
+LLAMA_NO_MMAP="${POTATO_LLAMA_NO_MMAP:-auto}"
 EXTRA_FLAGS="${POTATO_LLAMA_EXTRA_FLAGS:-}"
+PI_16GB_MEMORY_THRESHOLD_BYTES="$((12 * 1024 * 1024 * 1024))"
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+bool_env_true() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+bool_env_false() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_pi_model_name() {
+  if [ -n "${POTATO_PI_MODEL_OVERRIDE:-}" ]; then
+    printf '%s' "${POTATO_PI_MODEL_OVERRIDE}"
+    return 0
+  fi
+  if [ -r /proc/device-tree/model ]; then
+    tr -d '\000' < /proc/device-tree/model 2>/dev/null || true
+    return 0
+  fi
+  return 1
+}
+
+detect_total_memory_bytes() {
+  if [ -n "${POTATO_TOTAL_MEMORY_BYTES_OVERRIDE:-}" ]; then
+    printf '%s' "${POTATO_TOTAL_MEMORY_BYTES_OVERRIDE}"
+    return 0
+  fi
+  if [ -r /proc/meminfo ]; then
+    awk '/^MemTotal:/ { print $2 * 1024; exit }' /proc/meminfo 2>/dev/null || true
+    return 0
+  fi
+  return 1
+}
+
+is_pi5_16gb() {
+  local model_name total_memory
+  model_name="$(detect_pi_model_name || true)"
+  total_memory="$(detect_total_memory_bytes || true)"
+  model_name="$(printf '%s' "${model_name}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${model_name}" != *"raspberry pi 5"* ]]; then
+    return 1
+  fi
+  if ! [[ "${total_memory}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  [ "${total_memory}" -ge "${PI_16GB_MEMORY_THRESHOLD_BYTES}" ]
+}
+
+should_disable_mmap() {
+  local runtime_profile=''
+  if bool_env_true "${LLAMA_NO_MMAP}"; then
+    return 0
+  fi
+  if bool_env_false "${LLAMA_NO_MMAP}"; then
+    return 1
+  fi
+  if [ "${LLAMA_NO_MMAP}" != "auto" ] && [ -n "${LLAMA_NO_MMAP}" ]; then
+    printf 'WARNING: invalid POTATO_LLAMA_NO_MMAP=%s; using auto\n' "${LLAMA_NO_MMAP}" >&2
+  fi
+  runtime_profile=''
+  if [ -r "${LLAMA_RUNTIME_DIR}/.potato-llama-runtime-bundle.json" ]; then
+    runtime_profile="$(
+      sed -n 's/.*"profile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${LLAMA_RUNTIME_DIR}/.potato-llama-runtime-bundle.json" 2>/dev/null | head -n1
+    )"
+  fi
+  if model_is_qwen35_a3b && is_pi5_16gb && [ "${runtime_profile}" = "pi5-opt" ]; then
+    return 0
+  fi
+  return 1
 }
 
 model_filename_lower() {
@@ -38,6 +117,12 @@ model_is_qwen3vl() {
   local model_name
   model_name="$(model_filename_lower)"
   [[ "${model_name}" == *qwen3*vl* ]]
+}
+
+model_is_qwen35_a3b() {
+  local model_name
+  model_name="$(model_filename_lower)"
+  [[ "${model_name}" == *qwen*3.5*35b*a3b* ]]
 }
 
 model_has_vl_name() {
@@ -241,6 +326,13 @@ pick_mmproj() {
 [ -f "${MODEL_PATH}" ] || die "Model file not found: ${MODEL_PATH}"
 [ -x "${LLAMA_SERVER_BIN}" ] || die "llama-server binary not found or not executable: ${LLAMA_SERVER_BIN}"
 
+# Qwen3.5-35B-A3B on Pi5 16GB is memory-sensitive; use a smaller default context
+# unless the operator explicitly set POTATO_CTX_SIZE.
+if model_is_qwen35_a3b && [ -z "${POTATO_CTX_SIZE+x}" ]; then
+  CTX_SIZE="4096"
+  printf 'Applying Qwen3.5-35B-A3B runtime profile: ctx-size=%s\n' "${CTX_SIZE}" >&2
+fi
+
 if model_requires_mmproj; then
   pick_mmproj
 fi
@@ -267,6 +359,10 @@ if [ "${ENABLE_FLASH_ATTN}" = "1" ]; then
 fi
 if [ "${DISABLE_WARMUP}" = "1" ]; then
   extra_args+=(--no-warmup)
+fi
+if should_disable_mmap; then
+  extra_args+=(--no-mmap)
+  printf 'Applying no-mmap runtime profile for local weights (disable GGUF mmap streaming)\n' >&2
 fi
 if [ -n "${EXTRA_FLAGS}" ]; then
   # shellcheck disable=SC2206

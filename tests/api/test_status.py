@@ -57,6 +57,63 @@ def test_status_ready_when_model_exists_and_llama_healthy(client, runtime, monke
     assert body["llama_server"]["healthy"] is True
 
 
+def test_status_includes_large_model_warning_for_unsupported_pi(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("app.main._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
+    monkeypatch.setattr("app.main._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    with runtime.model_path.open("wb") as handle:
+        handle.seek((6 * 1024 * 1024 * 1024) - 1)
+        handle.write(b"x")
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "compatibility" in body
+    assert body["compatibility"]["device_class"] == "other-pi"
+    assert body["compatibility"]["warnings"]
+    assert body["compatibility"]["warnings"][0]["code"] == "large_model_unsupported_pi_warning"
+
+
+def test_status_includes_llama_runtime_payload(client, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr(
+        "app.main.build_llama_runtime_status",
+        lambda _runtime, app=None: {
+            "current": {"install_dir": "/opt/potato/llama"},
+            "available_bundles": [{"path": "/tmp/a", "name": "llama_server_bundle_x"}],
+            "switch": {"active": False, "error": None},
+        },
+    )
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "llama_runtime" in body
+    assert body["llama_runtime"]["current"]["install_dir"] == "/opt/potato/llama"
+    assert len(body["llama_runtime"]["available_bundles"]) == 1
+
+
+def test_status_includes_llama_memory_loading_setting(client):
+    response = client.get("/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert "llama_runtime" in body
+    assert "memory_loading" in body["llama_runtime"]
+    assert body["llama_runtime"]["memory_loading"]["mode"] in {"auto", "full_ram", "mmap"}
+
+
+def test_status_includes_large_model_override_setting(client):
+    response = client.get("/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert "llama_runtime" in body
+    assert "large_model_override" in body["llama_runtime"]
+    assert body["llama_runtime"]["large_model_override"]["enabled"] in {True, False}
+    assert "override_enabled" in body["compatibility"]
+
+
 def test_status_stays_ready_when_active_model_healthy_and_download_error_is_from_side_model(
     client,
     runtime,

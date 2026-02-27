@@ -146,6 +146,17 @@ Requires `sshpass` locally and defaults to `pi/raspberry`:
 ./tests/e2e/smoke_pi.sh
 ```
 
+## Qwen3.5-35B-A3B (Pi 5 16GB only)
+
+Current support target for large Qwen3.5 A3B GGUF models is:
+- Raspberry Pi 5 `16GB` only (validated path)
+
+Notes:
+- Keep the default bootstrap model (`Qwen3-VL-4B`) for first boot.
+- For Qwen3.5 A3B, use manual model upload (for example `Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf`).
+- Potato now shows warning-only compatibility notices for large models (default threshold `5 GiB`) on Pi 5 `8GB` and other Raspberry Pi devices.
+- If the bundled `llama-server` is too old for a newer GGUF, rebuild `llama.cpp` on the target Pi (aarch64) and package a fresh `llama_server_bundle_*` under `references/old_reference_design/llama_cpp_binary/` while keeping the previous bundle for rollback.
+
 ## Pi rollback only (no Mac rollback)
 
 Local helper to uninstall Potato services/files from Pi:
