@@ -64,6 +64,10 @@ test("seed mode defaults to random, toggles deterministic, persists, and control
 });
 
 test("shows staged prefill estimate before first token and clears after generation starts", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__POTATO_PREFILL_FINISH_DURATION_MS__ = 300;
+    window.__POTATO_PREFILL_FINISH_HOLD_MS__ = 350;
+  });
   await waitUntilReady(page);
 
   await page.locator("#userPrompt").fill("Give me one sentence about Potato OS.");
@@ -75,30 +79,86 @@ test("shows staged prefill estimate before first token and clears after generati
   await expect(assistantPending).toBeVisible();
   await expect(assistantPending).toContainText("Prompt processing");
   await expect(chip).toBeVisible();
-  await expect(chipText).toContainText(/Preparing prompt •|Generating\.\.\./);
+  await expect(chipText).toContainText(/Preparing prompt •/);
 
   const values = [];
-  for (let i = 0; i < 6; i += 1) {
-    await page.waitForTimeout(180);
-    if (await chip.isHidden()) {
+  let sawHundred = false;
+  for (let i = 0; i < 30; i += 1) {
+    await page.waitForTimeout(120);
+    if (!(await chip.isHidden())) {
+      const label = await chipText.innerText();
+      const match = label.match(/(\d+)%/);
+      if (match) {
+        const value = Number(match[1]);
+        values.push(value);
+        if (value === 100) {
+          sawHundred = true;
+        }
+      }
+    } else if (sawHundred) {
       break;
-    }
-    const label = await chipText.innerText();
-    const match = label.match(/(\d+)%/);
-    if (match) {
-      values.push(Number(match[1]));
     }
   }
 
   if (values.length > 0) {
     expect(values.every((value, index) => index === 0 || value >= values[index - 1])).toBeTruthy();
-    expect(Math.max(...values)).toBeLessThanOrEqual(99);
+    expect(Math.max(...values)).toBeLessThanOrEqual(100);
   }
+  expect(sawHundred).toBeTruthy();
 
   await expect(page.locator(".message-row.assistant .message-bubble").last()).toContainText("[fake-llama.cpp]");
   await expect(page.locator(".message-row.assistant .message-bubble.processing").last()).toBeHidden();
   await expect(page.locator(".message-meta").last()).toContainText(/TTFT \d+\.\d{2}s/);
   await expect(chip).toBeHidden();
+});
+
+test("renders assistant markdown as formatted html", async ({ page }) => {
+  await waitUntilReady(page);
+
+  await page.route("**/v1/chat/completions", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "chatcmpl-md",
+        object: "chat.completion",
+        created: 1771778048,
+        model: "qwen-local",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "# Linus Torvalds\n\nHere are the key facts:\n\n- **Linux** kernel\n- Open source\n\n`uname -a`",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        timings: {
+          prompt_ms: 1200,
+          predicted_ms: 800,
+          predicted_n: 12,
+          predicted_per_second: 15,
+        },
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 12,
+          total_tokens: 22,
+        },
+      }),
+    });
+  });
+
+  await page.locator("details.settings").evaluate((el) => { el.open = true; });
+  await page.locator("#stream").selectOption("false");
+  await page.locator("#userPrompt").fill("Format this nicely.");
+  await page.locator("#userPrompt").press("Enter");
+
+  const bubble = page.locator(".message-row.assistant .message-bubble").last();
+  await expect(bubble.locator("h1")).toHaveText("Linus Torvalds");
+  await expect(bubble.locator("li")).toHaveCount(2);
+  await expect(bubble.locator("strong")).toHaveText("Linux");
+  await expect(bubble.locator("code")).toHaveText("uname -a");
 });
 
 test("cancel during prefill stops cleanly and shows stopped reason", async ({ page }) => {
@@ -109,7 +169,7 @@ test("cancel during prefill stops cleanly and shows stopped reason", async ({ pa
 
   await expect(page.locator(".message-row.assistant .message-bubble.processing").last()).toContainText("Prompt processing");
   await expect(page.locator("#composerStatusChip")).toBeVisible();
-  await expect(page.locator("#composerStatusText")).toContainText(/Preparing prompt •|Generating\.\.\./);
+  await expect(page.locator("#composerStatusText")).toContainText(/Preparing prompt •/);
   await expect(page.locator("#sendBtn")).toHaveText("Stop");
 
   await page.locator("#cancelBtn").click();
@@ -120,6 +180,10 @@ test("cancel during prefill stops cleanly and shows stopped reason", async ({ pa
 });
 
 test("large image selection shows loading phases and optimization metadata", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__POTATO_PREFILL_FINISH_DURATION_MS__ = 300;
+    window.__POTATO_PREFILL_FINISH_HOLD_MS__ = 350;
+  });
   await waitUntilReady(page);
 
   await page.locator("#imageInput").setInputFiles("references/test-cat.jpg");
@@ -133,7 +197,21 @@ test("large image selection shows loading phases and optimization metadata", asy
 
   await expect(page.locator(".message-row.assistant .message-bubble.processing").last()).toContainText("Prompt processing");
   await expect(page.locator("#composerStatusChip")).toBeVisible();
-  await expect(page.locator("#composerStatusText")).toContainText(/Preparing prompt •|Generating\.\.\./);
+  await expect(page.locator("#composerStatusText")).toContainText(/Preparing prompt •/);
+  let sawHundred = false;
+  for (let i = 0; i < 30; i += 1) {
+    await page.waitForTimeout(120);
+    const chip = page.locator("#composerStatusChip");
+    if (await chip.isHidden()) {
+      if (sawHundred) break;
+      continue;
+    }
+    const label = await page.locator("#composerStatusText").innerText();
+    if (/100%/.test(label)) {
+      sawHundred = true;
+    }
+  }
+  expect(sawHundred).toBeTruthy();
   await expect(page.locator(".message-row.assistant .message-bubble").last()).toContainText("[fake-llama.cpp]");
   await expect(page.locator(".message-meta").last()).toContainText(/TTFT \d+\.\d{2}s/);
   await expect(page.locator("#composerStatusChip")).toBeHidden();

@@ -17,6 +17,7 @@ from urllib.parse import unquote, urlparse
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 try:
     from app.repositories import (
@@ -87,6 +88,7 @@ SYSTEM_STATIC_INFO_CACHE_TTL_SECONDS = 60
 SYSTEM_POWER_ESTIMATE_DISCLAIMER = (
     "Estimated from PMIC rails; excludes main 5V input current/peripherals/HATs and conversion losses."
 )
+WEB_ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 
 _SYSTEM_STATIC_INFO_CACHE: dict[str, Any] = {
     "expires_at_unix": 0,
@@ -3338,6 +3340,89 @@ CHAT_HTML = """<!doctype html>
       gap: 8px;
     }
 
+    .message-bubble.markdown-rendered {
+      white-space: normal;
+    }
+
+    .message-bubble.markdown-rendered > *:first-child {
+      margin-top: 0;
+    }
+
+    .message-bubble.markdown-rendered > *:last-child {
+      margin-bottom: 0;
+    }
+
+    .message-bubble.markdown-rendered p,
+    .message-bubble.markdown-rendered ul,
+    .message-bubble.markdown-rendered ol,
+    .message-bubble.markdown-rendered pre,
+    .message-bubble.markdown-rendered blockquote,
+    .message-bubble.markdown-rendered h1,
+    .message-bubble.markdown-rendered h2,
+    .message-bubble.markdown-rendered h3,
+    .message-bubble.markdown-rendered h4 {
+      margin: 0 0 0.8em;
+    }
+
+    .message-bubble.markdown-rendered h1,
+    .message-bubble.markdown-rendered h2,
+    .message-bubble.markdown-rendered h3,
+    .message-bubble.markdown-rendered h4 {
+      line-height: 1.2;
+      letter-spacing: -0.02em;
+    }
+
+    .message-bubble.markdown-rendered h1 {
+      font-size: 1.22em;
+    }
+
+    .message-bubble.markdown-rendered h2 {
+      font-size: 1.12em;
+    }
+
+    .message-bubble.markdown-rendered ul,
+    .message-bubble.markdown-rendered ol {
+      padding-left: 1.2em;
+    }
+
+    .message-bubble.markdown-rendered li + li {
+      margin-top: 0.28em;
+    }
+
+    .message-bubble.markdown-rendered code {
+      font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
+      font-size: 0.92em;
+      background: color-mix(in srgb, var(--panel-muted) 82%, transparent);
+      border-radius: 7px;
+      padding: 0.12em 0.38em;
+    }
+
+    .message-bubble.markdown-rendered pre {
+      overflow: auto;
+      padding: 0.8em 0.9em;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--panel-muted) 90%, transparent);
+      border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+    }
+
+    .message-bubble.markdown-rendered pre code {
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .message-bubble.markdown-rendered blockquote {
+      border-left: 3px solid color-mix(in srgb, var(--brand) 42%, var(--border));
+      padding-left: 0.85em;
+      color: var(--text-muted);
+    }
+
+    .message-bubble.markdown-rendered a {
+      color: inherit;
+      text-decoration-thickness: 0.08em;
+      text-underline-offset: 0.14em;
+    }
+
     .message-image-thumb {
       display: block;
       width: min(100%, 320px);
@@ -4341,6 +4426,8 @@ CHAT_HTML = """<!doctype html>
     </main>
   </div>
 
+  <script src="/assets/vendor/marked.umd.js"></script>
+  <script src="/assets/vendor/purify.min.js"></script>
   <script>
     const defaultSettings = {
       temperature: 0.7,
@@ -4362,6 +4449,15 @@ CHAT_HTML = """<!doctype html>
     const PREFILL_PROGRESS_TAIL_START = 89;
     const PREFILL_PROGRESS_FLOOR = 6;
     const PREFILL_TICK_MS = 180;
+    const PREFILL_FINISH_DURATION_MS = Math.max(
+      120,
+      Number(window.__POTATO_PREFILL_FINISH_DURATION_MS__ || 1000),
+    );
+    const PREFILL_FINISH_TICK_MS = 40;
+    const PREFILL_FINISH_HOLD_MS = Math.max(
+      80,
+      Number(window.__POTATO_PREFILL_FINISH_HOLD_MS__ || 220),
+    );
     const STATUS_CHIP_MIN_VISIBLE_MS = 260;
     const STATUS_POLL_TIMEOUT_MS = 3500;
     const RUNTIME_RECONNECT_INTERVAL_MS = 1200;
@@ -5228,15 +5324,13 @@ CHAT_HTML = """<!doctype html>
         etaMs: estimate.etaMs,
         progress: initialProgress,
         timerId: null,
+        finishTimerId: null,
+        finishPromise: null,
+        finishResolve: null,
       };
 
       setComposerActivity("Preparing prompt...");
-      setComposerStatusChip(`Preparing prompt • ${Math.round(initialProgress)}%`, { phase: "prefill" });
-      setMessageProcessingState(requestCtx?.assistantView, {
-        phase: "prefill",
-        label: "Prompt processing",
-        percent: initialProgress,
-      });
+      applyPrefillProgressState(requestCtx, initialProgress);
 
       activePrefillProgress.timerId = window.setInterval(() => {
         const active = activePrefillProgress;
@@ -5258,34 +5352,86 @@ CHAT_HTML = """<!doctype html>
         }
         active.progress = Math.max(active.progress, Math.min(PREFILL_PROGRESS_CAP, target));
         const percent = Math.round(Math.min(PREFILL_PROGRESS_CAP, active.progress));
-        setComposerStatusChip(`Preparing prompt • ${percent}%`, { phase: "prefill" });
-        setMessageProcessingState(requestCtx?.assistantView, {
-          phase: "prefill",
-          label: "Prompt processing",
-          percent,
-        });
+        applyPrefillProgressState(requestCtx, percent);
       }, PREFILL_TICK_MS);
     }
 
     function markPrefillGenerationStarted(requestCtx) {
       const active = activePrefillProgress;
-      if (!active || active.requestCtx !== requestCtx) return;
+      if (!active || active.requestCtx !== requestCtx) return Promise.resolve();
+      if (active.finishPromise) {
+        return active.finishPromise;
+      }
       if (active.timerId !== null) {
         window.clearInterval(active.timerId);
       }
       active.timerId = null;
-      setComposerActivity("Generating...");
-      setComposerStatusChip("Generating...", { phase: "generating" });
-      setMessageProcessingState(requestCtx?.assistantView, {
-        phase: "generating",
-        label: "Prompt processing",
+      const startPercent = Math.max(
+        PREFILL_PROGRESS_FLOOR,
+        Math.min(PREFILL_PROGRESS_CAP, Math.round(Number(active.progress) || PREFILL_PROGRESS_FLOOR)),
+      );
+      active.finishPromise = new Promise((resolve) => {
+        active.finishResolve = resolve;
+        const startedAtMs = performance.now();
+
+        const finalize = (cancelled = false) => {
+          if (active.finishTimerId !== null) {
+            window.clearTimeout(active.finishTimerId);
+            active.finishTimerId = null;
+          }
+          active.finishResolve = null;
+          active.finishPromise = null;
+          if (activePrefillProgress && activePrefillProgress.requestCtx === requestCtx) {
+            activePrefillProgress = null;
+          }
+          if (cancelled) {
+            resolve();
+            return;
+          }
+          applyPrefillProgressState(requestCtx, 100);
+          active.finishTimerId = window.setTimeout(() => {
+            if (active.finishTimerId !== null) {
+              window.clearTimeout(active.finishTimerId);
+              active.finishTimerId = null;
+            }
+            hideComposerStatusChip({ immediate: true });
+            resolve();
+          }, PREFILL_FINISH_HOLD_MS);
+        };
+
+        const step = () => {
+          if (requestCtx?.stoppedByUser === true) {
+            finalize(true);
+            return;
+          }
+          const elapsedMs = Math.max(0, performance.now() - startedAtMs);
+          const progress = Math.min(1, elapsedMs / PREFILL_FINISH_DURATION_MS);
+          const eased = 1 - Math.pow(1 - progress, 2);
+          const nextPercent = startPercent + ((100 - startPercent) * eased);
+          active.progress = nextPercent;
+          applyPrefillProgressState(requestCtx, nextPercent);
+          if (progress >= 1) {
+            finalize(false);
+            return;
+          }
+          active.finishTimerId = window.setTimeout(step, PREFILL_FINISH_TICK_MS);
+        };
+
+        step();
       });
+      return active.finishPromise;
     }
 
     function stopPrefillProgress(options = {}) {
       const active = activePrefillProgress;
       if (active && active.timerId !== null) {
         window.clearInterval(active.timerId);
+      }
+      if (active && active.finishTimerId !== null) {
+        window.clearTimeout(active.finishTimerId);
+      }
+      if (active && typeof active.finishResolve === "function") {
+        active.finishResolve();
       }
       activePrefillProgress = null;
       if (options.resetUi !== false) {
@@ -5322,6 +5468,16 @@ CHAT_HTML = """<!doctype html>
       savePrefillMetrics(metrics);
     }
 
+    function applyPrefillProgressState(requestCtx, percent) {
+      const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+      setComposerStatusChip(`Preparing prompt • ${safePercent}%`, { phase: "prefill" });
+      setMessageProcessingState(requestCtx?.assistantView, {
+        phase: "prefill",
+        label: "Prompt processing",
+        percent: safePercent,
+      });
+    }
+
     function setCancelEnabled(enabled) {
       const cancelBtn = document.getElementById("cancelBtn");
       if (!cancelBtn) return;
@@ -5330,14 +5486,42 @@ CHAT_HTML = """<!doctype html>
       cancelBtn.disabled = !show;
     }
 
+    let markdownRendererConfigured = false;
+
+    function renderAssistantMarkdownToHtml(text) {
+      const source = String(text || "");
+      if (!window.marked?.parse || !window.DOMPurify?.sanitize) {
+        return null;
+      }
+      if (!markdownRendererConfigured && typeof window.marked.setOptions === "function") {
+        window.marked.setOptions({
+          gfm: true,
+          breaks: true,
+        });
+        markdownRendererConfigured = true;
+      }
+      const renderedHtml = window.marked?.parse(source) || "";
+      return window.DOMPurify?.sanitize(renderedHtml, { USE_PROFILES: { html: true } }) || "";
+    }
+
     function renderBubbleContent(bubble, content, options = {}) {
       if (!bubble) return;
       const text = String(content || "");
       const imageDataUrl = typeof options.imageDataUrl === "string" ? options.imageDataUrl : "";
       const imageName = typeof options.imageName === "string" ? options.imageName : "uploaded image";
+      const role = String(options.role || "");
 
+      bubble.classList.remove("markdown-rendered");
       if (!imageDataUrl) {
         bubble.classList.remove("with-image");
+        if (role === "assistant") {
+          const sanitizedHtml = renderAssistantMarkdownToHtml(text);
+          if (sanitizedHtml !== null) {
+            bubble.classList.add("markdown-rendered");
+            bubble.innerHTML = sanitizedHtml;
+            return;
+          }
+        }
         bubble.textContent = text;
         return;
       }
@@ -5369,7 +5553,7 @@ CHAT_HTML = """<!doctype html>
 
       const bubble = document.createElement("div");
       bubble.className = "message-bubble";
-      renderBubbleContent(bubble, content, options);
+      renderBubbleContent(bubble, content, { ...options, role });
 
       const meta = document.createElement("div");
       meta.className = "message-meta";
@@ -5380,7 +5564,7 @@ CHAT_HTML = """<!doctype html>
       row.appendChild(stack);
       box.appendChild(row);
       box.scrollTop = box.scrollHeight;
-      return { row, stack, bubble, meta };
+      return { row, stack, bubble, meta, role };
     }
 
     function setMessageProcessingState(messageView, options = {}) {
@@ -5440,7 +5624,7 @@ CHAT_HTML = """<!doctype html>
       if (!bubble) return;
       bubble.classList.remove("processing");
       delete bubble.dataset.phase;
-      renderBubbleContent(bubble, content, options);
+      renderBubbleContent(bubble, content, { ...options, role: messageView?.role || options.role });
       const box = document.getElementById("messages");
       box.scrollTop = box.scrollHeight;
     }
@@ -7093,7 +7277,7 @@ CHAT_HTML = """<!doctype html>
               if (!requestCtx.generationStarted) {
                 requestCtx.generationStarted = true;
                 requestCtx.firstTokenLatencyMs = Math.max(0, performance.now() - requestStartMs);
-                markPrefillGenerationStarted(requestCtx);
+                await markPrefillGenerationStarted(requestCtx);
               }
               assistantText += delta;
               updateMessage(activeAssistantView, assistantText);
@@ -7134,7 +7318,7 @@ CHAT_HTML = """<!doctype html>
           if (!requestCtx.generationStarted) {
             requestCtx.generationStarted = true;
             requestCtx.firstTokenLatencyMs = Math.max(0, performance.now() - requestStartMs);
-            markPrefillGenerationStarted(requestCtx);
+            await markPrefillGenerationStarted(requestCtx);
           }
           const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);
           updateMessage(activeAssistantView, finalAssistantText);
@@ -7155,7 +7339,7 @@ CHAT_HTML = """<!doctype html>
         if (!requestCtx.generationStarted) {
           requestCtx.generationStarted = true;
           requestCtx.firstTokenLatencyMs = Math.max(0, performance.now() - requestStartMs);
-          markPrefillGenerationStarted(requestCtx);
+          await markPrefillGenerationStarted(requestCtx);
         }
         const message = body?.choices?.[0]?.message || {};
         const messageContent = typeof message?.content === "string" ? message.content.trim() : "";
@@ -7432,6 +7616,7 @@ CHAT_HTML = """<!doctype html>
 
 def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool | None = None) -> FastAPI:
     app = FastAPI(title="Potato Web", version="0.2")
+    app.mount("/assets", StaticFiles(directory=str(WEB_ASSETS_DIR)), name="assets")
     app.state.runtime = runtime or RuntimeConfig.from_env()
     app.state.llama_process = None
     app.state.model_download_task = None

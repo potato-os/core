@@ -208,6 +208,16 @@ def test_clean_image_build_artifacts_script_cleans_outputs_and_optional_caches()
     assert "find \"${target}\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +" in script
 
 
+def test_chat_html_loads_local_markdown_assets_and_renders_assistant_markdown():
+    assert '<script src="/assets/vendor/marked.umd.js"></script>' in CHAT_HTML
+    assert '<script src="/assets/vendor/purify.min.js"></script>' in CHAT_HTML
+    assert "function renderAssistantMarkdownToHtml(text)" in CHAT_HTML
+    assert "window.marked?.parse" in CHAT_HTML
+    assert "window.DOMPurify?.sanitize" in CHAT_HTML
+    assert "bubble.innerHTML = sanitizedHtml;" in CHAT_HTML
+    assert "renderBubbleContent(bubble, content, { ...options, role });" in CHAT_HTML
+
+
 def test_imager_manifest_generator_is_pi5_only():
     script = Path("bin/generate_imager_manifest.py").read_text(encoding="utf-8")
 
@@ -773,6 +783,8 @@ def test_chat_ui_shows_processing_indicator_while_generating():
     assert "function beginPrefillProgress(" in CHAT_HTML
     assert "function markPrefillGenerationStarted(" in CHAT_HTML
     assert "function stopPrefillProgress(" in CHAT_HTML
+    assert "const PREFILL_FINISH_DURATION_MS =" in CHAT_HTML
+    assert "const PREFILL_FINISH_HOLD_MS =" in CHAT_HTML
     assert "function setMessageProcessingState(" in CHAT_HTML
     assert "className = \"message-processing-shell\"" in CHAT_HTML
     assert "const PREFILL_PROGRESS_TAIL_START = 89;" in CHAT_HTML
@@ -785,7 +797,9 @@ def test_chat_ui_shows_processing_indicator_while_generating():
     assert "1 - Math.exp(-3.2 * Math.min(1.4, normalized))" in CHAT_HTML
     assert "Math.log1p(overtimeSeconds) * 2.6" in CHAT_HTML
     assert "Math.min(PREFILL_PROGRESS_CAP" in CHAT_HTML
-    assert 'setComposerStatusChip("Generating..."' in CHAT_HTML
+    assert 'applyPrefillProgressState(requestCtx, 100);' in CHAT_HTML
+    assert 'window.__POTATO_PREFILL_FINISH_DURATION_MS__' in CHAT_HTML
+    assert 'window.__POTATO_PREFILL_FINISH_HOLD_MS__' in CHAT_HTML
     assert 'setComposerActivity("Reading image...")' in CHAT_HTML
     assert "reader.onprogress" in CHAT_HTML
     assert "pendingImageReader.abort();" in CHAT_HTML
