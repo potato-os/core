@@ -18,6 +18,14 @@ This is the single source of truth for how we plan, execute, and close work.
 - Area: `area:ui`, `area:backend`, `area:pi-image`, `area:ops`
 - State: `blocked` (use when waiting on an external dependency)
 
+## Work Intake (Required)
+
+Before starting new implementation work, first check whether a relevant issue already exists in the GitHub issue tracker and `Potato OS` project.
+
+- If a matching ticket already exists, continue work under that ticket instead of creating a duplicate.
+- If no suitable ticket exists, create one before starting branch work.
+- Use the existing ticket state and scope as the source of truth for what should be built next.
+
 ## Ticket Lifecycle
 
 1. Create an issue (succinct and outcome-focused).
