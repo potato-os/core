@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import signal
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -38,13 +39,16 @@ try:
         _default_model_record,
         apply_model_chat_defaults,
         delete_model,
+        describe_model_storage,
         ensure_models_state,
         get_model_by_id,
         is_qwen35_a3b_filename,
         model_file_present,
         model_present,
+        move_model_to_ssd,
         register_model_url,
         resolve_active_model,
+        resolve_model_runtime_path,
         save_models_state,
         set_download_countdown_enabled,
         validate_model_url,
@@ -63,6 +67,7 @@ try:
         POWER_CALIBRATION_DEFAULT_A,
         POWER_CALIBRATION_DEFAULT_B,
         RuntimeConfig,
+        build_model_storage_target_status,
         build_large_model_compatibility,
         build_llama_large_model_override_status,
         build_llama_memory_loading_status,
@@ -82,6 +87,7 @@ try:
         get_large_model_warn_threshold_bytes,
         get_model_upload_max_bytes,
         get_monotonic_time,
+        get_preferred_model_offload_dir,
         install_llama_runtime_bundle,
         is_likely_too_large_for_storage,
         llama_memory_loading_no_mmap_env,
@@ -126,13 +132,16 @@ except ModuleNotFoundError:
         _default_model_record,
         apply_model_chat_defaults,
         delete_model,
+        describe_model_storage,
         ensure_models_state,
         get_model_by_id,
         is_qwen35_a3b_filename,
         model_file_present,
         model_present,
+        move_model_to_ssd,
         register_model_url,
         resolve_active_model,
+        resolve_model_runtime_path,
         save_models_state,
         set_download_countdown_enabled,
         validate_model_url,
@@ -151,6 +160,7 @@ except ModuleNotFoundError:
         POWER_CALIBRATION_DEFAULT_A,
         POWER_CALIBRATION_DEFAULT_B,
         RuntimeConfig,
+        build_model_storage_target_status,
         build_large_model_compatibility,
         build_llama_large_model_override_status,
         build_llama_memory_loading_status,
@@ -170,6 +180,7 @@ except ModuleNotFoundError:
         get_large_model_warn_threshold_bytes,
         get_model_upload_max_bytes,
         get_monotonic_time,
+        get_preferred_model_offload_dir,
         install_llama_runtime_bundle,
         is_likely_too_large_for_storage,
         llama_memory_loading_no_mmap_env,
@@ -258,18 +269,90 @@ def get_chat_repository(request: Request) -> ChatRepositoryManager:
 
 async def restart_managed_llama_process(app: FastAPI) -> tuple[bool, str]:
     proc = app.state.llama_process
-    if proc is None or proc.returncode is not None:
-        return False, "no_running_process"
+    terminated_running = False
 
-    proc.terminate()
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=3.0)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await asyncio.wait_for(proc.wait(), timeout=3.0)
+    if proc is not None and proc.returncode is None:
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await asyncio.wait_for(proc.wait(), timeout=3.0)
+        terminated_running = True
+
+    terminated_stale = await terminate_stray_llama_processes(app.state.runtime)
 
     app.state.llama_process = None
-    return True, "terminated_running_process"
+    if terminated_running and terminated_stale:
+        return True, "terminated_running_and_stale_processes"
+    if terminated_running:
+        return True, "terminated_running_process"
+    if terminated_stale:
+        return True, "terminated_stale_processes"
+    return False, "no_running_process"
+
+
+async def _list_llama_server_pids(runtime: RuntimeConfig) -> list[int]:
+    llama_server_bin = str(runtime.base_dir / "llama" / "bin" / "llama-server")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "pgrep",
+            "-f",
+            llama_server_bin,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return []
+    except OSError:
+        logger.warning("Could not inspect running llama-server processes", exc_info=True)
+        return []
+
+    stdout, _stderr = await proc.communicate()
+    if proc.returncode not in {0, 1}:
+        return []
+
+    pids: list[int] = []
+    for line in stdout.decode("utf-8", errors="replace").splitlines():
+        value = line.strip()
+        if not value:
+            continue
+        try:
+            pids.append(int(value))
+        except ValueError:
+            continue
+    return pids
+
+
+async def terminate_stray_llama_processes(runtime: RuntimeConfig, *, exclude_pids: set[int] | None = None) -> int:
+    excluded = {int(pid) for pid in (exclude_pids or set())}
+    terminated = 0
+
+    async def _kill_matching(sig: signal.Signals) -> int:
+        count = 0
+        for pid in await _list_llama_server_pids(runtime):
+            if pid in excluded:
+                continue
+            try:
+                os.kill(pid, sig)
+                count += 1
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                logger.warning("Permission denied terminating stray llama-server pid=%s", pid)
+            except OSError:
+                logger.warning("Could not terminate stray llama-server pid=%s", pid, exc_info=True)
+        return count
+
+    terminated += await _kill_matching(signal.SIGTERM)
+    if terminated:
+        await asyncio.sleep(0.2)
+
+    remaining = [pid for pid in await _list_llama_server_pids(runtime) if pid not in excluded]
+    if remaining:
+        terminated += await _kill_matching(signal.SIGKILL)
+
+    return terminated
 
 
 def _resolve_backend_active(
@@ -370,6 +453,9 @@ async def build_status(
     has_model = model_file_present(runtime, str(active_model["filename"]))
     download = read_download_progress(runtime)
     llama_healthy = False
+    storage_targets = build_model_storage_target_status(runtime)
+    ssd_models_dir_raw = storage_targets.get("ssd", {}).get("models_dir")
+    ssd_models_dir = Path(str(ssd_models_dir_raw)) if ssd_models_dir_raw else None
 
     if has_model:
         llama_healthy = await check_llama_health(runtime)
@@ -433,6 +519,7 @@ async def build_status(
                 "status": status_label,
                 "error": item.get("error"),
                 "is_active": model_id == models_state.get("active_model_id"),
+                "storage": describe_model_storage(runtime, filename, ssd_dir=ssd_models_dir),
                 **model_progress,
             }
         )
@@ -492,8 +579,10 @@ async def build_status(
         "model": {
             "filename": active_model_path.name,
             "active_model_id": models_state.get("active_model_id"),
+            "storage": describe_model_storage(runtime, active_model_path.name, ssd_dir=ssd_models_dir),
         },
         "models": models_payload,
+        "storage_targets": storage_targets,
         "download": download_payload,
         "upload": upload_snapshot,
         "llama_server": {
@@ -860,7 +949,7 @@ async def activate_model(
     state["active_model_id"] = model_id
     target["status"] = "ready"
     save_models_state(runtime, state)
-    runtime.model_path = _model_file_path(runtime, filename)
+    runtime.model_path = resolve_model_runtime_path(runtime, filename)
     restarted, _reason = await restart_managed_llama_process(app)
     return True, "activated", restarted
 
@@ -922,18 +1011,36 @@ async def purge_all_models(
         restarted, restart_reason = await restart_managed_llama_process(app)
 
         models_dir = runtime.base_dir / "models"
+        deleted_target_paths: set[Path] = set()
         if models_dir.exists():
             for path in models_dir.iterdir():
-                if not path.is_file():
-                    continue
                 try:
-                    file_size = max(0, int(path.stat().st_size))
+                    path_is_symlink = path.is_symlink()
+                except OSError:
+                    path_is_symlink = False
+                if not path.is_file() and not path_is_symlink:
+                    continue
+                target_path: Path | None = None
+                try:
+                    if path_is_symlink:
+                        target_path = path.resolve(strict=False)
+                        file_size = max(0, int(target_path.stat().st_size)) if target_path.exists() else 0
+                    else:
+                        file_size = max(0, int(path.stat().st_size))
                 except OSError:
                     file_size = 0
                 try:
                     path.unlink(missing_ok=True)
                     deleted_files += 1
                     freed_bytes += file_size
+                    if (
+                        target_path is not None
+                        and target_path not in deleted_target_paths
+                        and target_path.exists()
+                    ):
+                        target_path.unlink(missing_ok=True)
+                        deleted_target_paths.add(target_path)
+                        deleted_files += 1
                 except OSError:
                     logger.warning("Could not delete model file during purge: %s", path, exc_info=True)
 
@@ -1031,6 +1138,7 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                 llama_process = app.state.llama_process
                 if llama_process is None or llama_process.returncode is not None:
                     if runtime.start_llama_script.exists():
+                        await terminate_stray_llama_processes(runtime)
                         app.state.llama_process = await asyncio.create_subprocess_exec(
                             str(runtime.start_llama_script),
                             env=_runtime_env(runtime),
@@ -4007,6 +4115,8 @@ CHAT_HTML = """<!doctype html>
       ).toLowerCase();
       const modelFilename = String(statusPayload?.model?.filename || "").trim();
       const modelSuffix = modelFilename ? `:${modelFilename}` : "";
+      const activeModelStorage = String(statusPayload?.model?.storage?.location || "").toLowerCase();
+      const storageSuffix = activeModelStorage === "ssd" ? ":SSD" : "";
       const isReady = String(statusPayload?.state || "").toUpperCase() === "READY";
       const statusState = String(statusPayload?.state || "").toUpperCase();
       const hasModel = statusPayload?.model_present === true;
@@ -4023,15 +4133,15 @@ CHAT_HTML = """<!doctype html>
       } else if (isHealthy) {
         badge.classList.add("online");
         dot.classList.add("online");
-        label.textContent = `CONNECTED:llama.cpp${modelSuffix}`;
+        label.textContent = `CONNECTED:llama.cpp${modelSuffix}${storageSuffix}`;
       } else if (isLoading) {
         badge.classList.add("loading");
         dot.classList.add("loading");
-        label.textContent = `LOADING:llama.cpp${modelSuffix}`;
+        label.textContent = `LOADING:llama.cpp${modelSuffix}${storageSuffix}`;
       } else if (isFailed) {
         badge.classList.add("failed");
         dot.classList.add("failed");
-        label.textContent = `FAILED:llama.cpp${modelSuffix}`;
+        label.textContent = `FAILED:llama.cpp${modelSuffix}${storageSuffix}`;
       } else {
         badge.classList.add("offline");
         dot.classList.add("offline");
@@ -4777,6 +4887,7 @@ CHAT_HTML = """<!doctype html>
       const container = document.getElementById("modelsList");
       if (!container) return;
       const models = Array.isArray(statusPayload?.models) ? statusPayload.models : [];
+      const ssdAvailable = statusPayload?.storage_targets?.ssd?.available === true;
       container.replaceChildren();
       if (models.length === 0) {
         const empty = document.createElement("div");
@@ -4828,6 +4939,15 @@ CHAT_HTML = """<!doctype html>
           activeBtn.textContent = "Set active";
           actions.appendChild(activeBtn);
         }
+        if (ssdAvailable && model?.status === "ready" && model?.storage?.location !== "ssd") {
+          const ssdBtn = document.createElement("button");
+          ssdBtn.type = "button";
+          ssdBtn.className = "ghost-btn";
+          ssdBtn.dataset.action = "move-to-ssd";
+          ssdBtn.textContent = "Move to SSD";
+          ssdBtn.title = "Copy this model to the attached SSD and keep using it from there";
+          actions.appendChild(ssdBtn);
+        }
         if (String(model?.id || "").length > 0) {
           const deleteBtn = document.createElement("button");
           deleteBtn.type = "button";
@@ -4847,6 +4967,12 @@ CHAT_HTML = """<!doctype html>
           activeLabel.className = "runtime-compact";
           activeLabel.textContent = "Active model";
           actions.appendChild(activeLabel);
+        }
+        if (model?.storage?.location === "ssd") {
+          const storageLabel = document.createElement("span");
+          storageLabel.className = "runtime-compact";
+          storageLabel.textContent = "On SSD";
+          actions.appendChild(storageLabel);
         }
         if (model?.status === "downloading") {
           const progress = document.createElement("span");
@@ -4963,6 +5089,30 @@ CHAT_HTML = """<!doctype html>
         setComposerActivity("Switching active model...");
       } catch (err) {
         appendMessage("assistant", `Could not activate model: ${err}`);
+      } finally {
+        modelActionInFlight = false;
+        await pollStatus();
+      }
+    }
+
+    async function moveModelToSsd(modelId) {
+      if (!modelId) return;
+      if (modelActionInFlight) return;
+      const targetModel = findModelInLatestStatus(modelId);
+      const targetName = String(targetModel?.filename || "this model");
+      const targetLabel = String(latestStatus?.storage_targets?.ssd?.label || "attached SSD");
+      const confirmed = window.confirm(`Move ${targetName} onto ${targetLabel} now?`);
+      if (!confirmed) return;
+      modelActionInFlight = true;
+      try {
+        const { res, body } = await postJson("/internal/models/move-to-ssd", { model_id: modelId });
+        if (!res.ok) {
+          appendMessage("assistant", `Could not move model to SSD (${body?.reason || res.status}).`);
+          return;
+        }
+        setComposerActivity(`${targetName} moved to SSD.`);
+      } catch (err) {
+        appendMessage("assistant", `Could not move model to SSD: ${err}`);
       } finally {
         modelActionInFlight = false;
         await pollStatus();
@@ -5917,6 +6067,8 @@ CHAT_HTML = """<!doctype html>
         cancelActiveModelDownload(modelId);
       } else if (action === "activate") {
         activateSelectedModel(modelId);
+      } else if (action === "move-to-ssd") {
+        moveModelToSsd(modelId);
       } else if (action === "delete") {
         deleteSelectedModel(modelId);
       }
@@ -6432,6 +6584,65 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         return JSONResponse(
             status_code=status_code,
             content={"switched": switched, "reason": reason, "restarted": restarted, "model_id": model_id},
+        )
+
+    @app.post("/internal/models/move-to-ssd")
+    async def move_model_to_ssd_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        if not runtime_cfg.enable_orchestrator:
+            return JSONResponse(
+                status_code=409,
+                content={"moved": False, "reason": "orchestrator_disabled"},
+            )
+        payload = await request.json()
+        model_id = str(payload.get("model_id") or "").strip()
+        if not model_id:
+            return JSONResponse(status_code=400, content={"moved": False, "reason": "model_id_required"})
+        ssd_dir = get_preferred_model_offload_dir(runtime_cfg)
+        if ssd_dir is None:
+            return JSONResponse(
+                status_code=409,
+                content={"moved": False, "reason": "no_ssd_available", "model_id": model_id},
+            )
+        moved, reason, storage = await asyncio.to_thread(
+            move_model_to_ssd,
+            runtime_cfg,
+            model_id=model_id,
+            ssd_dir=ssd_dir,
+        )
+        if moved:
+            restarted = False
+            restart_reason = "not_required"
+            state = ensure_models_state(runtime_cfg)
+            if model_id == str(state.get("active_model_id") or ""):
+                model = get_model_by_id(state, model_id)
+                if isinstance(model, dict):
+                    runtime_cfg.model_path = resolve_model_runtime_path(runtime_cfg, str(model.get("filename") or ""))
+                restarted, restart_reason = await restart_managed_llama_process(app)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "moved": True,
+                    "reason": reason,
+                    "model_id": model_id,
+                    "storage": storage,
+                    "restarted": restarted,
+                    "restart_reason": restart_reason,
+                },
+            )
+        status_code = 404 if reason == "model_not_found" else 500 if reason == "move_failed" else 409
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "moved": False,
+                "reason": reason,
+                "model_id": model_id,
+                "storage": storage,
+                "restarted": False,
+                "restart_reason": "not_required",
+            },
         )
 
     @app.post("/internal/models/delete")

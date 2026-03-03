@@ -498,6 +498,206 @@ printf '%s\n' "$@" > "$ARGS_OUT"
     assert "--mmproj" not in args
 
 
+def test_start_llama_qwen35_vision_prefers_generic_mmproj_over_old_vl_projector(tmp_path: Path):
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model_path = model_dir / "Qwen3.5-2B-Q4_0.gguf"
+    model_path.write_bytes(b"gguf")
+    generic_mmproj = model_dir / "mmproj-F16.gguf"
+    old_vl_mmproj = model_dir / "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+    generic_mmproj.write_bytes(b"f16")
+    old_vl_mmproj.write_bytes(b"q8")
+
+    args_out = tmp_path / "args.txt"
+    _write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--mmproj" in args
+    assert str(generic_mmproj) in args
+    assert str(old_vl_mmproj) not in args
+
+
+def test_start_llama_qwen35_vision_symlinked_model_uses_mmproj_from_real_ssd_dir(tmp_path: Path):
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    managed_dir = tmp_path / "models"
+    managed_dir.mkdir()
+    ssd_dir = tmp_path / "mnt" / "potato-ssd" / "potato-models"
+    ssd_dir.mkdir(parents=True)
+    target_model_path = ssd_dir / "Qwen3.5-2B-Q4_0.gguf"
+    target_model_path.write_bytes(b"gguf")
+    model_path = managed_dir / target_model_path.name
+    model_path.symlink_to(target_model_path)
+    generic_mmproj = ssd_dir / "mmproj-F16.gguf"
+    generic_mmproj.write_bytes(b"f16")
+
+    args_out = tmp_path / "args.txt"
+    _write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--model" in args
+    assert str(model_path) in args
+    assert "--mmproj" in args
+    assert str(generic_mmproj) in args
+
+
+def test_start_llama_qwen35_vision_symlinked_model_prefers_real_dir_mmproj_over_managed_copy(tmp_path: Path):
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    managed_dir = tmp_path / "models"
+    managed_dir.mkdir()
+    ssd_dir = tmp_path / "mnt" / "potato-ssd" / "potato-models"
+    ssd_dir.mkdir(parents=True)
+    target_model_path = ssd_dir / "Qwen3.5-2B-Q4_0.gguf"
+    target_model_path.write_bytes(b"gguf")
+    model_path = managed_dir / target_model_path.name
+    model_path.symlink_to(target_model_path)
+    managed_mmproj = managed_dir / "mmproj-F16.gguf"
+    real_mmproj = ssd_dir / "mmproj-F16.gguf"
+    managed_mmproj.write_bytes(b"managed")
+    real_mmproj.write_bytes(b"real")
+
+    args_out = tmp_path / "args.txt"
+    _write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--mmproj" in args
+    assert str(real_mmproj) in args
+    assert str(managed_mmproj) not in args
+
+
+def test_start_llama_qwen35_vision_fails_without_generic_mmproj(tmp_path: Path):
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model_path = model_dir / "Qwen3.5-2B-Q4_0.gguf"
+    model_path.write_bytes(b"gguf")
+    old_vl_mmproj = model_dir / "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+    old_vl_mmproj.write_bytes(b"q8")
+
+    _write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "bin" / "start_llama.sh")],
+        check=False,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "No compatible mmproj found for Qwen3.5 vision model" in result.stderr
+
+
+def test_start_llama_qwen35_text_model_does_not_require_mmproj_by_default(tmp_path: Path):
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model_path = model_dir / "Qwen3.5-2B-Q4_0.gguf"
+    model_path.write_bytes(b"gguf")
+    generic_mmproj = model_dir / "mmproj-F16.gguf"
+    generic_mmproj.write_bytes(b"f16")
+
+    args_out = tmp_path / "args.txt"
+    _write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--model" in args
+    assert str(model_path) in args
+    assert "--mmproj" not in args
+
+
 def test_start_llama_script_uses_bundle_runtime_and_prefers_q8_mmproj(tmp_path: Path):
     runtime_dir = tmp_path / "llama"
     runtime_bin = runtime_dir / "bin"

@@ -550,9 +550,10 @@ def test_chat_ui_shows_llama_connection_indicator():
     assert "function updateLlamaIndicator(" in CHAT_HTML
     assert "statusPayload?.llama_server?.healthy" in CHAT_HTML
     assert "const modelSuffix = modelFilename ? `:${modelFilename}` : \"\";" in CHAT_HTML
-    assert "label.textContent = `CONNECTED:llama.cpp${modelSuffix}`" in CHAT_HTML
-    assert "label.textContent = `LOADING:llama.cpp${modelSuffix}`" in CHAT_HTML
-    assert "label.textContent = `FAILED:llama.cpp${modelSuffix}`" in CHAT_HTML
+    assert "const storageSuffix = activeModelStorage === \"ssd\" ? \":SSD\" : \"\";" in CHAT_HTML
+    assert "label.textContent = `CONNECTED:llama.cpp${modelSuffix}${storageSuffix}`" in CHAT_HTML
+    assert "label.textContent = `LOADING:llama.cpp${modelSuffix}${storageSuffix}`" in CHAT_HTML
+    assert "label.textContent = `FAILED:llama.cpp${modelSuffix}${storageSuffix}`" in CHAT_HTML
     assert 'label.textContent = "DISCONNECTED:llama.cpp"' in CHAT_HTML
     assert 'label.textContent = "CONNECTED:Fake Backend"' in CHAT_HTML
     assert 'dot.classList.add("online")' in CHAT_HTML
@@ -756,8 +757,13 @@ def test_chat_ui_compresses_large_images_before_send():
 
 def test_chat_ui_model_manager_supports_model_delete_action():
     assert "async function deleteSelectedModel(" in CHAT_HTML
+    assert "async function moveModelToSsd(" in CHAT_HTML
     assert "async function cancelActiveModelDownload(modelId = null)" in CHAT_HTML
     assert "/internal/models/delete" in CHAT_HTML
+    assert "/internal/models/move-to-ssd" in CHAT_HTML
+    assert "Move to SSD" in CHAT_HTML
+    assert "On SSD" in CHAT_HTML
+    assert "statusPayload?.storage_targets?.ssd?.available" in CHAT_HTML
     assert 'deleteBtn.dataset.action = "delete"' in CHAT_HTML
     assert "Delete model" in CHAT_HTML
     assert "Cancel + delete" in CHAT_HTML
