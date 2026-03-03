@@ -17,6 +17,9 @@ MMPROJ_PATH="${POTATO_MMPROJ_PATH:-}"
 AUTO_DOWNLOAD_MMPROJ="${POTATO_AUTO_DOWNLOAD_MMPROJ:-1}"
 HF_MMPROJ_REPO="${POTATO_HF_MMPROJ_REPO:-}"
 VISION_MODEL_NAME_PATTERN_VL="${POTATO_VISION_MODEL_NAME_PATTERN_VL:-1}"
+# Plain Qwen3.5 2B/4B filenames are ambiguous across text-only and multimodal GGUFs.
+# Keep this opt-in so text models are not forced into mmproj by default.
+VISION_MODEL_NAME_PATTERN_QWEN35="${POTATO_VISION_MODEL_NAME_PATTERN_QWEN35:-0}"
 
 CACHE_TYPE_K="${POTATO_CACHE_TYPE_K:-q8_0}"
 CACHE_TYPE_V="${POTATO_CACHE_TYPE_V:-q8_0}"
@@ -113,6 +116,40 @@ model_filename_lower() {
   basename "${MODEL_PATH}" | tr '[:upper:]' '[:lower:]'
 }
 
+resolve_path_portably() {
+  local candidate_path="${1:-}"
+  if [ -z "${candidate_path}" ]; then
+    return 1
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=False))' "${candidate_path}" 2>/dev/null && return 0
+  fi
+  printf '%s\n' "${candidate_path}"
+}
+
+managed_model_path() {
+  printf '%s/models/%s\n' "${POTATO_BASE_DIR}" "$(basename "${MODEL_PATH}")"
+}
+
+mmproj_search_dirs() {
+  local real_model_path=''
+  local managed_path=''
+  local real_dir=''
+  local managed_dir=''
+
+  real_model_path="$(resolve_path_portably "${MODEL_PATH}" || printf '%s\n' "${MODEL_PATH}")"
+  managed_path="$(managed_model_path)"
+  real_dir="$(dirname "${real_model_path}")"
+  managed_dir="$(dirname "${managed_path}")"
+
+  if [ -d "${real_dir}" ]; then
+    printf '%s\n' "${real_dir}"
+  fi
+  if [ -d "${managed_dir}" ] && [ "${managed_dir}" != "${real_dir}" ]; then
+    printf '%s\n' "${managed_dir}"
+  fi
+}
+
 model_is_qwen3vl() {
   local model_name
   model_name="$(model_filename_lower)"
@@ -131,11 +168,20 @@ model_has_vl_name() {
   [[ "${model_name}" == *vl* ]]
 }
 
+model_is_qwen35_vision() {
+  local model_name
+  model_name="$(model_filename_lower)"
+  [[ "${model_name}" == *qwen*3.5*2b* || "${model_name}" == *qwen*3.5*4b* ]]
+}
+
 model_requires_mmproj() {
-  if [ "${VISION_MODEL_NAME_PATTERN_VL}" != "1" ]; then
-    return 1
+  if [ "${VISION_MODEL_NAME_PATTERN_QWEN35}" = "1" ] && model_is_qwen35_vision; then
+    return 0
   fi
-  model_has_vl_name
+  if [ "${VISION_MODEL_NAME_PATTERN_VL}" = "1" ] && model_has_vl_name; then
+    return 0
+  fi
+  return 1
 }
 
 qwen3vl_size_tag() {
@@ -182,6 +228,14 @@ resolve_mmproj_repo() {
     printf 'Qwen/Qwen3-VL-4B-Instruct-GGUF'
     return 0
   fi
+  if [[ "${model_name}" == *qwen*3.5*2b* ]]; then
+    printf 'unsloth/Qwen3.5-2B-GGUF'
+    return 0
+  fi
+  if [[ "${model_name}" == *qwen*3.5*4b* ]]; then
+    printf 'unsloth/Qwen3.5-4B-GGUF'
+    return 0
+  fi
 
   printf 'Qwen/Qwen3-VL-4B-Instruct-GGUF'
 }
@@ -204,6 +258,12 @@ mmproj_filename_candidates() {
         "mmproj-Qwen3VL-${size_upper}-${variant}-Q8_0.gguf" \
         "mmproj-Qwen3VL-${size_upper}-${variant}-F16.gguf"
     fi
+  fi
+  if model_is_qwen35_vision; then
+    printf '%s\n' \
+      "mmproj-F16.gguf" \
+      "mmproj-BF16.gguf" \
+      "mmproj-F32.gguf"
   fi
 
   case "${repo}" in
@@ -261,6 +321,8 @@ pick_mmproj() {
   local candidate_base=''
   local q8_candidate=''
   local f16_candidate=''
+  local search_dir=''
+  local candidate=''
   local -a mmproj_candidates=()
   local -a compatible_candidates=()
   model_dir="$(dirname "${MODEL_PATH}")"
@@ -271,7 +333,13 @@ pick_mmproj() {
   fi
 
   shopt -s nullglob
-  mmproj_candidates=("${model_dir}"/mmproj*.gguf)
+  while read -r search_dir; do
+    [ -n "${search_dir}" ] || continue
+    for candidate in "${search_dir}"/mmproj*.gguf; do
+      [ -e "${candidate}" ] || continue
+      mmproj_candidates+=("${candidate}")
+    done
+  done < <(mmproj_search_dirs)
   shopt -u nullglob
 
   if model_is_qwen3vl; then
@@ -283,6 +351,23 @@ pick_mmproj() {
       return 0
     fi
     die "No mmproj file found in ${model_dir}. Set POTATO_MMPROJ_PATH or place mmproj*.gguf there."
+  fi
+
+  if model_is_qwen35_vision; then
+    for candidate in "${mmproj_candidates[@]}"; do
+      candidate_base="$(basename "${candidate}" | tr '[:upper:]' '[:lower:]')"
+      if [[ "${candidate_base}" == mmproj-f16.gguf || "${candidate_base}" == mmproj-bf16.gguf || "${candidate_base}" == mmproj-f32.gguf || "${candidate_base}" == *qwen*3.5*mmproj* ]]; then
+        compatible_candidates+=("${candidate}")
+      fi
+    done
+    if [ "${#compatible_candidates[@]}" -gt 0 ]; then
+      mmproj_candidates=("${compatible_candidates[@]}")
+      compatible_candidates=()
+    elif [ "${AUTO_DOWNLOAD_MMPROJ}" = "1" ] && download_mmproj; then
+      return 0
+    else
+      die "No compatible mmproj found for Qwen3.5 vision model (model: $(basename "${MODEL_PATH}"))."
+    fi
   fi
 
   if [ -n "${model_size_tag}" ]; then

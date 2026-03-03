@@ -1365,6 +1365,92 @@ def get_free_storage_bytes(runtime: RuntimeConfig) -> int | None:
         return None
 
 
+def get_preferred_model_offload_dir(runtime: RuntimeConfig) -> Path | None:
+    if psutil is None:
+        return None
+
+    try:
+        partitions = list(psutil.disk_partitions(all=False))
+    except Exception:
+        return None
+
+    def _candidate_rank(device: str) -> int:
+        lowered = device.lower()
+        if lowered.startswith("/dev/nvme"):
+            return 0
+        if lowered.startswith("/dev/sd"):
+            return 1
+        return 99
+
+    ranked = sorted(
+        (
+            partition
+            for partition in partitions
+            if str(getattr(partition, "device", "") or "").strip()
+            and str(getattr(partition, "mountpoint", "") or "").strip()
+        ),
+        key=lambda part: (_candidate_rank(str(getattr(part, "device", "") or "")), str(getattr(part, "mountpoint", ""))),
+    )
+
+    for partition in ranked:
+        device = str(getattr(partition, "device", "") or "").strip()
+        mountpoint = Path(str(getattr(partition, "mountpoint", "") or "").strip())
+        opts = str(getattr(partition, "opts", "") or "").lower()
+        if _candidate_rank(device) >= 99:
+            continue
+        if str(mountpoint) in {"/", "/boot", "/boot/firmware"}:
+            continue
+        if "rw" not in {part.strip() for part in opts.split(",") if part.strip()}:
+            continue
+        try:
+            if not mountpoint.exists() or not mountpoint.is_dir():
+                continue
+        except OSError:
+            continue
+        if not os.access(mountpoint, os.W_OK | os.X_OK):
+            continue
+        target_dir = mountpoint / "potato-models"
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        if os.access(target_dir, os.W_OK | os.X_OK):
+            return target_dir
+    return None
+
+
+def build_model_storage_target_status(runtime: RuntimeConfig) -> dict[str, Any]:
+    payload = {
+        "ssd": {
+            "available": False,
+            "mount_point": None,
+            "models_dir": None,
+            "free_bytes": 0,
+            "label": "No writable SSD detected",
+        }
+    }
+    target_dir = get_preferred_model_offload_dir(runtime)
+    if target_dir is None:
+        return payload
+
+    free_bytes = 0
+    if psutil is not None:
+        try:
+            usage = psutil.disk_usage(str(target_dir))
+            free_bytes = int(max(0, usage.free))
+        except Exception:
+            free_bytes = 0
+
+    payload["ssd"] = {
+        "available": True,
+        "mount_point": str(target_dir.parent),
+        "models_dir": str(target_dir),
+        "free_bytes": free_bytes,
+        "label": "Mounted SSD",
+    }
+    return payload
+
+
 def compute_required_download_bytes(total_bytes: int, partial_bytes: int = 0) -> int:
     required = max(0, int(total_bytes) - max(0, int(partial_bytes)))
     return int(required)
@@ -1466,4 +1552,3 @@ async def request_llama_slot_cancel(runtime: RuntimeConfig) -> tuple[bool, str]:
 
 def get_monotonic_time() -> float:
     return asyncio.get_running_loop().time()
-

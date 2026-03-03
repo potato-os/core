@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import httpx
+import types
 import pytest
 import app.runtime_state as runtime_state
 
@@ -9,6 +10,7 @@ from app.main import compute_auto_download_remaining_seconds, should_auto_start_
 from app.runtime_state import (
     LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
     RuntimeConfig,
+    build_model_storage_target_status,
     build_power_estimate_status,
     build_large_model_compatibility,
     check_llama_health,
@@ -18,6 +20,7 @@ from app.runtime_state import (
     decode_throttled_bits,
     fetch_remote_content_length_bytes,
     get_large_model_warn_threshold_bytes,
+    get_preferred_model_offload_dir,
     is_likely_too_large_for_storage,
     normalize_power_calibration_settings,
     _apply_power_calibration,
@@ -89,6 +92,47 @@ def test_read_download_progress_preserves_specific_error(runtime):
 
     assert progress["error"] == "insufficient_storage"
     assert progress["percent"] == 70
+
+
+def test_get_preferred_model_offload_dir_prefers_writable_nvme_mount(runtime, monkeypatch):
+    mountpoint = runtime.base_dir / "media" / "ssd"
+    mountpoint.mkdir(parents=True)
+    fake_psutil = types.SimpleNamespace(
+        disk_partitions=lambda all=False: [
+            types.SimpleNamespace(
+                device="/dev/nvme0n1p2",
+                mountpoint=str(mountpoint),
+                fstype="ext4",
+                opts="rw,relatime",
+            )
+        ],
+        disk_usage=lambda _path: types.SimpleNamespace(total=1000, used=100, free=900, percent=10.0),
+    )
+    monkeypatch.setattr("app.runtime_state.psutil", fake_psutil)
+
+    offload_dir = get_preferred_model_offload_dir(runtime)
+
+    assert offload_dir == mountpoint / "potato-models"
+    assert offload_dir.exists()
+
+
+def test_build_model_storage_target_status_reports_unavailable_without_writable_ssd(runtime, monkeypatch):
+    fake_psutil = types.SimpleNamespace(
+        disk_partitions=lambda all=False: [
+            types.SimpleNamespace(
+                device="/dev/mmcblk0p2",
+                mountpoint="/",
+                fstype="ext4",
+                opts="rw,relatime",
+            )
+        ]
+    )
+    monkeypatch.setattr("app.runtime_state.psutil", fake_psutil)
+
+    status = build_model_storage_target_status(runtime)
+
+    assert status["ssd"]["available"] is False
+    assert status["ssd"]["mount_point"] is None
 
 
 @pytest.mark.anyio

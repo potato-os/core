@@ -591,6 +591,45 @@ test("fake backend ready state shows connected badge", async ({ page }) => {
   await expect(page.locator("#statusBadge")).toHaveClass(/online/);
 });
 
+test("llama ready state shows SSD marker in connected badge for SSD-backed active model", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "READY",
+        model_present: true,
+        model: {
+          filename: "Qwen3.5-2B-Q4_0.gguf",
+          active_model_id: "qwen3-5-2b-q4-0",
+          storage: {
+            location: "ssd",
+            is_symlink: true,
+            actual_path: "/mnt/potato-ssd/potato-models/Qwen3.5-2B-Q4_0.gguf",
+          },
+        },
+        llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        download: {
+          bytes_total: 0,
+          bytes_downloaded: 0,
+          percent: 0,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: null,
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.locator("#statusLabel")).toHaveText("CONNECTED:llama.cpp:Qwen3.5-2B-Q4_0.gguf:SSD");
+  await expect(page.locator("#statusBadge")).toHaveClass(/online/);
+});
+
 test("llama booting with model present shows loading badge", async ({ page }) => {
   await page.route("**/status", async (route) => {
     await route.fulfill({
@@ -934,4 +973,105 @@ test("model upload sends file with filename header", async ({ page }) => {
   await page.locator("#uploadModelBtn").click();
   await expect.poll(() => sawUpload).toBeTruthy();
   expect(uploadName).toBe("tiny.gguf");
+});
+
+test("model manager shows move-to-ssd action when SSD is available and posts the model id", async ({ page }) => {
+  let movedModelId = "";
+  let models = [
+    {
+      id: "local-model",
+      filename: "vision-ready.gguf",
+      source_url: null,
+      source_type: "local_file",
+      status: "ready",
+      error: null,
+      is_active: true,
+      bytes_total: 0,
+      bytes_downloaded: 0,
+      percent: 0,
+      storage: {
+        location: "local",
+        is_symlink: false,
+        actual_path: "/opt/potato/models/vision-ready.gguf",
+      },
+    },
+  ];
+
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "READY",
+        model_present: true,
+        model: { filename: "vision-ready.gguf", active_model_id: "local-model" },
+        models,
+        storage_targets: {
+          ssd: {
+            available: true,
+            mount_point: "/media/pi/ssd",
+            models_dir: "/media/pi/ssd/potato-models",
+            free_bytes: 64000000000,
+            label: "Mounted SSD",
+          },
+        },
+        upload: { active: false, model_id: null, bytes_total: 0, bytes_received: 0, percent: 0, error: null },
+        download: {
+          bytes_total: 0,
+          bytes_downloaded: 0,
+          percent: 0,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: null,
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+          countdown_enabled: true,
+          current_model_id: null,
+        },
+        llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        system: { available: false, cpu_cores_percent: [] },
+      }),
+    });
+  });
+
+  await page.route("**/internal/models/move-to-ssd", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    movedModelId = body.model_id;
+    models = [
+      {
+        ...models[0],
+        storage: {
+          location: "ssd",
+          is_symlink: true,
+          actual_path: "/media/pi/ssd/potato-models/vision-ready.gguf",
+        },
+      },
+    ];
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        moved: true,
+        reason: "moved",
+        model_id: body.model_id,
+        storage: models[0].storage,
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page.locator("details.settings").evaluate((el) => { el.open = true; });
+
+  page.once("dialog", async (dialog) => {
+    await dialog.accept();
+  });
+  await expect(
+    page.locator('#modelsList .model-row[data-model-id="local-model"] button[data-action="move-to-ssd"]')
+  ).toHaveText("Move to SSD");
+  await page.locator('#modelsList .model-row[data-model-id="local-model"] button[data-action="move-to-ssd"]').click();
+
+  await expect.poll(() => movedModelId).toBe("local-model");
+  await expect(page.locator('#modelsList .model-row[data-model-id="local-model"]')).toContainText("On SSD");
 });

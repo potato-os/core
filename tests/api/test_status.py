@@ -114,6 +114,45 @@ def test_status_includes_large_model_override_setting(client):
     assert "override_enabled" in body["compatibility"]
 
 
+def test_status_includes_storage_targets_payload(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.main.build_model_storage_target_status",
+        lambda _runtime: {
+            "ssd": {
+                "available": True,
+                "mount_point": "/media/pi/ssd",
+                "models_dir": "/media/pi/ssd/potato-models",
+                "free_bytes": 123456,
+                "label": "Mounted SSD",
+            }
+        },
+    )
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["storage_targets"]["ssd"]["available"] is True
+    assert body["storage_targets"]["ssd"]["models_dir"] == "/media/pi/ssd/potato-models"
+
+
+def test_status_includes_active_model_storage_details(client, runtime):
+    ssd_dir = runtime.base_dir / "media" / "ssd" / "potato-models"
+    ssd_dir.mkdir(parents=True)
+    target = ssd_dir / runtime.model_path.name
+    target.write_bytes(b"gguf")
+    if runtime.model_path.exists():
+        runtime.model_path.unlink()
+    runtime.model_path.symlink_to(target)
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"]["storage"]["location"] == "ssd"
+    assert body["model"]["storage"]["is_symlink"] is True
+
+
 def test_status_includes_platform_version_and_power_fields_under_system(client):
     response = client.get("/status")
     assert response.status_code == 200
@@ -505,7 +544,7 @@ def test_cancel_llama_returns_no_restart_when_slot_action_unavailable(runtime, m
     assert body["reason"] == "slot_action_unavailable"
 
 
-def test_restart_llama_terminates_running_process_when_enabled(runtime):
+def test_restart_llama_terminates_running_process_when_enabled(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
     app.dependency_overrides[get_runtime] = lambda: runtime
@@ -527,6 +566,11 @@ def test_restart_llama_terminates_running_process_when_enabled(runtime):
     dummy = _DummyProc()
     app.state.llama_process = dummy
 
+    async def _no_stale(_runtime):
+        return 0
+
+    monkeypatch.setattr("app.main.terminate_stray_llama_processes", _no_stale)
+
     with TestClient(app) as test_client:
         response = test_client.post("/internal/restart-llama")
 
@@ -535,3 +579,23 @@ def test_restart_llama_terminates_running_process_when_enabled(runtime):
     assert body["restarted"] is True
     assert dummy.terminated is True
     assert dummy.waited is True
+
+
+def test_restart_llama_terminates_stale_processes_when_no_managed_process(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+    app.state.llama_process = None
+
+    async def _terminate_stale(_runtime):
+        return 1
+
+    monkeypatch.setattr("app.main.terminate_stray_llama_processes", _terminate_stale)
+
+    with TestClient(app) as test_client:
+        response = test_client.post("/internal/restart-llama")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["restarted"] is True
+    assert body["reason"] == "terminated_stale_processes"
