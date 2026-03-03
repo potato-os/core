@@ -553,6 +553,38 @@ def test_move_model_to_ssd_rejects_when_no_ssd_target(runtime, monkeypatch):
     assert response.json()["reason"] == "no_ssd_available"
 
 
+def test_move_model_to_ssd_uses_worker_thread(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+    runtime.model_path.write_bytes(b"default-model")
+    ssd_dir = runtime.base_dir / "media" / "ssd" / "potato-models"
+    ssd_dir.mkdir(parents=True)
+    monkeypatch.setattr("app.main.get_preferred_model_offload_dir", lambda _runtime: ssd_dir)
+
+    calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+    def _fake_move(_runtime, *, model_id: str, ssd_dir):
+        return True, "moved", {"location": "ssd", "actual_path": str(ssd_dir / "Qwen3-VL-4B-Instruct-Q4_K_M.gguf")}
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        calls.append((func, args, kwargs))
+        return func(*args, **kwargs)
+
+    async def _fake_restart(_app):
+        return False, "not_required"
+
+    monkeypatch.setattr("app.main.move_model_to_ssd", _fake_move)
+    monkeypatch.setattr("app.main.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr("app.main.restart_managed_llama_process", _fake_restart)
+
+    with TestClient(app) as client:
+        response = client.post("/internal/models/move-to-ssd", json={"model_id": "default"})
+
+    assert response.status_code == 200
+    assert calls == [(_fake_move, (runtime,), {"model_id": "default", "ssd_dir": ssd_dir})]
+
+
 def test_delete_model_cancels_active_download_for_same_model(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
@@ -687,6 +719,32 @@ def test_purge_models_clears_files_and_model_metadata(runtime):
     assert status_body["download"]["error"] is None
     assert status_body["download"]["bytes_total"] == 0
     assert status_body["download"]["bytes_downloaded"] == 0
+
+
+def test_purge_models_removes_ssd_offloaded_targets(runtime):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    ssd_dir = runtime.base_dir / "media" / "ssd" / "potato-models"
+    ssd_dir.mkdir(parents=True)
+    ssd_target = ssd_dir / runtime.model_path.name
+
+    with TestClient(app) as client:
+        ssd_target.write_bytes(b"default-model")
+        if runtime.model_path.exists():
+            runtime.model_path.unlink()
+        runtime.model_path.symlink_to(ssd_target)
+
+        response = client.post("/internal/models/purge", json={"reset_bootstrap_flag": True})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["purged"] is True
+    assert body["deleted_files"] >= 2
+    assert body["freed_bytes"] >= len(b"default-model")
+    assert not runtime.model_path.exists()
+    assert not ssd_target.exists()
 
 
 def test_upload_write_failure_clears_active_state_and_allows_retry(runtime, monkeypatch):

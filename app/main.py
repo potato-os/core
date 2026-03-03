@@ -1011,18 +1011,36 @@ async def purge_all_models(
         restarted, restart_reason = await restart_managed_llama_process(app)
 
         models_dir = runtime.base_dir / "models"
+        deleted_target_paths: set[Path] = set()
         if models_dir.exists():
             for path in models_dir.iterdir():
-                if not path.is_file():
-                    continue
                 try:
-                    file_size = max(0, int(path.stat().st_size))
+                    path_is_symlink = path.is_symlink()
+                except OSError:
+                    path_is_symlink = False
+                if not path.is_file() and not path_is_symlink:
+                    continue
+                target_path: Path | None = None
+                try:
+                    if path_is_symlink:
+                        target_path = path.resolve(strict=False)
+                        file_size = max(0, int(target_path.stat().st_size)) if target_path.exists() else 0
+                    else:
+                        file_size = max(0, int(path.stat().st_size))
                 except OSError:
                     file_size = 0
                 try:
                     path.unlink(missing_ok=True)
                     deleted_files += 1
                     freed_bytes += file_size
+                    if (
+                        target_path is not None
+                        and target_path not in deleted_target_paths
+                        and target_path.exists()
+                    ):
+                        target_path.unlink(missing_ok=True)
+                        deleted_target_paths.add(target_path)
+                        deleted_files += 1
                 except OSError:
                     logger.warning("Could not delete model file during purge: %s", path, exc_info=True)
 
@@ -6588,7 +6606,12 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 status_code=409,
                 content={"moved": False, "reason": "no_ssd_available", "model_id": model_id},
             )
-        moved, reason, storage = move_model_to_ssd(runtime_cfg, model_id=model_id, ssd_dir=ssd_dir)
+        moved, reason, storage = await asyncio.to_thread(
+            move_model_to_ssd,
+            runtime_cfg,
+            model_id=model_id,
+            ssd_dir=ssd_dir,
+        )
         if moved:
             restarted = False
             restart_reason = "not_required"
