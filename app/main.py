@@ -1744,6 +1744,7 @@ CHAT_HTML = """<!doctype html>
       display: flex;
       flex-direction: column;
       gap: 6px;
+      position: relative;
     }
 
     .message-bubble {
@@ -1754,6 +1755,74 @@ CHAT_HTML = """<!doctype html>
       line-height: 1.5;
       font-size: 15px;
       box-shadow: 0 3px 14px rgba(16, 23, 42, 0.06);
+      cursor: text;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .message-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      align-self: flex-end;
+      margin-top: -2px;
+      opacity: 0;
+      transform: translateY(-2px);
+      pointer-events: none;
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+
+    .message-row.message-row-actions-hidden .message-actions {
+      display: none !important;
+    }
+
+    .message-stack:hover .message-actions,
+    .message-stack:focus-within .message-actions,
+    .message-actions[data-visible="true"] {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    .message-action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      color: var(--text-muted);
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+      transition: transform 120ms ease, color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+    }
+
+    .message-action-btn:hover,
+    .message-action-btn:focus-visible {
+      color: var(--text);
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+      background: color-mix(in srgb, var(--panel-muted) 82%, transparent);
+      transform: translateY(-1px);
+      outline: none;
+    }
+
+    .message-action-btn[data-copied="true"] {
+      color: #0f766e;
+      border-color: rgba(16, 163, 127, 0.38);
+      background: rgba(16, 163, 127, 0.12);
+    }
+
+    .message-action-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      pointer-events: none;
     }
 
     .message-bubble.processing {
@@ -1926,6 +1995,14 @@ CHAT_HTML = """<!doctype html>
       font-size: 12.5px;
       line-height: 1.35;
       padding: 0 4px;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .message-bubble *,
+    .message-text {
+      user-select: text;
+      -webkit-user-select: text;
     }
 
     .message-row.user .message-meta {
@@ -2004,43 +2081,6 @@ CHAT_HTML = """<!doctype html>
       font-size: 13px;
       cursor: pointer;
       transition: transform 120ms ease, border-color 120ms ease, background-color 120ms ease, opacity 120ms ease;
-    }
-
-    .thinking-toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      border: 1px solid rgba(59, 130, 246, 0.38);
-      background: color-mix(in srgb, #2563eb 10%, var(--panel-muted));
-      color: color-mix(in srgb, #2563eb 72%, var(--text) 28%);
-      border-radius: 999px;
-      padding: 7px 13px;
-      font-size: 13px;
-      font-weight: 650;
-      cursor: pointer;
-      transition: transform 120ms ease, border-color 120ms ease, background-color 120ms ease, opacity 120ms ease;
-      user-select: none;
-    }
-
-    .thinking-toggle:hover {
-      transform: translateY(-1px);
-    }
-
-    .thinking-toggle.off {
-      border-color: var(--border);
-      background: var(--panel-muted);
-      color: var(--text-muted);
-      font-weight: 560;
-    }
-
-    .thinking-toggle-icon {
-      display: inline-flex;
-      width: 15px;
-      height: 15px;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      line-height: 1;
     }
 
     .attach-btn {
@@ -2210,22 +2250,7 @@ CHAT_HTML = """<!doctype html>
       100% { transform: translateX(-18%); }
     }
 
-    .settings {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--panel);
-      padding: 10px 12px 12px;
-      box-shadow: var(--shadow-soft);
-    }
-
-    .settings summary {
-      cursor: pointer;
-      font-weight: 600;
-      color: var(--text);
-    }
-
     .settings-grid {
-      margin-top: 12px;
       display: grid;
       gap: 12px;
       grid-template-columns: 1fr;
@@ -2348,6 +2373,187 @@ CHAT_HTML = """<!doctype html>
 
     .settings-subdetails .settings-action-row {
       margin-top: 4px;
+    }
+
+    .sidebar-actions {
+      margin-top: 10px;
+    }
+
+    .sidebar-settings-btn {
+      width: 100%;
+      justify-content: center;
+      font-weight: 650;
+    }
+
+    body.settings-modal-open,
+    body.edit-modal-open {
+      overflow: hidden;
+    }
+
+    .settings-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      background: rgba(15, 23, 42, 0.48);
+      backdrop-filter: blur(4px);
+      z-index: 42;
+    }
+
+    .settings-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      z-index: 43;
+      pointer-events: none;
+    }
+
+    body.settings-modal-open .settings-backdrop,
+    body.edit-modal-open .edit-backdrop {
+      display: block;
+    }
+
+    body.settings-modal-open .settings-modal,
+    body.edit-modal-open .edit-modal {
+      display: grid;
+    }
+
+    .settings-modal-shell {
+      width: min(1040px, calc(100vw - 32px));
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 18px;
+      pointer-events: auto;
+    }
+
+    .settings-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+
+    .settings-modal-title {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.1;
+    }
+
+    .settings-modal-note {
+      margin: 6px 0 0;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .settings-close-btn {
+      flex-shrink: 0;
+    }
+
+    .edit-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      background: rgba(15, 23, 42, 0.54);
+      backdrop-filter: blur(4px);
+      z-index: 44;
+    }
+
+    .edit-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      z-index: 45;
+      pointer-events: none;
+    }
+
+    .edit-modal-shell {
+      width: min(760px, calc(100vw - 32px));
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      pointer-events: auto;
+    }
+
+    .edit-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .edit-modal-title {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.1;
+    }
+
+    .edit-modal-note {
+      margin: 6px 0 0;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text-muted);
+    }
+
+    .edit-modal-input {
+      width: 100%;
+      min-height: 200px;
+      max-height: 52vh;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      background: var(--composer-bg);
+      color: var(--text);
+      font: inherit;
+      font-size: 16px;
+      line-height: 1.5;
+      padding: 18px 20px;
+      outline: none;
+      box-sizing: border-box;
+    }
+
+    .edit-modal-input:focus {
+      border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+    }
+
+    .edit-modal-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .edit-modal-hint {
+      font-size: 12.5px;
+      line-height: 1.4;
+      color: var(--text-muted);
+    }
+
+    .edit-modal-action-row {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .edit-send-btn {
+      min-width: 118px;
     }
 
     .model-row-actions {
@@ -2542,10 +2748,6 @@ CHAT_HTML = """<!doctype html>
       font-size: 16px;
     }
 
-    .settings {
-      box-shadow: none;
-    }
-
     :focus-visible {
       outline: 2px solid var(--focus);
       outline-offset: 2px;
@@ -2572,6 +2774,49 @@ CHAT_HTML = """<!doctype html>
       }
       body.sidebar-open .sidebar {
         transform: translateX(0);
+      }
+      .settings-modal {
+        padding: 12px;
+      }
+      .settings-modal-shell {
+        width: min(100vw - 16px, 100%);
+        max-height: calc(100vh - 16px);
+        padding: 14px;
+        border-radius: 16px;
+      }
+      .settings-modal-header {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .edit-modal {
+        padding: 12px;
+      }
+      .edit-modal-shell {
+        width: min(100vw - 16px, 100%);
+        max-height: calc(100vh - 16px);
+        padding: 14px;
+        border-radius: 18px;
+      }
+      .edit-modal-header {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .edit-modal-input {
+        min-height: 160px;
+        border-radius: 18px;
+        padding: 15px 16px;
+      }
+      .edit-modal-actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .edit-modal-action-row {
+        width: 100%;
+        justify-content: stretch;
+      }
+      .edit-modal-action-row .ghost-btn,
+      .edit-modal-action-row .primary-btn {
+        flex: 1 1 0;
       }
       .chat-shell {
         padding: 12px;
@@ -2672,9 +2917,76 @@ CHAT_HTML = """<!doctype html>
           </div>
         </div>
       </section>
-      <details class="settings">
-        <summary>Settings</summary>
-        <div class="settings-grid">
+      <div class="sidebar-actions">
+        <button id="settingsOpenBtn" class="ghost-btn sidebar-settings-btn" type="button">Settings</button>
+      </div>
+    </aside>
+
+    <main class="chat-shell">
+      <header class="chat-header">
+        <div class="header-primary">
+          <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Open sidebar" aria-controls="sidebarPanel" aria-expanded="false" hidden>
+            <span class="bars" aria-hidden="true">≡</span>
+          </button>
+          <span class="chat-brand-mark" aria-hidden="true">🥔</span>
+          <h1 aria-label="🥔 Potato Chat">Potato Chat</h1>
+        </div>
+        <div class="header-actions">
+          <span id="statusBadge" class="badge offline">
+            <span id="statusDot" class="indicator-dot offline" aria-hidden="true"></span>
+            <span id="statusLabel">DISCONNECTED:llama.cpp</span>
+          </span>
+          <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch theme">
+            <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"></path>
+            </svg>
+            <svg class="theme-icon theme-icon--sun" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4.5"></circle>
+              <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <section id="messages" class="messages"></section>
+
+      <form id="composerForm" class="composer">
+        <textarea id="userPrompt" rows="3" placeholder="Message Potato OS..."></textarea>
+        <div class="composer-bottom">
+          <div class="composer-left">
+            <input id="imageInput" class="visually-hidden-file" type="file" accept="image/*">
+            <button id="attachImageBtn" class="attach-btn" type="button">Attach image</button>
+            <button id="clearImageBtn" class="ghost-btn" type="button" hidden>Remove image</button>
+            <span id="imageMeta" class="image-meta" hidden></span>
+          </div>
+          <div class="composer-right">
+            <div id="composerStatusChip" class="composer-status-chip" hidden>
+              <span class="chip-spinner" aria-hidden="true"></span>
+              <span id="composerStatusText">Preparing prompt • 0%</span>
+              <button id="cancelBtn" class="chip-cancel-btn" type="button" hidden disabled aria-label="Cancel current work" title="Cancel">×</button>
+            </div>
+            <button id="sendBtn" class="send-btn" type="submit">Send</button>
+          </div>
+        </div>
+        <div id="imagePreviewWrap" class="image-preview-wrap" hidden>
+          <img id="imagePreview" alt="Selected upload preview">
+        </div>
+        <div id="composerActivity" class="assistive-live" aria-live="polite"></div>
+      </form>
+
+    </main>
+  </div>
+  <div id="settingsBackdrop" class="settings-backdrop" hidden></div>
+  <div id="settingsModal" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle" hidden>
+    <div class="settings-modal-shell">
+      <div class="settings-modal-header">
+        <div>
+          <h2 id="settingsModalTitle" class="settings-modal-title">Settings</h2>
+          <p class="settings-modal-note">Runtime, model, and chat controls for diagnostics and admin tasks.</p>
+        </div>
+        <button id="settingsCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close settings">Close</button>
+      </div>
+      <div class="settings-grid">
           <section id="settingsRuntimeSection" class="settings-section full">
             <h3 class="settings-section-title">Runtime controls</h3>
             <label class="full" style="display:flex; align-items:center; gap:8px;">
@@ -2797,67 +3109,28 @@ CHAT_HTML = """<!doctype html>
               <div id="powerCalibrationStatus" class="runtime-compact">Power calibration: default correction</div>
             </details>
           </section>
+      </div>
+    </div>
+  </div>
+  <div id="editBackdrop" class="edit-backdrop" hidden></div>
+  <div id="editModal" class="edit-modal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle" hidden>
+    <div class="edit-modal-shell">
+      <div class="edit-modal-header">
+        <div>
+          <h2 id="editModalTitle" class="edit-modal-title">Edit message</h2>
+          <p id="editModalNote" class="edit-modal-note">Update the message and resend from this point in the conversation.</p>
         </div>
-      </details>
-    </aside>
-
-    <main class="chat-shell">
-      <header class="chat-header">
-        <div class="header-primary">
-          <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Open sidebar" aria-controls="sidebarPanel" aria-expanded="false" hidden>
-            <span class="bars" aria-hidden="true">≡</span>
-          </button>
-          <span class="chat-brand-mark" aria-hidden="true">🥔</span>
-          <h1 aria-label="🥔 Potato Chat">Potato Chat</h1>
+        <button id="editCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close edit message dialog">Close</button>
+      </div>
+      <textarea id="editMessageInput" class="edit-modal-input" placeholder="Update your message..."></textarea>
+      <div class="edit-modal-actions">
+        <div id="editModalHint" class="edit-modal-hint">Everything after this turn will be replaced by the new run.</div>
+        <div class="edit-modal-action-row">
+          <button id="editCancelBtn" class="ghost-btn" type="button">Cancel</button>
+          <button id="editSendBtn" class="primary-btn edit-send-btn" type="button">Send</button>
         </div>
-        <div class="header-actions">
-          <span id="statusBadge" class="badge offline">
-            <span id="statusDot" class="indicator-dot offline" aria-hidden="true"></span>
-            <span id="statusLabel">DISCONNECTED:llama.cpp</span>
-          </span>
-          <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch theme">
-            <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"></path>
-            </svg>
-            <svg class="theme-icon theme-icon--sun" viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="4.5"></circle>
-              <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"></path>
-            </svg>
-          </button>
-        </div>
-      </header>
-
-      <section id="messages" class="messages"></section>
-
-      <form id="composerForm" class="composer">
-        <textarea id="userPrompt" rows="3" placeholder="Message Potato OS..."></textarea>
-        <div class="composer-bottom">
-          <div class="composer-left">
-            <button id="thinkingToggleBtn" class="thinking-toggle off" type="button" aria-pressed="false" title="Toggle model reasoning / deep thinking">
-              <span class="thinking-toggle-icon" aria-hidden="true">◌</span>
-              <span id="thinkingToggleLabel">Deep thinking</span>
-            </button>
-            <input id="imageInput" class="visually-hidden-file" type="file" accept="image/*">
-            <button id="attachImageBtn" class="attach-btn" type="button">Attach image</button>
-            <button id="clearImageBtn" class="ghost-btn" type="button" hidden>Remove image</button>
-            <span id="imageMeta" class="image-meta" hidden></span>
-          </div>
-          <div class="composer-right">
-            <div id="composerStatusChip" class="composer-status-chip" hidden>
-              <span class="chip-spinner" aria-hidden="true"></span>
-              <span id="composerStatusText">Preparing prompt • 0%</span>
-              <button id="cancelBtn" class="chip-cancel-btn" type="button" hidden disabled aria-label="Cancel current work" title="Cancel">×</button>
-            </div>
-            <button id="sendBtn" class="send-btn" type="submit">Send</button>
-          </div>
-        </div>
-        <div id="imagePreviewWrap" class="image-preview-wrap" hidden>
-          <img id="imagePreview" alt="Selected upload preview">
-        </div>
-        <div id="composerActivity" class="assistive-live" aria-live="polite"></div>
-      </form>
-
-    </main>
+      </div>
+    </div>
   </div>
 
   <script src="/assets/vendor/marked.umd.js"></script>
@@ -2873,7 +3146,6 @@ CHAT_HTML = """<!doctype html>
       stream: true,
       generation_mode: "random",
       seed: 42,
-      thinking_enabled: false,
       theme: "light",
       system_prompt: "",
     };
@@ -2926,9 +3198,15 @@ CHAT_HTML = """<!doctype html>
     let runtimeReconnectAttempts = 0;
     let statusPollSeq = 0;
     let statusPollAppliedSeq = 0;
-    let runtimeDetailsExpanded = false;
+    let runtimeDetailsExpanded = true;
     let mobileSidebarMql = null;
+    let settingsModalOpen = false;
+    let editModalOpen = false;
+    let messagesPinnedToBottom = true;
+    let messagePointerSelectionActive = false;
     const chatHistory = [];
+    const conversationTurns = [];
+    let activeEditState = null;
     let pendingImage = null;
     let pendingImageReader = null;
     let pendingImageToken = 0;
@@ -2963,71 +3241,19 @@ CHAT_HTML = """<!doctype html>
       return fallback;
     }
 
-    function normalizeThinkingEnabled(rawValue, fallback = defaultSettings.thinking_enabled) {
-      if (rawValue === true || rawValue === false) return rawValue;
-      if (typeof rawValue === "string") {
-        const normalized = rawValue.trim().toLowerCase();
-        if (normalized === "true") return true;
-        if (normalized === "false") return false;
-      }
-      return Boolean(fallback);
-    }
-
-    function isQwen35A3BModelName(rawName) {
-      const value = String(rawName || "").trim().toLowerCase();
-      return Boolean(value)
-        && value.includes("qwen")
-        && value.includes("3.5")
-        && value.includes("35b")
-        && value.includes("a3b");
-    }
-
-    function thinkingToggleSupported(statusPayload = latestStatus) {
-      return isQwen35A3BModelName(statusPayload?.model?.filename);
-    }
-
-    function getThinkingEnabledFromUi() {
-      const btn = document.getElementById("thinkingToggleBtn");
-      if (!btn) return defaultSettings.thinking_enabled;
-      return btn.getAttribute("aria-pressed") === "true";
-    }
-
-    function setThinkingToggleState(rawEnabled, options = {}) {
-      const btn = document.getElementById("thinkingToggleBtn");
-      const label = document.getElementById("thinkingToggleLabel");
-      if (!btn) return;
-      const enabled = normalizeThinkingEnabled(rawEnabled);
-      const supported = thinkingToggleSupported(options.statusPayload);
-      btn.classList.toggle("off", !enabled);
-      btn.setAttribute("aria-pressed", enabled ? "true" : "false");
-      btn.dataset.supported = supported ? "true" : "false";
-      btn.title = supported
-        ? (enabled ? "Deep thinking enabled" : "Deep thinking disabled")
-        : "Deep thinking toggle is used for Qwen3.5 A3B";
-      if (label) {
-        label.textContent = supported
-          ? (enabled ? "Deep thinking on" : "Deep thinking off")
-          : "Deep thinking";
-      }
-    }
-
-    function toggleThinkingMode() {
-      setThinkingToggleState(!getThinkingEnabledFromUi());
-      saveSettings(collectSettings());
-    }
-
     function loadSettings() {
       const raw = localStorage.getItem(settingsKey);
       if (!raw) {
         return { ...defaultSettings, theme: detectSystemTheme() };
       }
       try {
-        const parsed = { ...defaultSettings, ...JSON.parse(raw) };
+        const parsedRaw = JSON.parse(raw);
+        const { thinking_enabled: _legacyThinkingSetting, ...sanitizedParsedRaw } = parsedRaw || {};
+        const parsed = { ...defaultSettings, ...sanitizedParsedRaw };
         return {
           ...parsed,
           generation_mode: normalizeGenerationMode(parsed.generation_mode),
           seed: normalizeSeedValue(parsed.seed, defaultSettings.seed),
-          thinking_enabled: normalizeThinkingEnabled(parsed.thinking_enabled, defaultSettings.thinking_enabled),
           theme: normalizeTheme(parsed.theme, detectSystemTheme()),
         };
       } catch (_err) {
@@ -3271,7 +3497,6 @@ CHAT_HTML = """<!doctype html>
         stream: document.getElementById("stream").value === "true",
         generation_mode: generationMode,
         seed,
-        thinking_enabled: getThinkingEnabledFromUi(),
         theme: document.documentElement.getAttribute("data-theme") || defaultSettings.theme,
         system_prompt: document.getElementById("systemPrompt").value.trim(),
       };
@@ -3535,6 +3760,296 @@ CHAT_HTML = """<!doctype html>
       }
     }
 
+    function setSettingsModalOpen(open) {
+      settingsModalOpen = Boolean(open);
+      const modal = document.getElementById("settingsModal");
+      const backdrop = document.getElementById("settingsBackdrop");
+      document.body.classList.toggle("settings-modal-open", settingsModalOpen);
+      if (modal) {
+        modal.hidden = !settingsModalOpen;
+      }
+      if (backdrop) {
+        backdrop.hidden = !settingsModalOpen;
+      }
+      if (settingsModalOpen) {
+        setSidebarOpen(false);
+      }
+    }
+
+    function openSettingsModal() {
+      setSettingsModalOpen(true);
+    }
+
+    function closeSettingsModal() {
+      setSettingsModalOpen(false);
+    }
+
+    function setEditModalOpen(open) {
+      editModalOpen = Boolean(open);
+      const modal = document.getElementById("editModal");
+      const backdrop = document.getElementById("editBackdrop");
+      document.body.classList.toggle("edit-modal-open", editModalOpen);
+      if (modal) {
+        modal.hidden = !editModalOpen;
+      }
+      if (backdrop) {
+        backdrop.hidden = !editModalOpen;
+      }
+      if (editModalOpen) {
+        setSidebarOpen(false);
+      }
+    }
+
+    function closeEditMessageModal(options = {}) {
+      activeEditState = null;
+      setEditModalOpen(false);
+      if (options.restoreFocus !== false) {
+        focusPromptInput();
+      }
+    }
+
+    function setEditModalBusy(busy) {
+      const input = document.getElementById("editMessageInput");
+      const sendBtn = document.getElementById("editSendBtn");
+      const cancelBtn = document.getElementById("editCancelBtn");
+      const closeBtn = document.getElementById("editCloseBtn");
+      if (input) input.disabled = Boolean(busy);
+      if (sendBtn) sendBtn.disabled = Boolean(busy);
+      if (cancelBtn) cancelBtn.disabled = Boolean(busy);
+      if (closeBtn) closeBtn.disabled = Boolean(busy);
+    }
+
+    function updateEditModalCopy(state) {
+      const note = document.getElementById("editModalNote");
+      const hint = document.getElementById("editModalHint");
+      const sendBtn = document.getElementById("editSendBtn");
+      const isGenerating = Boolean(state?.wasGenerating);
+      if (note) {
+        note.textContent = isGenerating
+          ? "Update the message, stop the current reply, and restart from this point."
+          : "Update the message and resend from this point in the conversation.";
+      }
+      if (hint) {
+        hint.textContent = isGenerating
+          ? "Sending will cancel the in-progress response and replace everything from this turn onward."
+          : "Everything after this turn will be replaced by the new run.";
+      }
+      if (sendBtn) {
+        sendBtn.textContent = isGenerating ? "Cancel & send" : "Send";
+      }
+    }
+
+    function openEditMessageModal(messageView) {
+      const turn = messageView?.turnRef;
+      if (!turn || messageView?.role !== "user") return;
+      const input = document.getElementById("editMessageInput");
+      activeEditState = {
+        turn,
+        wasGenerating: Boolean(requestInFlight),
+      };
+      updateEditModalCopy(activeEditState);
+      if (input) {
+        input.value = String(turn.userText || messageView.editText || "");
+      }
+      setEditModalBusy(false);
+      setEditModalOpen(true);
+      window.setTimeout(() => {
+        if (!input) return;
+        input.focus({ preventScroll: true });
+        if (typeof input.setSelectionRange === "function") {
+          input.setSelectionRange(input.value.length, input.value.length);
+        }
+      }, 0);
+    }
+
+    function getMessagesBox() {
+      return document.getElementById("messages");
+    }
+
+    function isMessagesPinned(box = getMessagesBox()) {
+      if (!box) return true;
+      return (box.scrollHeight - box.clientHeight - box.scrollTop) <= 24;
+    }
+
+    function setMessagesPinnedState(pinned) {
+      messagesPinnedToBottom = Boolean(pinned);
+    }
+
+    function createMessageActionIcon(kind) {
+      const svgNS = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("aria-hidden", "true");
+      if (kind === "copy") {
+        const back = document.createElementNS(svgNS, "rect");
+        back.setAttribute("x", "9");
+        back.setAttribute("y", "4");
+        back.setAttribute("width", "11");
+        back.setAttribute("height", "13");
+        back.setAttribute("rx", "2");
+        const front = document.createElementNS(svgNS, "rect");
+        front.setAttribute("x", "4");
+        front.setAttribute("y", "9");
+        front.setAttribute("width", "11");
+        front.setAttribute("height", "11");
+        front.setAttribute("rx", "2");
+        svg.appendChild(back);
+        svg.appendChild(front);
+        return svg;
+      }
+      const path = document.createElementNS(svgNS, "path");
+      path.setAttribute("d", "M4 20h4l10-10a2.5 2.5 0 0 0-4-4L4 16v4");
+      const tip = document.createElementNS(svgNS, "path");
+      tip.setAttribute("d", "M13.5 6.5l4 4");
+      svg.appendChild(path);
+      svg.appendChild(tip);
+      return svg;
+    }
+
+    async function copyTextToClipboard(text) {
+      const value = String(text || "");
+      if (!value) return false;
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+      const probe = document.createElement("textarea");
+      probe.value = value;
+      probe.setAttribute("readonly", "readonly");
+      probe.style.position = "fixed";
+      probe.style.top = "-9999px";
+      probe.style.opacity = "0";
+      document.body.appendChild(probe);
+      probe.focus();
+      probe.select();
+      try {
+        return document.execCommand("copy");
+      } finally {
+        document.body.removeChild(probe);
+      }
+    }
+
+    function flashCopiedState(button) {
+      if (!button) return;
+      button.dataset.copied = "true";
+      button.setAttribute("title", "Copied");
+      window.setTimeout(() => {
+        if (!button.isConnected) return;
+        delete button.dataset.copied;
+        button.setAttribute("title", "Copy message");
+      }, 1400);
+    }
+
+    function populatePromptForEditing(text) {
+      const prompt = document.getElementById("userPrompt");
+      if (!prompt) return;
+      prompt.value = String(text || "");
+      focusPromptInput();
+    }
+
+    function createMessageActions(messageView, options = {}) {
+      const actions = document.createElement("div");
+      actions.className = "message-actions";
+      actions.dataset.visible = "false";
+
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "message-action-btn";
+      copyBtn.dataset.action = "copy";
+      copyBtn.setAttribute("aria-label", "Copy message");
+      copyBtn.setAttribute("title", "Copy message");
+      copyBtn.appendChild(createMessageActionIcon("copy"));
+      copyBtn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const copied = await copyTextToClipboard(messageView.copyText || messageView.editText || messageView.bubble?.innerText || "");
+          if (copied) {
+            flashCopiedState(copyBtn);
+          }
+        } catch (error) {
+          console.warn("Clipboard copy failed", error);
+        }
+      });
+      actions.appendChild(copyBtn);
+
+      if (options.editable === true) {
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "message-action-btn";
+        editBtn.dataset.action = "edit";
+        editBtn.setAttribute("aria-label", "Edit message");
+        editBtn.setAttribute("title", "Edit message");
+        editBtn.appendChild(createMessageActionIcon("edit"));
+        editBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openEditMessageModal(messageView);
+        });
+        actions.appendChild(editBtn);
+      }
+
+      return actions;
+    }
+
+    function setMessageActionsVisible(messageView, visible) {
+      if (!messageView?.actions) return;
+      if (messageView.row) {
+        messageView.row.classList.toggle("message-row-actions-hidden", !visible);
+      }
+      messageView.actions.hidden = !visible;
+      messageView.actions.dataset.visible = visible ? "true" : "false";
+    }
+
+    function hasActiveMessageSelection(box = getMessagesBox()) {
+      if (!box || typeof window === "undefined" || typeof window.getSelection !== "function") {
+        return false;
+      }
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount < 1) {
+        return false;
+      }
+      const range = selection.getRangeAt(0);
+      const container = range.commonAncestorContainer;
+      const node = container?.nodeType === Node.TEXT_NODE ? container.parentNode : container;
+      return Boolean(node && box.contains(node));
+    }
+
+    function handleMessagesChanged(shouldFollow, options = {}) {
+      const box = getMessagesBox();
+      if (!box) return;
+      const forceFollow = options.forceFollow === true;
+      if (forceFollow || (shouldFollow && !messagePointerSelectionActive && !hasActiveMessageSelection(box))) {
+        box.scrollTop = box.scrollHeight;
+        setMessagesPinnedState(true);
+      }
+    }
+
+    function bindMessagesScroller() {
+      const box = getMessagesBox();
+      if (!box) return;
+      box.addEventListener("pointerdown", (event) => {
+        if (event.target instanceof Element && event.target.closest(".message-bubble, .message-meta")) {
+          messagePointerSelectionActive = true;
+        }
+      });
+      const clearPointerSelection = () => {
+        messagePointerSelectionActive = false;
+      };
+      box.addEventListener("pointerup", clearPointerSelection);
+      box.addEventListener("pointercancel", clearPointerSelection);
+      document.addEventListener("pointerup", clearPointerSelection);
+      document.addEventListener("selectionchange", () => {
+        if (!hasActiveMessageSelection(box) && !document.activeElement?.closest?.(".message-bubble, .message-meta")) {
+          messagePointerSelectionActive = false;
+        }
+      });
+      box.addEventListener("scroll", () => {
+        setMessagesPinnedState(isMessagesPinned(box));
+      });
+      setMessagesPinnedState(isMessagesPinned(box));
+    }
+
     function bindMobileSidebar() {
       mobileSidebarMql = window.matchMedia("(max-width: 900px)");
       const sync = () => {
@@ -3556,11 +4071,48 @@ CHAT_HTML = """<!doctype html>
 
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
+          if (editModalOpen) {
+            closeEditMessageModal();
+            return;
+          }
+          if (settingsModalOpen) {
+            closeSettingsModal();
+            return;
+          }
           setSidebarOpen(false);
         }
       });
 
       sync();
+    }
+
+    function bindSettingsModal() {
+      document.getElementById("settingsOpenBtn").addEventListener("click", openSettingsModal);
+      document.getElementById("settingsCloseBtn").addEventListener("click", closeSettingsModal);
+      document.getElementById("settingsBackdrop").addEventListener("click", closeSettingsModal);
+      document.getElementById("settingsModal").addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) {
+          closeSettingsModal();
+        }
+      });
+    }
+
+    function bindEditModal() {
+      document.getElementById("editCloseBtn").addEventListener("click", () => closeEditMessageModal());
+      document.getElementById("editCancelBtn").addEventListener("click", () => closeEditMessageModal());
+      document.getElementById("editBackdrop").addEventListener("click", () => closeEditMessageModal());
+      document.getElementById("editModal").addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) {
+          closeEditMessageModal();
+        }
+      });
+      document.getElementById("editSendBtn").addEventListener("click", submitEditMessageModal);
+      document.getElementById("editMessageInput").addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          submitEditMessageModal();
+        }
+      });
     }
 
     function applyTheme(theme) {
@@ -3593,12 +4145,11 @@ CHAT_HTML = """<!doctype html>
       document.getElementById("generationMode").value = normalizedGenerationMode;
       document.getElementById("seed").value = String(normalizedSeed);
       document.getElementById("systemPrompt").value = settings.system_prompt;
-      setThinkingToggleState(settings.thinking_enabled);
       updateSeedFieldState(normalizedGenerationMode);
 
       applyTheme(settings.theme);
 
-      document.querySelectorAll("details input, details select, details textarea").forEach((el) => {
+      document.querySelectorAll("#settingsModal input, #settingsModal select, #settingsModal textarea").forEach((el) => {
         el.addEventListener("change", persistSettingsFromInputs);
       });
       document.getElementById("seed").addEventListener("input", persistSettingsFromInputs);
@@ -3993,6 +4544,8 @@ CHAT_HTML = """<!doctype html>
 
     function appendMessage(role, content = "", options = {}) {
       const box = document.getElementById("messages");
+      const forceFollow = options.forceFollow === true;
+      const shouldFollow = forceFollow ? true : isMessagesPinned(box);
       const row = document.createElement("div");
       row.className = `message-row ${role}`;
 
@@ -4003,21 +4556,41 @@ CHAT_HTML = """<!doctype html>
       bubble.className = "message-bubble";
       renderBubbleContent(bubble, content, { ...options, role });
 
+      const messageView = {
+        row,
+        stack,
+        bubble,
+        role,
+        copyText: String(options.copyText ?? content ?? ""),
+        editText: String(options.editText ?? content ?? ""),
+      };
+
+      const actions = createMessageActions(messageView, {
+        editable: role === "user" && !options.imageDataUrl && !options.imageName,
+      });
+      messageView.actions = actions;
+
       const meta = document.createElement("div");
       meta.className = "message-meta";
       meta.hidden = true;
+      messageView.meta = meta;
 
       stack.appendChild(bubble);
+      stack.appendChild(actions);
       stack.appendChild(meta);
       row.appendChild(stack);
       box.appendChild(row);
-      box.scrollTop = box.scrollHeight;
-      return { row, stack, bubble, meta, role };
+      const actionsVisible = options.actionsHidden === true ? false : Boolean(String(content || "").trim());
+      setMessageActionsVisible(messageView, actionsVisible);
+      handleMessagesChanged(shouldFollow, { forceFollow });
+      return messageView;
     }
 
     function setMessageProcessingState(messageView, options = {}) {
       const bubble = messageView?.bubble || messageView;
       if (!bubble) return;
+      const box = document.getElementById("messages");
+      const shouldFollow = isMessagesPinned(box);
       const phase = String(options.phase || "prefill");
       const percentRaw = Number(options.percent);
       const percent = Number.isFinite(percentRaw)
@@ -4029,6 +4602,7 @@ CHAT_HTML = """<!doctype html>
       bubble.classList.add("processing");
       bubble.dataset.phase = phase;
       bubble.replaceChildren();
+      setMessageActionsVisible(messageView, false);
 
       const shell = document.createElement("div");
       shell.className = "message-processing-shell";
@@ -4062,27 +4636,40 @@ CHAT_HTML = """<!doctype html>
       shell.appendChild(labelEl);
       shell.appendChild(meter);
       bubble.appendChild(shell);
-
-      const box = document.getElementById("messages");
-      box.scrollTop = box.scrollHeight;
+      handleMessagesChanged(shouldFollow);
     }
 
     function updateMessage(messageView, content, options = {}) {
       const bubble = messageView?.bubble || messageView;
       if (!bubble) return;
+      const box = document.getElementById("messages");
+      const shouldFollow = isMessagesPinned(box);
       bubble.classList.remove("processing");
       delete bubble.dataset.phase;
       renderBubbleContent(bubble, content, { ...options, role: messageView?.role || options.role });
-      const box = document.getElementById("messages");
-      box.scrollTop = box.scrollHeight;
+      if (messageView && typeof messageView === "object") {
+        messageView.copyText = String(options.copyText ?? content ?? "");
+        if (messageView.role === "user") {
+          messageView.editText = String(options.editText ?? content ?? "");
+        }
+        const requestedVisibility = options.showActions;
+        const nextVisibility = requestedVisibility === undefined
+          ? messageView.role !== "assistant"
+          : Boolean(requestedVisibility);
+        setMessageActionsVisible(messageView, nextVisibility);
+      }
+      handleMessagesChanged(shouldFollow);
     }
 
     function setMessageMeta(messageView, content) {
       const meta = messageView?.meta;
       if (!meta) return;
+      const box = getMessagesBox();
+      const shouldFollow = isMessagesPinned(box);
       const text = String(content || "").trim();
       meta.hidden = text.length === 0;
       meta.textContent = text;
+      handleMessagesChanged(shouldFollow);
     }
 
     function removeMessage(messageView) {
@@ -4090,6 +4677,75 @@ CHAT_HTML = """<!doctype html>
       if (row && row.parentNode) {
         row.parentNode.removeChild(row);
       }
+    }
+
+    function waitForRequestIdle(timeoutMs = 6000) {
+      const deadline = performance.now() + Math.max(250, Number(timeoutMs) || 6000);
+      return new Promise((resolve) => {
+        const tick = () => {
+          if (!requestInFlight || performance.now() >= deadline) {
+            resolve(!requestInFlight);
+            return;
+          }
+          window.setTimeout(tick, 40);
+        };
+        tick();
+      });
+    }
+
+    function rollbackConversationFromTurn(targetTurn) {
+      if (!targetTurn) return;
+      const startIndex = conversationTurns.indexOf(targetTurn);
+      if (startIndex < 0) return;
+      chatHistory.length = Math.max(0, Number(targetTurn.baseHistoryLength) || 0);
+      for (let index = conversationTurns.length - 1; index >= startIndex; index -= 1) {
+        const turn = conversationTurns[index];
+        if (turn?.assistantView) {
+          removeMessage(turn.assistantView);
+        }
+        if (turn?.userView) {
+          removeMessage(turn.userView);
+        }
+      }
+      conversationTurns.splice(startIndex);
+    }
+
+    async function submitEditMessageModal() {
+      if (!activeEditState?.turn) {
+        closeEditMessageModal();
+        return;
+      }
+      const input = document.getElementById("editMessageInput");
+      const nextText = String(input?.value || "").trim();
+      if (!nextText) {
+        if (input) {
+          input.focus({ preventScroll: true });
+        }
+        return;
+      }
+
+      const { turn } = activeEditState;
+      setEditModalBusy(true);
+
+      if (requestInFlight && activeRequest) {
+        const current = activeRequest;
+        current.hideProcessingBubbleOnCancel = true;
+        if (current.assistantView) {
+          removeMessage(current.assistantView);
+        }
+        stopGeneration();
+        await waitForRequestIdle();
+      }
+
+      rollbackConversationFromTurn(turn);
+      closeEditMessageModal({ restoreFocus: false });
+      clearPendingImage();
+      const prompt = document.getElementById("userPrompt");
+      if (prompt) {
+        prompt.value = nextText;
+      }
+      focusPromptInput();
+      sendChat();
     }
 
     function isLocalModelConnected(statusPayload) {
@@ -4205,7 +4861,7 @@ CHAT_HTML = """<!doctype html>
         compact.hidden = runtimeDetailsExpanded;
       }
       if (toggle) {
-        toggle.textContent = runtimeDetailsExpanded ? "Show compact" : "Show details";
+        toggle.textContent = runtimeDetailsExpanded ? "Hide details" : "Show details";
         toggle.setAttribute("aria-expanded", runtimeDetailsExpanded ? "true" : "false");
       }
     }
@@ -5530,7 +6186,6 @@ CHAT_HTML = """<!doctype html>
       renderSystemRuntime(statusPayload?.system);
       renderModelsList(statusPayload);
       renderUploadState(statusPayload);
-      setThinkingToggleState(getThinkingEnabledFromUi(), { statusPayload });
       setSendEnabled();
     }
 
@@ -5673,11 +6328,23 @@ CHAT_HTML = """<!doctype html>
       const settings = collectSettings();
       saveSettings(settings);
 
-      appendMessage("user", userBubblePayload.text, {
+      const baseHistoryLength = chatHistory.length;
+      const userView = appendMessage("user", userBubblePayload.text, {
         imageDataUrl: userBubblePayload.imageDataUrl,
         imageName: userBubblePayload.imageName,
+        forceFollow: true,
       });
-      activeAssistantView = appendMessage("assistant", "");
+      activeAssistantView = appendMessage("assistant", "", { actionsHidden: true, forceFollow: true });
+      const turn = {
+        baseHistoryLength,
+        userText: content,
+        userView,
+        assistantView: activeAssistantView,
+      };
+      userView.turnRef = turn;
+      activeAssistantView.turnRef = turn;
+      conversationTurns.push(turn);
+      requestCtx.turn = turn;
       requestCtx.assistantView = activeAssistantView;
       userPrompt.value = "";
       clearPendingImage();
@@ -5701,11 +6368,6 @@ CHAT_HTML = """<!doctype html>
         const resolvedSeed = resolveSeedForRequest(settings);
         if (resolvedSeed !== null) {
           reqBody.seed = resolvedSeed;
-        }
-        if (thinkingToggleSupported()) {
-          reqBody.chat_template_kwargs = {
-            enable_thinking: normalizeThinkingEnabled(settings.thinking_enabled),
-          };
         }
 
         if (settings.system_prompt) {
@@ -5771,12 +6433,12 @@ CHAT_HTML = """<!doctype html>
                 throwIfRequestStoppedAfterPrefill(requestCtx, finishResult);
               }
               assistantText += delta;
-              updateMessage(activeAssistantView, assistantText);
+              updateMessage(activeAssistantView, assistantText, { showActions: false });
             }
             for (const reasoningDelta of parsed.reasoningDeltas) {
               assistantReasoningText += reasoningDelta;
               if (!assistantText.trim()) {
-                updateMessage(activeAssistantView, formatReasoningOnlyMessage(assistantReasoningText));
+                updateMessage(activeAssistantView, formatReasoningOnlyMessage(assistantReasoningText), { showActions: false });
               }
             }
             for (const event of parsed.events) {
@@ -5813,7 +6475,7 @@ CHAT_HTML = """<!doctype html>
             throwIfRequestStoppedAfterPrefill(requestCtx, finishResult);
           }
           const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);
-          updateMessage(activeAssistantView, finalAssistantText);
+          updateMessage(activeAssistantView, finalAssistantText, { showActions: true });
           chatHistory.push({ role: "assistant", content: finalAssistantText });
           const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
           if (requestCtx.stoppedByUser) {
@@ -5838,7 +6500,7 @@ CHAT_HTML = """<!doctype html>
         const messageContent = typeof message?.content === "string" ? message.content.trim() : "";
         const msg = messageContent || formatReasoningOnlyMessage(message?.reasoning_content) || JSON.stringify(body);
         chatHistory.push({ role: "assistant", content: msg });
-        updateMessage(activeAssistantView, msg);
+        updateMessage(activeAssistantView, msg, { showActions: true });
         const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
         setMessageMeta(activeAssistantView, formatAssistantStats(body, elapsedSeconds, requestCtx.firstTokenLatencyMs));
         recordPrefillMetric(
@@ -5854,7 +6516,7 @@ CHAT_HTML = """<!doctype html>
           if (activeAssistantView) {
             const partial = activeAssistantView.bubble.textContent.trim();
             if (!partial) {
-              updateMessage(activeAssistantView, "(stopped)");
+              updateMessage(activeAssistantView, "(stopped)", { showActions: true });
             } else {
               chatHistory.push({ role: "assistant", content: partial });
             }
@@ -5866,7 +6528,7 @@ CHAT_HTML = """<!doctype html>
           }
         } else {
           if (activeAssistantView) {
-            updateMessage(activeAssistantView, `Request error: ${err}`);
+            updateMessage(activeAssistantView, `Request error: ${err}`, { showActions: true });
           } else {
             appendMessage("assistant", `Request error: ${err}`);
           }
@@ -6019,13 +6681,15 @@ CHAT_HTML = """<!doctype html>
     }
 
     bindSettings();
+    bindSettingsModal();
+    bindEditModal();
     bindMobileSidebar();
-    setRuntimeDetailsExpanded(false);
+    bindMessagesScroller();
+    setRuntimeDetailsExpanded(true);
     setInterval(pollStatus, 2000);
     pollStatus();
 
     document.getElementById("themeToggle").addEventListener("click", toggleTheme);
-    document.getElementById("thinkingToggleBtn").addEventListener("click", toggleThinkingMode);
     document.getElementById("sidebarToggle").addEventListener("click", () => {
       setSidebarOpen(!document.body.classList.contains("sidebar-open"));
     });
