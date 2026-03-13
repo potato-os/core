@@ -15,6 +15,21 @@ async function closeSettingsModal(page) {
   await expect(page.locator("#settingsModal")).toBeHidden();
 }
 
+async function openAdvancedSettingsModal(page) {
+  await page.locator("#settingsAdvancedBtn").click();
+  await expect(page.locator("#legacySettingsModal")).toBeVisible();
+}
+
+async function closeAdvancedSettingsModal(page) {
+  await page.locator("#legacySettingsCloseBtn").click();
+  await expect(page.locator("#legacySettingsModal")).toBeHidden();
+}
+
+async function saveModelSettings(page) {
+  await page.locator("#saveModelSettingsBtn").click();
+  await expect(page.locator("#modelSettingsStatus")).toContainText(/saved|updated/i);
+}
+
 test("seed mode defaults to random, toggles deterministic, persists, and controls request payload", async ({ page }) => {
   await waitUntilReady(page);
 
@@ -25,11 +40,10 @@ test("seed mode defaults to random, toggles deterministic, persists, and control
   const sendBtn = page.locator("#sendBtn");
   await openSettingsModal(page);
 
-  await expect(generationMode).toHaveValue("random");
-  await expect(seedField).toHaveValue("42");
-  await expect(seedField).toBeDisabled();
-
   await streamField.selectOption("false");
+  await generationMode.selectOption("random");
+  await expect(seedField).toBeDisabled();
+  await saveModelSettings(page);
   await closeSettingsModal(page);
   await promptField.fill("Seed random request.");
   const randomRequestPromise = page.waitForRequest("**/v1/chat/completions");
@@ -42,8 +56,8 @@ test("seed mode defaults to random, toggles deterministic, persists, and control
   await openSettingsModal(page);
   await generationMode.selectOption("deterministic");
   await expect(seedField).toBeEnabled();
-  await expect(seedField).toHaveValue("42");
   await seedField.fill("1337");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
 
   await promptField.fill("Seed deterministic request.");
@@ -58,6 +72,7 @@ test("seed mode defaults to random, toggles deterministic, persists, and control
   await generationMode.selectOption("random");
   await expect(seedField).toBeDisabled();
   await expect(seedField).toHaveValue("1337");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
 
   await promptField.fill("Seed random request after toggle.");
@@ -72,6 +87,7 @@ test("seed mode defaults to random, toggles deterministic, persists, and control
   await generationMode.selectOption("deterministic");
   await expect(seedField).toBeEnabled();
   await expect(seedField).toHaveValue("1337");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
 
   await page.reload();
@@ -170,6 +186,7 @@ test("renders assistant markdown as formatted html", async ({ page }) => {
 
   await openSettingsModal(page);
   await page.locator("#stream").selectOption("false");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
   await page.locator("#userPrompt").fill("Format this nicely.");
   await page.locator("#userPrompt").press("Enter");
@@ -252,6 +269,7 @@ test("non-stream cancel during finish animation does not render buffered assista
 
   await openSettingsModal(page);
   await page.locator("#stream").selectOption("false");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
   await page.locator("#userPrompt").fill("Give me a non-stream response.");
   await page.locator("#userPrompt").press("Enter");
@@ -317,6 +335,7 @@ test("assistant markdown strips remote resource tags while keeping safe formatti
 
   await openSettingsModal(page);
   await page.locator("#stream").selectOption("false");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
   await page.locator("#userPrompt").fill("Format this safely.");
   await page.locator("#userPrompt").press("Enter");
@@ -939,9 +958,7 @@ test("mobile hamburger controls sidebar drawer and keeps composer actions aligne
 test("settings move into a modal, runtime monitor is expanded by default, and deep thinking is removed", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem("potato_settings_v2", JSON.stringify({
-      generation_mode: "deterministic",
-      seed: 99,
-      thinking_enabled: true,
+      theme: "dark",
     }));
   });
   await waitUntilReady(page);
@@ -954,6 +971,12 @@ test("settings move into a modal, runtime monitor is expanded by default, and de
   await page.locator("#settingsOpenBtn").click();
   await expect(page.locator("#settingsModal")).toBeVisible();
   await expect(page.locator("body")).toHaveClass(/settings-modal-open/);
+  await expect(page.locator("#settingsModelWorkspace")).toBeVisible();
+  await expect(page.locator("#settingsModal #downloadCountdownEnabled")).toHaveCount(0);
+
+  await openAdvancedSettingsModal(page);
+  await expect(page.locator("#legacySettingsRuntimeSection")).toBeVisible();
+  await closeAdvancedSettingsModal(page);
 
   await page.keyboard.press("Escape");
   await expect(page.locator("#settingsModal")).toBeHidden();
@@ -1066,6 +1089,7 @@ test("sending a new message forces the chat back to the latest turn", async ({ p
 
   await openSettingsModal(page);
   await page.locator("#stream").selectOption("false");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
 
   await page.locator("#userPrompt").fill("Bring me back down.");
@@ -1182,6 +1206,7 @@ test("message actions copy assistant text and open the edit modal for user text"
 
   await openSettingsModal(page);
   await page.locator("#stream").selectOption("false");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
   await page.locator("#userPrompt").fill("Please rewrite this draft.");
   await page.locator("#userPrompt").press("Enter");
@@ -1244,6 +1269,7 @@ test("assistant actions stay hidden until the response is finished", async ({ pa
 
   await openSettingsModal(page);
   await page.locator("#stream").selectOption("false");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
 
   await page.locator("#userPrompt").fill("Tell me one short fact.");
@@ -1310,6 +1336,7 @@ test("editing a finished user turn resends from that point and removes later tur
 
   await openSettingsModal(page);
   await page.locator("#stream").selectOption("false");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
 
   await page.locator("#userPrompt").fill("Original first question");
@@ -1388,6 +1415,7 @@ test("editing while a reply is generating cancels it and restarts from that turn
 
   await openSettingsModal(page);
   await page.locator("#stream").selectOption("false");
+  await saveModelSettings(page);
   await closeSettingsModal(page);
 
   await page.locator("#userPrompt").fill("Stable first turn");
@@ -1411,7 +1439,7 @@ test("editing while a reply is generating cancels it and restarts from that turn
   await expect(page.locator("#messages")).not.toContainText("Original second question");
 });
 
-test("model manager toggles countdown, registers URL model, and switches active model", async ({ page }) => {
+test("model-first settings save per model, yaml can be applied, and projector download is exposed for vision models", async ({ page }) => {
   page.on("dialog", (dialog) => dialog.accept());
   let models = [
     {
@@ -1421,6 +1449,27 @@ test("model manager toggles countdown, registers URL model, and switches active 
       source_type: "url",
       status: "ready",
       is_active: true,
+      settings: {
+        chat: {
+          system_prompt: "",
+          stream: true,
+          generation_mode: "random",
+          seed: 42,
+          temperature: 0.7,
+          top_p: 0.8,
+          top_k: 20,
+          repetition_penalty: 1.0,
+          presence_penalty: 1.5,
+          max_tokens: 16384,
+        },
+        vision: {
+          enabled: true,
+          projector_mode: "default",
+          projector_filename: "",
+        },
+      },
+      capabilities: { vision: true },
+      projector: { available: false, selected_filename: "", default_filename: "mmproj-F16.gguf" },
       bytes_total: 0,
       bytes_downloaded: 0,
       percent: 0,
@@ -1433,14 +1482,36 @@ test("model manager toggles countdown, registers URL model, and switches active 
       source_type: "url",
       status: "ready",
       is_active: false,
+      settings: {
+        chat: {
+          system_prompt: "Alt instructions",
+          stream: false,
+          generation_mode: "deterministic",
+          seed: 99,
+          temperature: 0.2,
+          top_p: 0.5,
+          top_k: 8,
+          repetition_penalty: 1.1,
+          presence_penalty: 0.0,
+          max_tokens: 512,
+        },
+        vision: {
+          enabled: false,
+          projector_mode: "default",
+          projector_filename: "",
+        },
+      },
+      capabilities: { vision: false },
+      projector: { available: false, selected_filename: "", default_filename: "" },
       bytes_total: 0,
       bytes_downloaded: 0,
       percent: 0,
       error: null,
     },
   ];
-  let countdownEnabled = true;
   let activeModelId = "default";
+  let lastProjectorDownloadModelId = "";
+  let lastSettingsDocument = "";
 
   const statusPayload = () => ({
     state: "READY",
@@ -1448,6 +1519,9 @@ test("model manager toggles countdown, registers URL model, and switches active 
     model: {
       filename: models.find((m) => m.id === activeModelId)?.filename || "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
       active_model_id: activeModelId,
+      settings: models.find((m) => m.id === activeModelId)?.settings,
+      capabilities: models.find((m) => m.id === activeModelId)?.capabilities,
+      projector: models.find((m) => m.id === activeModelId)?.projector,
     },
     models: models.map((m) => ({ ...m, is_active: m.id === activeModelId })),
     upload: {
@@ -1467,8 +1541,9 @@ test("model manager toggles countdown, registers URL model, and switches active 
       error: null,
       active: models.some((m) => m.status === "downloading"),
       auto_start_seconds: 300,
-      auto_start_remaining_seconds: countdownEnabled ? 120 : 0,
-      countdown_enabled: countdownEnabled,
+      auto_start_remaining_seconds: 0,
+      countdown_enabled: false,
+      auto_download_paused: true,
       current_model_id: models.find((m) => m.status === "downloading")?.id || null,
     },
     llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
@@ -1484,16 +1559,6 @@ test("model manager toggles countdown, registers URL model, and switches active 
     });
   });
 
-  await page.route("**/internal/download-countdown", async (route) => {
-    const body = JSON.parse(route.request().postData() || "{}");
-    countdownEnabled = body.enabled !== false;
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ updated: true, countdown_enabled: countdownEnabled }),
-    });
-  });
-
   await page.route("**/internal/models/register", async (route) => {
     const body = JSON.parse(route.request().postData() || "{}");
     models.push({
@@ -1503,6 +1568,27 @@ test("model manager toggles countdown, registers URL model, and switches active 
       source_type: "url",
       status: "not_downloaded",
       is_active: false,
+      settings: {
+        chat: {
+          system_prompt: "",
+          stream: true,
+          generation_mode: "random",
+          seed: 42,
+          temperature: 0.7,
+          top_p: 0.8,
+          top_k: 20,
+          repetition_penalty: 1.0,
+          presence_penalty: 1.5,
+          max_tokens: 16384,
+        },
+        vision: {
+          enabled: false,
+          projector_mode: "default",
+          projector_filename: "",
+        },
+      },
+      capabilities: { vision: false },
+      projector: { available: false, selected_filename: "", default_filename: "" },
       bytes_total: 0,
       bytes_downloaded: 0,
       percent: 0,
@@ -1525,6 +1611,20 @@ test("model manager toggles countdown, registers URL model, and switches active 
     });
   });
 
+  await page.route("**/internal/models/settings", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    models = models.map((model) => (
+      model.id === body.model_id
+        ? { ...model, settings: body.settings }
+        : model
+    ));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ updated: true, reason: "updated", model_id: body.model_id, model: models.find((m) => m.id === body.model_id) }),
+    });
+  });
+
   await page.route("**/internal/models/cancel-download", async (route) => {
     models = models.map((m) => (m.status === "downloading" ? { ...m, status: "not_downloaded", percent: 0 } : m));
     await route.fulfill({
@@ -1544,6 +1644,97 @@ test("model manager toggles countdown, registers URL model, and switches active 
     });
   });
 
+  await page.route("**/internal/settings-document", async (route) => {
+    if (route.request().method() === "GET") {
+      const document = [
+        "version: 1",
+        `active_model_id: ${activeModelId}`,
+        "runtime:",
+        "  memory_loading_mode: auto",
+        "  allow_unsupported_large_models: false",
+        "models:",
+        ...models.flatMap((model) => [
+          `  - id: ${model.id}`,
+          "    settings:",
+          "      chat:",
+          `        system_prompt: ${JSON.stringify(model.settings.chat.system_prompt)}`,
+          `        stream: ${model.settings.chat.stream ? "true" : "false"}`,
+          `        generation_mode: ${model.settings.chat.generation_mode}`,
+          `        seed: ${model.settings.chat.seed}`,
+          `        temperature: ${model.settings.chat.temperature}`,
+          `        top_p: ${model.settings.chat.top_p}`,
+          `        top_k: ${model.settings.chat.top_k}`,
+          `        repetition_penalty: ${model.settings.chat.repetition_penalty}`,
+          `        presence_penalty: ${model.settings.chat.presence_penalty}`,
+          `        max_tokens: ${model.settings.chat.max_tokens}`,
+          "      vision:",
+          `        enabled: ${model.settings.vision.enabled ? "true" : "false"}`,
+          `        projector_mode: ${model.settings.vision.projector_mode}`,
+          `        projector_filename: ${JSON.stringify(model.settings.vision.projector_filename)}`,
+        ]),
+        "",
+      ].join("\\n");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ format: "yaml", document }),
+      });
+      return;
+    }
+    const body = JSON.parse(route.request().postData() || "{}");
+    lastSettingsDocument = body.document;
+    activeModelId = "alt-model";
+    models = models.map((model) => (
+      model.id === "alt-model"
+        ? {
+            ...model,
+            settings: {
+              ...model.settings,
+              chat: {
+                ...model.settings.chat,
+                system_prompt: "Applied from yaml",
+                max_tokens: 1024,
+              },
+            },
+          }
+        : model
+    ));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ updated: true, reason: "updated", active_model_id: activeModelId, document: body.document, restarted: true }),
+    });
+  });
+
+  await page.route("**/internal/models/download-projector", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    lastProjectorDownloadModelId = body.model_id;
+    models = models.map((model) => (
+      model.id === body.model_id
+        ? {
+            ...model,
+            projector: {
+              ...model.projector,
+              available: true,
+              selected_filename: "mmproj-F16.gguf",
+            },
+            settings: {
+              ...model.settings,
+              vision: {
+                ...model.settings.vision,
+                projector_filename: "mmproj-F16.gguf",
+              },
+            },
+          }
+        : model
+    ));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ downloaded: true, reason: "downloaded", model_id: body.model_id, projector_filename: "mmproj-F16.gguf" }),
+    });
+  });
+
   await page.route("**/internal/models/delete", async (route) => {
     const body = JSON.parse(route.request().postData() || "{}");
     models = models.filter((m) => m.id !== body.model_id);
@@ -1557,8 +1748,17 @@ test("model manager toggles countdown, registers URL model, and switches active 
   await page.goto("/");
   await openSettingsModal(page);
 
-  await page.locator("#downloadCountdownEnabled").selectOption("false");
-  await expect(page.locator("#downloadCountdownEnabled")).toHaveValue("false");
+  await expect(page.locator("#settingsModelWorkspace")).toBeVisible();
+  await expect(page.locator("#settingsWorkspaceTabYaml")).toBeVisible();
+  await expect(page.locator("#settingsAdvancedBtn")).toBeVisible();
+  await expect(page.locator("#settingsModal #downloadCountdownEnabled")).toHaveCount(0);
+
+  await page.locator('#modelsList .model-row[data-model-id="default"]').click();
+  await expect(page.locator("#modelName")).toHaveValue(/Qwen3-VL-4B-Instruct-Q4_K_M.gguf/);
+  await expect(page.locator("#downloadProjectorBtn")).toBeVisible();
+  await page.locator("#downloadProjectorBtn").click();
+  await expect.poll(() => lastProjectorDownloadModelId).toBe("default");
+  await expect(page.locator("#projectorStatusText")).toContainText("mmproj-F16.gguf");
 
   await page.locator("#modelUrlInput").fill("https://example.com/new-url-model.gguf");
   await page.locator("#registerModelBtn").click();
@@ -1576,8 +1776,56 @@ test("model manager toggles countdown, registers URL model, and switches active 
   await page.locator('#modelsList .model-row[data-model-id="new-url-model"] button[data-action="cancel-download"]').click();
   await expect(page.locator('#modelsList .model-row[data-model-id="new-url-model"]')).toContainText("not downloaded");
 
+  await page.locator('#modelsList .model-row[data-model-id="alt-model"]').click();
+  await expect(page.locator("#systemPrompt")).toHaveValue("Alt instructions");
+  await expect(page.locator("#stream")).toHaveValue("false");
+  await expect(page.locator("#generationMode")).toHaveValue("deterministic");
+  await page.locator("#systemPrompt").fill("Saved per-model");
+  await page.locator("#temperature").fill("0.4");
+  await saveModelSettings(page);
+
   await page.locator('#modelsList .model-row[data-model-id="alt-model"] button[data-action="activate"]').click();
   await expect(page.locator("#modelName")).toHaveValue(/Alt-Funny-Model.gguf/);
+
+  await page.locator("#settingsWorkspaceTabYaml").click();
+  await expect(page.locator("#settingsYamlPanel")).toBeVisible();
+  await expect(page.locator("#settingsYamlInput")).toHaveValue(/active_model_id/);
+  await page.locator("#settingsYamlInput").fill([
+    "version: 1",
+    "active_model_id: alt-model",
+    "runtime:",
+    "  memory_loading_mode: auto",
+    "  allow_unsupported_large_models: false",
+    "models:",
+    "  - id: alt-model",
+    "    settings:",
+    "      chat:",
+    "        system_prompt: Applied from yaml",
+    "        stream: false",
+    "        generation_mode: deterministic",
+    "        seed: 99",
+    "        temperature: 0.4",
+    "        top_p: 0.5",
+    "        top_k: 8",
+    "        repetition_penalty: 1.1",
+    "        presence_penalty: 0.0",
+    "        max_tokens: 1024",
+    "      vision:",
+    "        enabled: false",
+    "        projector_mode: default",
+    "        projector_filename: \"\"",
+  ].join("\n"));
+  await page.locator("#settingsYamlApplyBtn").click();
+  await expect(page.locator("#settingsYamlStatus")).toContainText(/applied/i);
+  expect(lastSettingsDocument).toContain("Applied from yaml");
+
+  await page.locator("#settingsWorkspaceTabModel").click();
+  await expect(page.locator("#systemPrompt")).toHaveValue("Applied from yaml");
+  await expect(page.locator("#max_tokens")).toHaveValue("1024");
+
+  await openAdvancedSettingsModal(page);
+  await expect(page.locator("#legacySettingsRuntimeSection")).toBeVisible();
+  await closeAdvancedSettingsModal(page);
 
   await page.locator('#modelsList .model-row[data-model-id="new-url-model"] button[data-action="delete"]').click();
   await expect(page.locator('#modelsList .model-row[data-model-id="new-url-model"]')).toHaveCount(0);

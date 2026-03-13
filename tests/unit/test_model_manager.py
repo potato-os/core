@@ -46,6 +46,18 @@ def test_ensure_models_state_has_default_model(runtime: RuntimeConfig):
     assert any(model["source_url"] for model in state["models"])
 
 
+def test_ensure_models_state_populates_default_model_settings(runtime: RuntimeConfig):
+    state = ensure_models_state(runtime)
+
+    default_model = next(model for model in state["models"] if model["id"] == "default")
+    assert default_model["settings"]["chat"]["temperature"] == 0.7
+    assert default_model["settings"]["chat"]["generation_mode"] == "random"
+    assert default_model["settings"]["chat"]["system_prompt"] == ""
+    assert default_model["settings"]["vision"]["enabled"] is True
+    assert default_model["settings"]["vision"]["projector_mode"] == "default"
+    assert default_model["settings"]["vision"]["projector_filename"] is None
+
+
 def test_auto_download_remaining_zero_when_countdown_disabled(runtime: RuntimeConfig):
     runtime.enable_orchestrator = True
     runtime.auto_download_idle_seconds = 300

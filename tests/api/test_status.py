@@ -373,8 +373,10 @@ def test_status_includes_auto_start_countdown(runtime, monkeypatch):
     body = response.json()
     assert body["download"]["active"] is False
     assert body["download"]["auto_start_seconds"] == 300
-    assert body["download"]["auto_start_remaining_seconds"] == 160
+    assert body["download"]["auto_start_remaining_seconds"] == 0
     assert body["download"]["auto_download_completed_once"] is False
+    assert body["download"]["countdown_enabled"] is False
+    assert body["download"]["auto_download_paused"] is True
 
 
 def test_status_disables_auto_start_when_default_model_was_downloaded_once(runtime, monkeypatch):
@@ -416,6 +418,8 @@ def test_status_disables_auto_start_when_default_model_was_downloaded_once(runti
     body = response.json()
     assert body["download"]["auto_download_completed_once"] is True
     assert body["download"]["auto_start_remaining_seconds"] == 0
+    assert body["download"]["countdown_enabled"] is False
+    assert body["download"]["auto_download_paused"] is True
 
 
 def test_status_falls_back_download_target_model_when_missing(runtime, monkeypatch):
@@ -447,6 +451,19 @@ def test_status_falls_back_download_target_model_when_missing(runtime, monkeypat
     default_model = next(item for item in body["models"] if item["id"] == "default")
     assert default_model["status"] == "downloading"
     assert default_model["percent"] == 50
+
+
+def test_status_includes_model_settings_and_projector_metadata(client):
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    default_model = next(item for item in body["models"] if item["id"] == "default")
+    assert "settings" in default_model
+    assert default_model["settings"]["chat"]["temperature"] == 0.7
+    assert "capabilities" in default_model
+    assert default_model["capabilities"]["vision"] is True
+    assert "projector" in default_model
 
 
 def test_status_includes_system_runtime_payload(runtime, monkeypatch):

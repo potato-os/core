@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,11 +34,13 @@ except ModuleNotFoundError:
 
 try:
     from app.model_state import (
+        DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
         MODELS_STATE_VERSION,
         MODEL_URL,
         _default_model_record,
         apply_model_chat_defaults,
+        build_model_capabilities,
         delete_model,
         describe_model_storage,
         ensure_models_state,
@@ -45,12 +48,15 @@ try:
         is_qwen35_a3b_filename,
         model_file_present,
         model_present,
+        model_supports_vision_filename,
         move_model_to_ssd,
+        normalize_model_settings,
         register_model_url,
         resolve_active_model,
         resolve_model_runtime_path,
         save_models_state,
         set_download_countdown_enabled,
+        update_model_settings,
         validate_model_url,
         _model_file_path,
         _sanitize_filename,
@@ -126,11 +132,13 @@ try:
     )
 except ModuleNotFoundError:
     from model_state import (  # type: ignore[no-redef]
+        DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
         MODELS_STATE_VERSION,
         MODEL_URL,
         _default_model_record,
         apply_model_chat_defaults,
+        build_model_capabilities,
         delete_model,
         describe_model_storage,
         ensure_models_state,
@@ -138,12 +146,15 @@ except ModuleNotFoundError:
         is_qwen35_a3b_filename,
         model_file_present,
         model_present,
+        model_supports_vision_filename,
         move_model_to_ssd,
+        normalize_model_settings,
         register_model_url,
         resolve_active_model,
         resolve_model_runtime_path,
         save_models_state,
         set_download_countdown_enabled,
+        update_model_settings,
         validate_model_url,
         _model_file_path,
         _sanitize_filename,
@@ -224,15 +235,12 @@ logging.basicConfig(level=logging.INFO)
 MAX_MODEL_UPLOAD_BYTES = MODEL_UPLOAD_LIMIT_16GB_BYTES
 MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS = 20.0
 MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
+# Temporarily pause implicit bootstrap model downloads until the new model-first
+# settings flow is in place. Manual downloads remain supported.
+AUTO_DOWNLOAD_BOOTSTRAP_ENABLED = False
 
 DEFAULT_CHAT_SETTINGS = {
-    "temperature": 0.7,
-    "top_p": 0.8,
-    "top_k": 20,
-    "repetition_penalty": 1.0,
-    "presence_penalty": 1.5,
-    "max_tokens": 16384,
-    "stream": True,
+    **DEFAULT_MODEL_CHAT_SETTINGS,
 }
 
 WEB_ASSETS_DIR = Path(__file__).resolve().parent / "assets"
@@ -387,6 +395,8 @@ def compute_auto_download_remaining_seconds(
     countdown_enabled: bool = True,
     default_model_downloaded_once: bool = False,
 ) -> int:
+    if not AUTO_DOWNLOAD_BOOTSTRAP_ENABLED:
+        return 0
     if not runtime.enable_orchestrator:
         return 0
     if not countdown_enabled:
@@ -417,6 +427,8 @@ def should_auto_start_download(
     countdown_enabled: bool = True,
     default_model_downloaded_once: bool = False,
 ) -> bool:
+    if not AUTO_DOWNLOAD_BOOTSTRAP_ENABLED:
+        return False
     if model_present or download_active:
         return False
     if not runtime.enable_orchestrator:
@@ -438,6 +450,66 @@ def should_auto_start_download(
 
 def is_download_task_active(task: asyncio.Task[Any] | None) -> bool:
     return task is not None and not task.done()
+
+
+def default_projector_candidates_for_model(filename: str | None) -> list[str]:
+    model_name = str(filename or "").strip().lower()
+    if not model_name:
+        return []
+    if "qwen3" in model_name and "vl" in model_name:
+        if "2b" in model_name:
+            return [
+                "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf",
+                "mmproj-Qwen3VL-2B-Instruct-F16.gguf",
+            ]
+        if "4b" in model_name:
+            return [
+                "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+                "mmproj-Qwen3-VL-4B-Instruct-Q8_0.gguf",
+                "mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+                "mmproj-Qwen3-VL-4B-Instruct-F16.gguf",
+            ]
+    if "qwen" in model_name and "3.5" in model_name:
+        stem = Path(str(filename or "")).stem
+        return [
+            f"mmproj-{stem}-f16.gguf",
+            "mmproj-F16.gguf",
+            "mmproj-BF16.gguf",
+            "mmproj-F32.gguf",
+        ]
+    return []
+
+
+def build_model_projector_status(runtime: RuntimeConfig, model: dict[str, Any]) -> dict[str, Any]:
+    filename = str(model.get("filename") or "")
+    settings = normalize_model_settings(model.get("settings"), filename=filename)
+    vision = settings.get("vision", {})
+    configured_filename = str(vision.get("projector_filename") or "").strip() or None
+    search_names: list[str] = []
+    if configured_filename:
+        search_names.append(configured_filename)
+    for candidate in default_projector_candidates_for_model(filename):
+        if candidate not in search_names:
+            search_names.append(candidate)
+
+    resolved_name = configured_filename
+    present = False
+    resolved_path = None
+    for candidate in search_names:
+        candidate_path = runtime.base_dir / "models" / candidate
+        if candidate_path.exists():
+            present = True
+            resolved_name = candidate
+            resolved_path = candidate_path
+            break
+
+    return {
+        "configured_filename": configured_filename,
+        "filename": resolved_name,
+        "present": present,
+        "path": str(resolved_path) if resolved_path is not None else None,
+        "default_candidates": search_names,
+    }
 
 
 async def build_status(
@@ -519,6 +591,9 @@ async def build_status(
                 "status": status_label,
                 "error": item.get("error"),
                 "is_active": model_id == models_state.get("active_model_id"),
+                "settings": normalize_model_settings(item.get("settings"), filename=filename),
+                "capabilities": build_model_capabilities(filename),
+                "projector": build_model_projector_status(runtime, item),
                 "storage": describe_model_storage(runtime, filename, ssd_dir=ssd_models_dir),
                 **model_progress,
             }
@@ -528,9 +603,10 @@ async def build_status(
     download_payload["active"] = bool(download_active)
     download_payload["auto_start_seconds"] = int(max(0, runtime.auto_download_idle_seconds))
     download_payload["auto_start_remaining_seconds"] = int(max(0, auto_start_remaining_seconds))
-    download_payload["countdown_enabled"] = bool(models_state.get("countdown_enabled", True))
+    download_payload["countdown_enabled"] = bool(models_state.get("countdown_enabled", True)) and AUTO_DOWNLOAD_BOOTSTRAP_ENABLED
     download_payload["auto_download_completed_once"] = bool(models_state.get("default_model_downloaded_once", False))
     download_payload["current_model_id"] = current_download_model_id
+    download_payload["auto_download_paused"] = not AUTO_DOWNLOAD_BOOTSTRAP_ENABLED
 
     upload_snapshot = {
         "active": False,
@@ -580,6 +656,9 @@ async def build_status(
             "filename": active_model_path.name,
             "active_model_id": models_state.get("active_model_id"),
             "storage": describe_model_storage(runtime, active_model_path.name, ssd_dir=ssd_models_dir),
+            "settings": normalize_model_settings(active_model.get("settings"), filename=active_model_path.name),
+            "capabilities": build_model_capabilities(active_model_path.name),
+            "projector": build_model_projector_status(runtime, active_model),
         },
         "models": models_payload,
         "storage_targets": storage_targets,
@@ -648,6 +727,24 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env["POTATO_ALLOW_FAKE_FALLBACK"] = "1" if runtime.allow_fake_fallback else "0"
     env["POTATO_LLAMA_PORT"] = str(runtime.llama_port)
     env["POTATO_LLAMA_NO_MMAP"] = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "0"
+    env.pop("POTATO_MMPROJ_PATH", None)
+    try:
+        state = ensure_models_state(runtime)
+        active_model = get_model_by_id(state, str(state.get("active_model_id") or ""))
+    except Exception:
+        active_model = None
+    if isinstance(active_model, dict):
+        active_filename = str(active_model.get("filename") or "")
+        active_settings = normalize_model_settings(active_model.get("settings"), filename=active_filename)
+        vision_settings = active_settings.get("vision", {})
+        if model_supports_vision_filename(active_filename) and bool(vision_settings.get("enabled", False)):
+            if "qwen" in active_filename.lower() and "3.5" in active_filename.lower():
+                env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+            projector_filename = str(vision_settings.get("projector_filename") or "").strip()
+            if projector_filename:
+                env["POTATO_MMPROJ_PATH"] = str(runtime.base_dir / "models" / projector_filename)
     env.setdefault("POTATO_MODEL_URL", MODEL_URL)
     return env
 
@@ -1204,6 +1301,157 @@ def _merge_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     for key, value in DEFAULT_CHAT_SETTINGS.items():
         merged.setdefault(key, value)
     return merged
+
+
+def get_active_model_settings(runtime: RuntimeConfig) -> dict[str, Any]:
+    state = ensure_models_state(runtime)
+    active_model = get_model_by_id(state, str(state.get("active_model_id") or ""))
+    if not isinstance(active_model, dict):
+        active_model = state["models"][0]
+    filename = str(active_model.get("filename") or "")
+    return normalize_model_settings(active_model.get("settings"), filename=filename)
+
+
+def build_settings_document_payload(runtime: RuntimeConfig) -> dict[str, Any]:
+    models_state = ensure_models_state(runtime)
+    runtime_settings = read_llama_runtime_settings(runtime)
+    models_payload: list[dict[str, Any]] = []
+    for item in models_state.get("models", []):
+        if not isinstance(item, dict):
+            continue
+        filename = str(item.get("filename") or "")
+        models_payload.append(
+            {
+                "id": str(item.get("id") or ""),
+                "settings": normalize_model_settings(item.get("settings"), filename=filename),
+            }
+        )
+    return {
+        "version": 1,
+        "active_model_id": str(models_state.get("active_model_id") or ""),
+        "runtime": {
+            "memory_loading_mode": str(runtime_settings.get("memory_loading_mode") or "auto"),
+            "allow_unsupported_large_models": bool(runtime_settings.get("allow_unsupported_large_models", False)),
+        },
+        "models": models_payload,
+    }
+
+
+def export_settings_document_yaml(runtime: RuntimeConfig) -> str:
+    return yaml.safe_dump(build_settings_document_payload(runtime), sort_keys=False, allow_unicode=True)
+
+
+def apply_settings_document_yaml(runtime: RuntimeConfig, document: str) -> tuple[bool, str, dict[str, Any]]:
+    try:
+        payload = yaml.safe_load(document) or {}
+    except yaml.YAMLError:
+        return False, "invalid_yaml", {}
+    if not isinstance(payload, dict):
+        return False, "invalid_document", {}
+
+    current_models_state = ensure_models_state(runtime)
+    next_models_state = json.loads(json.dumps(current_models_state))
+    next_runtime_settings = read_llama_runtime_settings(runtime)
+
+    active_model_id = str(payload.get("active_model_id") or next_models_state.get("active_model_id") or "").strip()
+    model_entries = payload.get("models")
+    if model_entries is not None and not isinstance(model_entries, list):
+        return False, "invalid_models", {}
+
+    if isinstance(model_entries, list):
+        for item in model_entries:
+            if not isinstance(item, dict):
+                return False, "invalid_models", {}
+            model_id = str(item.get("id") or "").strip()
+            if not model_id:
+                return False, "model_id_required", {}
+            model = get_model_by_id(next_models_state, model_id)
+            if model is None:
+                return False, "model_not_found", {"model_id": model_id}
+            filename = str(model.get("filename") or "")
+            model["settings"] = normalize_model_settings(item.get("settings"), filename=filename)
+
+    if active_model_id:
+        if get_model_by_id(next_models_state, active_model_id) is None:
+            return False, "active_model_not_found", {"active_model_id": active_model_id}
+        next_models_state["active_model_id"] = active_model_id
+
+    runtime_payload = payload.get("runtime")
+    if runtime_payload is not None:
+        if not isinstance(runtime_payload, dict):
+            return False, "invalid_runtime", {}
+        if "memory_loading_mode" in runtime_payload:
+            next_runtime_settings["memory_loading_mode"] = normalize_llama_memory_loading_mode(
+                runtime_payload.get("memory_loading_mode")
+            )
+        if "allow_unsupported_large_models" in runtime_payload:
+            next_runtime_settings["allow_unsupported_large_models"] = normalize_allow_unsupported_large_models(
+                runtime_payload.get("allow_unsupported_large_models")
+            )
+
+    save_models_state(runtime, next_models_state)
+    write_llama_runtime_settings(
+        runtime,
+        memory_loading_mode=str(next_runtime_settings.get("memory_loading_mode") or "auto"),
+        allow_unsupported_large_models=bool(next_runtime_settings.get("allow_unsupported_large_models", False)),
+        power_calibration=next_runtime_settings.get("power_calibration"),
+    )
+    return True, "updated", build_settings_document_payload(runtime)
+
+
+def curated_projector_repo_for_model(filename: str) -> str | None:
+    model_name = filename.lower()
+    if "qwen" in model_name and "3.5" in model_name and "35b" in model_name and "hauhaucs" in model_name:
+        return "HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive"
+    if "qwen" in model_name and "3.5" in model_name and "35b" in model_name and "a3b" in model_name:
+        return "AesSedai/Qwen3.5-35B-A3B-GGUF"
+    if "qwen" in model_name and "3.5" in model_name and "4b" in model_name and "hauhaucs" in model_name:
+        return "HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive"
+    if "qwen" in model_name and "3.5" in model_name and "4b" in model_name:
+        return "unsloth/Qwen3.5-4B-GGUF"
+    if "qwen" in model_name and "3.5" in model_name and "2b" in model_name:
+        return "unsloth/Qwen3.5-2B-GGUF"
+    return None
+
+
+def download_default_projector_for_model(*, runtime: RuntimeConfig, model_id: str) -> tuple[bool, str, str | None]:
+    state = ensure_models_state(runtime)
+    model = get_model_by_id(state, model_id)
+    if model is None:
+        return False, "model_not_found", None
+    filename = str(model.get("filename") or "")
+    if not model_supports_vision_filename(filename):
+        return False, "vision_not_supported", None
+    repo = curated_projector_repo_for_model(filename)
+    candidates = default_projector_candidates_for_model(filename)
+    if not repo or not candidates:
+        return False, "projector_repo_unknown", None
+
+    models_dir = runtime.base_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    client = httpx.Client(follow_redirects=True, timeout=120.0)
+    try:
+        for candidate in candidates:
+            target_path = models_dir / candidate
+            if target_path.exists():
+                return True, "downloaded", candidate
+            url = f"https://huggingface.co/{repo}/resolve/main/{candidate}"
+            part_path = target_path.with_suffix(target_path.suffix + ".part")
+            try:
+                with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    with part_path.open("wb") as handle:
+                        for chunk in response.iter_bytes():
+                            if chunk:
+                                handle.write(chunk)
+                part_path.replace(target_path)
+                return True, "downloaded", candidate
+            except Exception:
+                part_path.unlink(missing_ok=True)
+                continue
+    finally:
+        client.close()
+    return False, "download_failed", None
 
 
 def _forward_headers(request: Request) -> dict[str, str]:
@@ -2423,6 +2671,14 @@ CHAT_HTML = """<!doctype html>
       pointer-events: none;
     }
 
+    .settings-backdrop[hidden],
+    .settings-modal[hidden],
+    .edit-backdrop[hidden],
+    .edit-modal[hidden] {
+      display: none !important;
+      pointer-events: none !important;
+    }
+
     body.settings-modal-open .settings-backdrop,
     body.edit-modal-open .edit-backdrop {
       display: block;
@@ -2453,6 +2709,13 @@ CHAT_HTML = """<!doctype html>
       margin-bottom: 12px;
     }
 
+    .settings-modal-header-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
     .settings-modal-title {
       margin: 0;
       font-size: 20px;
@@ -2467,6 +2730,116 @@ CHAT_HTML = """<!doctype html>
 
     .settings-close-btn {
       flex-shrink: 0;
+    }
+
+    .settings-advanced-btn {
+      min-width: 44px;
+      justify-content: center;
+      font-size: 18px;
+      line-height: 1;
+      padding-inline: 12px;
+    }
+
+    body.legacy-settings-modal-open {
+      overflow: hidden;
+    }
+
+    body.legacy-settings-modal-open .legacy-settings-backdrop {
+      display: block;
+    }
+
+    body.legacy-settings-modal-open .legacy-settings-modal {
+      display: grid;
+    }
+
+    .settings-workspace-shell {
+      display: grid;
+      gap: 14px;
+    }
+
+    .settings-workspace-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .settings-workspace-tab {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--panel-muted);
+      color: var(--text-muted);
+      font: inherit;
+      font-weight: 650;
+      padding: 8px 14px;
+      cursor: pointer;
+    }
+
+    .settings-workspace-tab.active {
+      background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+      color: var(--text);
+      border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+    }
+
+    .settings-workspace-panel[hidden] {
+      display: none !important;
+    }
+
+    .settings-workspace-grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.08fr);
+      align-items: start;
+    }
+
+    .selected-model-header {
+      display: grid;
+      gap: 10px;
+    }
+
+    .settings-subpanel {
+      border: 1px dashed color-mix(in srgb, var(--border) 88%, transparent);
+      border-radius: 10px;
+      padding: 10px;
+      background: color-mix(in srgb, var(--panel-muted) 65%, transparent);
+      display: grid;
+      gap: 10px;
+    }
+
+    .settings-subpanel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .settings-subpanel-title {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .settings-inline-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+
+    .settings-yaml-input {
+      width: 100%;
+      min-height: 420px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel-muted);
+      color: var(--text);
+      font: 500 13px/1.5 "SFMono-Regular", "Menlo", "Monaco", monospace;
+      padding: 12px;
+      box-sizing: border-box;
     }
 
     .edit-backdrop {
@@ -2590,6 +2963,12 @@ CHAT_HTML = """<!doctype html>
       padding: 8px;
       display: grid;
       gap: 6px;
+      cursor: pointer;
+    }
+
+    .model-row.selected {
+      border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
     }
 
     .model-row-head {
@@ -2802,6 +3181,9 @@ CHAT_HTML = """<!doctype html>
         flex-direction: column;
         align-items: stretch;
       }
+      .settings-workspace-grid {
+        grid-template-columns: 1fr;
+      }
       .edit-modal {
         padding: 12px;
       }
@@ -2997,64 +3379,28 @@ CHAT_HTML = """<!doctype html>
   </div>
   <div id="settingsBackdrop" class="settings-backdrop" hidden></div>
   <div id="settingsModal" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle" hidden>
-    <div class="settings-modal-shell">
+    <div class="settings-modal-shell settings-workspace-shell">
       <div class="settings-modal-header">
         <div>
           <h2 id="settingsModalTitle" class="settings-modal-title">Settings</h2>
-          <p class="settings-modal-note">Runtime, model, and chat controls for diagnostics and admin tasks.</p>
+          <p class="settings-modal-note">Model-first controls for chat, downloads, vision, and configuration documents.</p>
         </div>
-        <button id="settingsCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close settings">Close</button>
+        <div class="settings-modal-header-actions">
+          <button id="settingsAdvancedBtn" class="ghost-btn settings-advanced-btn" type="button" aria-label="Open advanced settings" title="Advanced settings">
+            <span aria-hidden="true">⋯</span>
+          </button>
+          <button id="settingsCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close settings">Close</button>
+        </div>
       </div>
-      <div class="settings-grid">
-          <section id="settingsRuntimeSection" class="settings-section full">
-            <h3 class="settings-section-title">Runtime controls</h3>
-            <label class="full" style="display:flex; align-items:center; gap:8px;">
-              <input id="largeModelOverrideEnabled" type="checkbox">
-              <span>Allow unsupported large models (try anyway)</span>
-            </label>
-            <div class="settings-action-row full">
-              <button id="applyLargeModelOverrideBtn" class="ghost-btn" type="button">Apply compatibility override</button>
-            </div>
-            <div id="largeModelOverrideStatus" class="runtime-compact">Compatibility override: default warnings</div>
-            <label class="full">GGUF loading mode (requires runtime restart)
-              <select id="llamaMemoryLoadingMode">
-                <option value="auto">Automatic (profile-based)</option>
-                <option value="full_ram">Full RAM load (--no-mmap)</option>
-                <option value="mmap">Memory-mapped (mmap)</option>
-              </select>
-            </label>
-            <div class="settings-action-row full">
-              <button id="applyLlamaMemoryLoadingBtn" class="ghost-btn" type="button">Apply memory loading + restart</button>
-            </div>
-            <div id="llamaMemoryLoadingStatus" class="runtime-compact">Current memory loading: unknown</div>
-            <div class="full">
-              <h3 class="settings-section-title">Llama Runtime Bundle</h3>
-              <div id="llamaRuntimeCurrent" class="runtime-compact">Current runtime: unknown</div>
-              <label class="full">Installed/Test Bundles
-                <select id="llamaRuntimeBundleSelect">
-                  <option value="">No bundles discovered</option>
-                </select>
-              </label>
-              <div class="settings-action-row full">
-                <button id="switchLlamaRuntimeBtn" class="ghost-btn" type="button">Switch llama runtime</button>
-              </div>
-              <div id="llamaRuntimeSwitchStatus" class="runtime-compact">No runtime switch in progress.</div>
-            </div>
-            <div class="settings-action-row full">
-              <button id="resetRuntimeBtn" class="ghost-btn danger-btn" type="button">Unload model + clean memory + restart</button>
-            </div>
-          </section>
-          <section id="settingsModelSection" class="settings-section full">
+      <div class="settings-workspace-tabs" role="tablist" aria-label="Settings views">
+        <button id="settingsWorkspaceTabModel" class="settings-workspace-tab active" type="button" role="tab" aria-selected="true">Model</button>
+        <button id="settingsWorkspaceTabYaml" class="settings-workspace-tab" type="button" role="tab" aria-selected="false">YAML</button>
+      </div>
+      <div id="settingsModelWorkspace" class="settings-workspace-panel">
+        <div class="settings-workspace-grid">
+          <section class="settings-section settings-models-column">
             <h3 class="settings-section-title">Models</h3>
-            <label class="full">Loaded Model
-              <input id="modelName" type="text" value="Checking..." readonly>
-            </label>
-            <label class="full">Auto-download default model
-              <select id="downloadCountdownEnabled">
-                <option value="true">Enabled</option>
-                <option value="false">Paused</option>
-              </select>
-            </label>
+            <div class="settings-section-note">Auto-download bootstrap is paused for now. Use explicit downloads only.</div>
             <label class="full">Add model by URL
               <input id="modelUrlInput" type="url" placeholder="https://.../model.gguf">
             </label>
@@ -3071,63 +3417,154 @@ CHAT_HTML = """<!doctype html>
             </div>
             <div id="modelUploadStatus" class="runtime-compact full">No upload in progress.</div>
             <div class="full">
-              <h3 class="settings-section-title">Available Models</h3>
               <div id="modelsList" class="runtime-details"></div>
             </div>
           </section>
-          <section id="settingsAdvancedSection" class="settings-section full">
-            <h3 class="settings-section-title">Chat & advanced</h3>
-            <label class="full">System Prompt (optional)
-              <textarea id="systemPrompt" placeholder="Set assistant behavior for this chat"></textarea>
-            </label>
-          <label>Streaming
-            <select id="stream">
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          </label>
-          <label>Generation Mode
-            <select id="generationMode">
-              <option value="random">Random</option>
-              <option value="deterministic">Deterministic</option>
-            </select>
-          </label>
-          <label>Seed
-            <input id="seed" type="number" step="1">
-          </label>
-          <label>Temperature
-            <input id="temperature" type="number" step="0.1" min="0" max="2">
-          </label>
-          <label>Top P
-            <input id="top_p" type="number" step="0.1" min="0" max="1">
-          </label>
-          <label>Top K
-            <input id="top_k" type="number" step="1" min="0">
-          </label>
-          <label>Repetition Penalty
-            <input id="repetition_penalty" type="number" step="0.1" min="0">
-          </label>
-          <label>Presence Penalty
-            <input id="presence_penalty" type="number" step="0.1">
-          </label>
-          <label>Max Tokens
-            <input id="max_tokens" type="number" step="1" min="1">
-          </label>
-            <details id="settingsPowerCalibration" class="settings-subdetails full">
-              <summary>Power calibration</summary>
-              <div class="settings-section-note">Optional wall-meter calibration for Pi 5 power estimates.</div>
-              <div id="powerCalibrationLiveStatus" class="runtime-compact">Current PMIC raw power: --</div>
-              <label class="full">Wall meter reading (W)
-                <input id="powerCalibrationWallWatts" type="number" min="0" step="0.01" placeholder="e.g. 9.4">
-              </label>
-              <div class="settings-action-row full">
-                <button id="capturePowerCalibrationSampleBtn" class="ghost-btn" type="button">Capture calibration sample</button>
-                <button id="fitPowerCalibrationBtn" class="ghost-btn" type="button">Compute calibration</button>
-                <button id="resetPowerCalibrationBtn" class="ghost-btn danger-btn" type="button">Reset calibration</button>
+          <section class="settings-section settings-editor-column">
+            <div class="selected-model-header">
+              <div>
+                <h3 class="settings-section-title">Selected model</h3>
+                <div id="modelSettingsStatus" class="runtime-compact">Select a model to edit its chat and vision settings.</div>
               </div>
-              <div id="powerCalibrationStatus" class="runtime-compact">Power calibration: default correction</div>
-            </details>
+              <input id="modelName" type="text" value="Checking..." readonly>
+            </div>
+            <div id="modelCapabilitiesText" class="settings-section-note">Capabilities unknown.</div>
+            <label class="full">System Prompt (optional)
+              <textarea id="systemPrompt" placeholder="Set assistant behavior for this model"></textarea>
+            </label>
+            <label>Streaming
+              <select id="stream">
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </label>
+            <label>Generation Mode
+              <select id="generationMode">
+                <option value="random">Random</option>
+                <option value="deterministic">Deterministic</option>
+              </select>
+            </label>
+            <label>Seed
+              <input id="seed" type="number" step="1">
+            </label>
+            <label>Temperature
+              <input id="temperature" type="number" step="0.1" min="0" max="2">
+            </label>
+            <label>Top P
+              <input id="top_p" type="number" step="0.1" min="0" max="1">
+            </label>
+            <label>Top K
+              <input id="top_k" type="number" step="1" min="0">
+            </label>
+            <label>Repetition Penalty
+              <input id="repetition_penalty" type="number" step="0.1" min="0">
+            </label>
+            <label>Presence Penalty
+              <input id="presence_penalty" type="number" step="0.1">
+            </label>
+            <label>Max Tokens
+              <input id="max_tokens" type="number" step="1" min="1">
+            </label>
+            <section id="settingsVisionSection" class="settings-subpanel full">
+              <div class="settings-subpanel-header">
+                <h4 class="settings-subpanel-title">Vision</h4>
+                <label class="settings-inline-toggle">
+                  <input id="visionEnabled" type="checkbox">
+                  <span>Enable vision</span>
+                </label>
+              </div>
+              <div id="projectorStatusText" class="runtime-compact">No vision projector configured.</div>
+              <div class="settings-action-row full">
+                <button id="downloadProjectorBtn" class="ghost-btn" type="button">Download vision encoder</button>
+              </div>
+            </section>
+            <div class="settings-action-row full">
+              <button id="saveModelSettingsBtn" class="ghost-btn" type="button">Save model settings</button>
+            </div>
           </section>
+        </div>
+      </div>
+      <div id="settingsYamlPanel" class="settings-workspace-panel" hidden>
+        <section class="settings-section full">
+          <h3 class="settings-section-title">Whole settings document</h3>
+          <div class="settings-section-note">Edit and apply the full settings document atomically.</div>
+          <textarea id="settingsYamlInput" class="settings-yaml-input" spellcheck="false" placeholder="Loading YAML..."></textarea>
+          <div class="settings-action-row full">
+            <button id="settingsYamlReloadBtn" class="ghost-btn" type="button">Reload YAML</button>
+            <button id="settingsYamlApplyBtn" class="ghost-btn" type="button">Apply YAML</button>
+          </div>
+          <div id="settingsYamlStatus" class="runtime-compact">No YAML loaded yet.</div>
+        </section>
+      </div>
+    </div>
+  </div>
+  <div id="legacySettingsBackdrop" class="settings-backdrop legacy-settings-backdrop" hidden></div>
+  <div id="legacySettingsModal" class="settings-modal legacy-settings-modal" role="dialog" aria-modal="true" aria-labelledby="legacySettingsModalTitle" hidden>
+    <div class="settings-modal-shell">
+      <div class="settings-modal-header">
+        <div>
+          <h2 id="legacySettingsModalTitle" class="settings-modal-title">Advanced settings</h2>
+          <p class="settings-modal-note">Legacy runtime and diagnostic controls kept around during the migration.</p>
+        </div>
+        <button id="legacySettingsCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close advanced settings">Close</button>
+      </div>
+      <div class="settings-grid">
+        <section id="legacySettingsRuntimeSection" class="settings-section full">
+          <h3 class="settings-section-title">Runtime controls</h3>
+          <div class="settings-section-note">Automatic default-model bootstrap download is temporarily paused.</div>
+          <label class="full" style="display:flex; align-items:center; gap:8px;">
+            <input id="largeModelOverrideEnabled" type="checkbox">
+            <span>Allow unsupported large models (try anyway)</span>
+          </label>
+          <div class="settings-action-row full">
+            <button id="applyLargeModelOverrideBtn" class="ghost-btn" type="button">Apply compatibility override</button>
+          </div>
+          <div id="largeModelOverrideStatus" class="runtime-compact">Compatibility override: default warnings</div>
+          <label class="full">GGUF loading mode (requires runtime restart)
+            <select id="llamaMemoryLoadingMode">
+              <option value="auto">Automatic (profile-based)</option>
+              <option value="full_ram">Full RAM load (--no-mmap)</option>
+              <option value="mmap">Memory-mapped (mmap)</option>
+            </select>
+          </label>
+          <div class="settings-action-row full">
+            <button id="applyLlamaMemoryLoadingBtn" class="ghost-btn" type="button">Apply memory loading + restart</button>
+          </div>
+          <div id="llamaMemoryLoadingStatus" class="runtime-compact">Current memory loading: unknown</div>
+          <div class="full">
+            <h3 class="settings-section-title">Llama Runtime Bundle</h3>
+            <div id="llamaRuntimeCurrent" class="runtime-compact">Current runtime: unknown</div>
+            <label class="full">Installed/Test Bundles
+              <select id="llamaRuntimeBundleSelect">
+                <option value="">No bundles discovered</option>
+              </select>
+            </label>
+            <div class="settings-action-row full">
+              <button id="switchLlamaRuntimeBtn" class="ghost-btn" type="button">Switch llama runtime</button>
+            </div>
+            <div id="llamaRuntimeSwitchStatus" class="runtime-compact">No runtime switch in progress.</div>
+          </div>
+          <div class="settings-action-row full">
+            <button id="resetRuntimeBtn" class="ghost-btn danger-btn" type="button">Unload model + clean memory + restart</button>
+          </div>
+        </section>
+        <section class="settings-section full">
+          <h3 class="settings-section-title">Power calibration</h3>
+          <details id="settingsPowerCalibration" class="settings-subdetails full" open>
+            <summary>PMIC to wall-meter calibration</summary>
+            <div class="settings-section-note">Optional wall-meter calibration for Pi 5 power estimates.</div>
+            <div id="powerCalibrationLiveStatus" class="runtime-compact">Current PMIC raw power: --</div>
+            <label class="full">Wall meter reading (W)
+              <input id="powerCalibrationWallWatts" type="number" min="0" step="0.01" placeholder="e.g. 9.4">
+            </label>
+            <div class="settings-action-row full">
+              <button id="capturePowerCalibrationSampleBtn" class="ghost-btn" type="button">Capture calibration sample</button>
+              <button id="fitPowerCalibrationBtn" class="ghost-btn" type="button">Compute calibration</button>
+              <button id="resetPowerCalibrationBtn" class="ghost-btn danger-btn" type="button">Reset calibration</button>
+            </div>
+            <div id="powerCalibrationStatus" class="runtime-compact">Power calibration: default correction</div>
+          </details>
+        </section>
       </div>
     </div>
   </div>
@@ -3220,7 +3657,16 @@ CHAT_HTML = """<!doctype html>
     let runtimeDetailsExpanded = true;
     let mobileSidebarMql = null;
     let settingsModalOpen = false;
+    let legacySettingsModalOpen = false;
+    let settingsModalOpenedAtMs = 0;
     let editModalOpen = false;
+    let settingsWorkspaceTab = "model";
+    let selectedSettingsModelId = "";
+    let settingsYamlLoaded = false;
+    let settingsYamlRequestInFlight = false;
+    let modelSettingsSaveInFlight = false;
+    let modelSettingsStatusModelId = "";
+    let projectorDownloadInFlight = false;
     let messagesPinnedToBottom = true;
     let messagePointerSelectionActive = false;
     const chatHistory = [];
@@ -3263,25 +3709,21 @@ CHAT_HTML = """<!doctype html>
     function loadSettings() {
       const raw = localStorage.getItem(settingsKey);
       if (!raw) {
-        return { ...defaultSettings, theme: detectSystemTheme() };
+        return { theme: detectSystemTheme() };
       }
       try {
         const parsedRaw = JSON.parse(raw);
-        const { thinking_enabled: _legacyThinkingSetting, ...sanitizedParsedRaw } = parsedRaw || {};
-        const parsed = { ...defaultSettings, ...sanitizedParsedRaw };
         return {
-          ...parsed,
-          generation_mode: normalizeGenerationMode(parsed.generation_mode),
-          seed: normalizeSeedValue(parsed.seed, defaultSettings.seed),
-          theme: normalizeTheme(parsed.theme, detectSystemTheme()),
+          theme: normalizeTheme(parsedRaw?.theme, detectSystemTheme()),
         };
       } catch (_err) {
-        return { ...defaultSettings, theme: detectSystemTheme() };
+        return { theme: detectSystemTheme() };
       }
     }
 
     function saveSettings(settings) {
-      localStorage.setItem(settingsKey, JSON.stringify(settings));
+      const theme = normalizeTheme(settings?.theme, detectSystemTheme());
+      localStorage.setItem(settingsKey, JSON.stringify({ theme }));
     }
 
     function parseNumber(id, fallback) {
@@ -3503,21 +3945,90 @@ CHAT_HTML = """<!doctype html>
       };
     }
 
-    function collectSettings() {
+    function normalizeChatSettings(rawSettings) {
+      const chat = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+      const generationMode = normalizeGenerationMode(chat.generation_mode);
+      return {
+        temperature: Number.isFinite(Number(chat.temperature)) ? Number(chat.temperature) : defaultSettings.temperature,
+        top_p: Number.isFinite(Number(chat.top_p)) ? Number(chat.top_p) : defaultSettings.top_p,
+        top_k: Number.isFinite(Number(chat.top_k)) ? Number(chat.top_k) : defaultSettings.top_k,
+        repetition_penalty: Number.isFinite(Number(chat.repetition_penalty)) ? Number(chat.repetition_penalty) : defaultSettings.repetition_penalty,
+        presence_penalty: Number.isFinite(Number(chat.presence_penalty)) ? Number(chat.presence_penalty) : defaultSettings.presence_penalty,
+        max_tokens: Number.isFinite(Number(chat.max_tokens)) ? Number(chat.max_tokens) : defaultSettings.max_tokens,
+        stream: chat.stream !== false,
+        generation_mode: generationMode,
+        seed: normalizeSeedValue(chat.seed, defaultSettings.seed),
+        system_prompt: String(chat.system_prompt || "").trim(),
+      };
+    }
+
+    function normalizeVisionSettings(rawSettings) {
+      const vision = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+      return {
+        enabled: Boolean(vision.enabled),
+        projector_mode: String(vision.projector_mode || "default"),
+        projector_filename: String(vision.projector_filename || ""),
+      };
+    }
+
+    function getSettingsModels(statusPayload = latestStatus) {
+      return Array.isArray(statusPayload?.models) ? statusPayload.models : [];
+    }
+
+    function resolveSelectedSettingsModel(statusPayload = latestStatus) {
+      const models = getSettingsModels(statusPayload);
+      if (models.length === 0) return null;
+      if (selectedSettingsModelId) {
+        const exact = models.find((item) => String(item?.id || "") === selectedSettingsModelId);
+        if (exact) return exact;
+      }
+      const activeModelId = String(statusPayload?.model?.active_model_id || "");
+      const active = models.find((item) => String(item?.id || "") === activeModelId || item?.is_active === true);
+      if (active) {
+        selectedSettingsModelId = String(active.id || "");
+        return active;
+      }
+      selectedSettingsModelId = String(models[0]?.id || "");
+      return models[0];
+    }
+
+    function getActiveChatSettings(statusPayload = latestStatus) {
+      const activeChat = statusPayload?.model?.settings?.chat;
+      return normalizeChatSettings(activeChat);
+    }
+
+    function collectSelectedModelSettings() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      const supportsVision = Boolean(selectedModel?.capabilities?.vision);
       const generationMode = normalizeGenerationMode(document.getElementById("generationMode").value);
       const seed = normalizeSeedValue(document.getElementById("seed").value, defaultSettings.seed);
       return {
-        temperature: parseNumber("temperature", defaultSettings.temperature),
-        top_p: parseNumber("top_p", defaultSettings.top_p),
-        top_k: parseNumber("top_k", defaultSettings.top_k),
-        repetition_penalty: parseNumber("repetition_penalty", defaultSettings.repetition_penalty),
-        presence_penalty: parseNumber("presence_penalty", defaultSettings.presence_penalty),
-        max_tokens: parseNumber("max_tokens", defaultSettings.max_tokens),
-        stream: document.getElementById("stream").value === "true",
-        generation_mode: generationMode,
-        seed,
+        chat: {
+          temperature: parseNumber("temperature", defaultSettings.temperature),
+          top_p: parseNumber("top_p", defaultSettings.top_p),
+          top_k: parseNumber("top_k", defaultSettings.top_k),
+          repetition_penalty: parseNumber("repetition_penalty", defaultSettings.repetition_penalty),
+          presence_penalty: parseNumber("presence_penalty", defaultSettings.presence_penalty),
+          max_tokens: parseNumber("max_tokens", defaultSettings.max_tokens),
+          stream: document.getElementById("stream").value === "true",
+          generation_mode: generationMode,
+          seed,
+          system_prompt: document.getElementById("systemPrompt").value.trim(),
+        },
+        vision: {
+          enabled: supportsVision && Boolean(document.getElementById("visionEnabled")?.checked),
+          projector_mode: "default",
+          projector_filename: supportsVision
+            ? String(document.getElementById("downloadProjectorBtn")?.dataset?.projectorFilename || "")
+            : "",
+        },
+      };
+    }
+
+    function collectSettings() {
+      return {
+        ...getActiveChatSettings(),
         theme: document.documentElement.getAttribute("data-theme") || defaultSettings.theme,
-        system_prompt: document.getElementById("systemPrompt").value.trim(),
       };
     }
 
@@ -3791,16 +4302,380 @@ CHAT_HTML = """<!doctype html>
         backdrop.hidden = !settingsModalOpen;
       }
       if (settingsModalOpen) {
+        settingsModalOpenedAtMs = performance.now();
+        const advancedBtn = document.getElementById("settingsAdvancedBtn");
+        if (advancedBtn) {
+          advancedBtn.disabled = true;
+          window.setTimeout(() => {
+            if (advancedBtn.isConnected) {
+              advancedBtn.disabled = false;
+            }
+          }, 350);
+        }
+        setSidebarOpen(false);
+      } else {
+        closeLegacySettingsModal();
+      }
+    }
+
+    function setLegacySettingsModalOpen(open) {
+      legacySettingsModalOpen = Boolean(open);
+      const modal = document.getElementById("legacySettingsModal");
+      const backdrop = document.getElementById("legacySettingsBackdrop");
+      document.body.classList.toggle("legacy-settings-modal-open", legacySettingsModalOpen);
+      if (modal) {
+        modal.hidden = !legacySettingsModalOpen;
+      }
+      if (backdrop) {
+        backdrop.hidden = !legacySettingsModalOpen;
+      }
+      if (legacySettingsModalOpen) {
         setSidebarOpen(false);
       }
     }
 
+    function showSettingsWorkspaceTab(tabName) {
+      settingsWorkspaceTab = tabName === "yaml" ? "yaml" : "model";
+      const modelPanel = document.getElementById("settingsModelWorkspace");
+      const yamlPanel = document.getElementById("settingsYamlPanel");
+      const modelTabBtn = document.getElementById("settingsWorkspaceTabModel");
+      const yamlTabBtn = document.getElementById("settingsWorkspaceTabYaml");
+      const isYaml = settingsWorkspaceTab === "yaml";
+      if (modelPanel) modelPanel.hidden = isYaml;
+      if (yamlPanel) yamlPanel.hidden = !isYaml;
+      if (modelTabBtn) {
+        modelTabBtn.classList.toggle("active", !isYaml);
+        modelTabBtn.setAttribute("aria-selected", !isYaml ? "true" : "false");
+      }
+      if (yamlTabBtn) {
+        yamlTabBtn.classList.toggle("active", isYaml);
+        yamlTabBtn.setAttribute("aria-selected", isYaml ? "true" : "false");
+      }
+      if (isYaml && !settingsYamlLoaded) {
+        loadSettingsDocument();
+      }
+    }
+
     function openSettingsModal() {
+      showSettingsWorkspaceTab(settingsWorkspaceTab);
+      renderSettingsWorkspace(latestStatus);
       setSettingsModalOpen(true);
     }
 
     function closeSettingsModal() {
       setSettingsModalOpen(false);
+    }
+
+    function openLegacySettingsModal() {
+      if ((performance.now() - settingsModalOpenedAtMs) < 250) return;
+      setLegacySettingsModalOpen(true);
+    }
+
+    function closeLegacySettingsModal() {
+      setLegacySettingsModalOpen(false);
+    }
+
+    function renderSelectedModelSettings(statusPayload) {
+      const selectedModel = resolveSelectedSettingsModel(statusPayload);
+      const modelNameField = document.getElementById("modelName");
+      const capabilitiesText = document.getElementById("modelCapabilitiesText");
+      const statusEl = document.getElementById("modelSettingsStatus");
+      const saveBtn = document.getElementById("saveModelSettingsBtn");
+      const projectorBtn = document.getElementById("downloadProjectorBtn");
+      const projectorStatus = document.getElementById("projectorStatusText");
+      const visionSection = document.getElementById("settingsVisionSection");
+      const visionEnabled = document.getElementById("visionEnabled");
+      if (!selectedModel) {
+        if (modelNameField) modelNameField.value = "No model selected";
+        if (capabilitiesText) capabilitiesText.textContent = "Register or upload a model to configure it.";
+        if (statusEl) statusEl.textContent = "No models registered yet.";
+        if (saveBtn) saveBtn.disabled = true;
+        if (projectorBtn) projectorBtn.disabled = true;
+        if (visionSection) visionSection.hidden = true;
+        return;
+      }
+
+      const chat = normalizeChatSettings(selectedModel?.settings?.chat);
+      const vision = normalizeVisionSettings(selectedModel?.settings?.vision);
+      const supportsVision = Boolean(selectedModel?.capabilities?.vision);
+      const projector = selectedModel?.projector || {};
+
+      if (modelNameField) {
+        modelNameField.value = String(selectedModel?.filename || "");
+      }
+      if (capabilitiesText) {
+        const bits = [
+          selectedModel?.is_active ? "Active" : "Inactive",
+          selectedModel?.status ? `Status: ${formatModelStatusLabel(selectedModel.status)}` : "",
+          supportsVision ? "Vision capable" : "Text only",
+        ].filter(Boolean);
+        capabilitiesText.textContent = bits.join(" · ");
+      }
+      if (statusEl) {
+        const currentText = String(statusEl.textContent || "");
+        const keepRecentSuccess = (
+          modelSettingsStatusModelId === String(selectedModel?.id || "")
+          && /updated|saved/i.test(currentText)
+        );
+        if (!keepRecentSuccess) {
+          statusEl.textContent = selectedModel?.status === "failed"
+            ? `Model state: ${String(selectedModel?.error || "failed")}`
+            : "Update the selected model profile and save to persist it.";
+        }
+      }
+
+      document.getElementById("systemPrompt").value = chat.system_prompt;
+      document.getElementById("stream").value = String(chat.stream);
+      document.getElementById("generationMode").value = chat.generation_mode;
+      document.getElementById("seed").value = String(chat.seed);
+      document.getElementById("temperature").value = String(chat.temperature);
+      document.getElementById("top_p").value = String(chat.top_p);
+      document.getElementById("top_k").value = String(chat.top_k);
+      document.getElementById("repetition_penalty").value = String(chat.repetition_penalty);
+      document.getElementById("presence_penalty").value = String(chat.presence_penalty);
+      document.getElementById("max_tokens").value = String(chat.max_tokens);
+      updateSeedFieldState(chat.generation_mode);
+
+      if (visionSection) {
+        visionSection.hidden = !supportsVision;
+      }
+      if (visionEnabled) {
+        visionEnabled.checked = supportsVision ? vision.enabled : false;
+        visionEnabled.disabled = !supportsVision;
+      }
+      if (projectorStatus) {
+        if (!supportsVision) {
+          projectorStatus.textContent = "This model does not use a vision encoder.";
+        } else if (projector?.available) {
+          projectorStatus.textContent = `Vision encoder ready: ${projector?.selected_filename || projector?.default_filename || "available"}`;
+        } else {
+          projectorStatus.textContent = `No encoder installed. Default: ${projector?.default_filename || "unknown"}`;
+        }
+      }
+      if (projectorBtn) {
+        projectorBtn.hidden = !supportsVision;
+        projectorBtn.disabled = !supportsVision || projectorDownloadInFlight;
+        projectorBtn.dataset.modelId = String(selectedModel?.id || "");
+        projectorBtn.dataset.projectorFilename = supportsVision
+          ? String(projector?.selected_filename || vision.projector_filename || "")
+          : "";
+        projectorBtn.textContent = projector?.available ? "Re-download vision encoder" : "Download vision encoder";
+      }
+      if (saveBtn) {
+        saveBtn.disabled = modelSettingsSaveInFlight;
+      }
+    }
+
+    function renderModelsList(statusPayload) {
+      const container = document.getElementById("modelsList");
+      if (!container) return;
+      const models = Array.isArray(statusPayload?.models) ? statusPayload.models : [];
+      const ssdAvailable = statusPayload?.storage_targets?.ssd?.available === true;
+      const selectedModel = resolveSelectedSettingsModel(statusPayload);
+      container.replaceChildren();
+      if (models.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "runtime-compact";
+        empty.textContent = "No models registered yet.";
+        container.appendChild(empty);
+        return;
+      }
+
+      for (const model of models) {
+        const row = document.createElement("div");
+        row.className = "model-row";
+        row.dataset.modelId = String(model?.id || "");
+        if (String(model?.id || "") === String(selectedModel?.id || "")) {
+          row.classList.add("selected");
+        }
+
+        const head = document.createElement("div");
+        head.className = "model-row-head";
+        const name = document.createElement("span");
+        name.className = "model-row-name";
+        name.textContent = String(model?.filename || "unknown.gguf");
+        const status = document.createElement("span");
+        status.className = "model-status-pill";
+        status.textContent = formatModelStatusLabel(model?.status);
+        head.appendChild(name);
+        head.appendChild(status);
+
+        const actions = document.createElement("div");
+        actions.className = "model-row-actions";
+        if (model?.status === "downloading") {
+          const cancelBtn = document.createElement("button");
+          cancelBtn.type = "button";
+          cancelBtn.className = "ghost-btn";
+          cancelBtn.dataset.action = "cancel-download";
+          cancelBtn.textContent = "Stop download";
+          cancelBtn.title = "Stop the active download for this model";
+          actions.appendChild(cancelBtn);
+        } else if (model?.status !== "ready" && model?.source_type === "url") {
+          const downloadBtn = document.createElement("button");
+          downloadBtn.type = "button";
+          downloadBtn.className = "ghost-btn";
+          downloadBtn.dataset.action = "download";
+          downloadBtn.textContent = model?.status === "failed" ? "Resume download" : "Download";
+          actions.appendChild(downloadBtn);
+        }
+        if (model?.is_active !== true && model?.status === "ready") {
+          const activeBtn = document.createElement("button");
+          activeBtn.type = "button";
+          activeBtn.className = "ghost-btn";
+          activeBtn.dataset.action = "activate";
+          activeBtn.textContent = "Set active";
+          actions.appendChild(activeBtn);
+        }
+        if (ssdAvailable && model?.status === "ready" && model?.storage?.location !== "ssd") {
+          const ssdBtn = document.createElement("button");
+          ssdBtn.type = "button";
+          ssdBtn.className = "ghost-btn";
+          ssdBtn.dataset.action = "move-to-ssd";
+          ssdBtn.textContent = "Move to SSD";
+          ssdBtn.title = "Copy this model to the attached SSD and keep using it from there";
+          actions.appendChild(ssdBtn);
+        }
+        if (String(model?.id || "").length > 0) {
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "ghost-btn danger-btn";
+          deleteBtn.dataset.action = "delete";
+          deleteBtn.textContent = model?.status === "downloading" ? "Cancel + delete" : "Delete model";
+          actions.appendChild(deleteBtn);
+        }
+        if (model?.is_active === true) {
+          const activeLabel = document.createElement("span");
+          activeLabel.className = "runtime-compact";
+          activeLabel.textContent = "Active model";
+          actions.appendChild(activeLabel);
+        }
+        if (model?.storage?.location === "ssd") {
+          const storageLabel = document.createElement("span");
+          storageLabel.className = "runtime-compact";
+          storageLabel.textContent = "On SSD";
+          actions.appendChild(storageLabel);
+        }
+        if (model?.status === "downloading") {
+          const progress = document.createElement("span");
+          progress.className = "runtime-compact";
+          progress.textContent = `Downloading ${Number(model?.percent || 0)}% (${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)})`;
+          actions.appendChild(progress);
+        } else if (model?.status === "failed" && Number(model?.bytes_total || 0) > 0) {
+          const progress = document.createElement("span");
+          progress.className = "runtime-compact";
+          progress.textContent = `Failed at ${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)}`;
+          actions.appendChild(progress);
+        }
+        row.appendChild(head);
+        row.appendChild(actions);
+        container.appendChild(row);
+      }
+    }
+
+    function renderSettingsWorkspace(statusPayload) {
+      renderModelsList(statusPayload);
+      renderSelectedModelSettings(statusPayload);
+      showSettingsWorkspaceTab(settingsWorkspaceTab);
+    }
+
+    async function loadSettingsDocument() {
+      if (settingsYamlRequestInFlight) return;
+      settingsYamlRequestInFlight = true;
+      const statusEl = document.getElementById("settingsYamlStatus");
+      if (statusEl) statusEl.textContent = "Loading YAML...";
+      try {
+        const res = await fetch("/internal/settings-document", { cache: "no-store" });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (statusEl) statusEl.textContent = `Could not load YAML (${body?.reason || res.status}).`;
+          return;
+        }
+        document.getElementById("settingsYamlInput").value = String(body?.document || "");
+        settingsYamlLoaded = true;
+        if (statusEl) statusEl.textContent = "YAML loaded.";
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Could not load YAML: ${err}`;
+      } finally {
+        settingsYamlRequestInFlight = false;
+      }
+    }
+
+    async function applySettingsDocument() {
+      if (settingsYamlRequestInFlight) return;
+      settingsYamlRequestInFlight = true;
+      const statusEl = document.getElementById("settingsYamlStatus");
+      if (statusEl) statusEl.textContent = "Applying YAML...";
+      try {
+        const documentText = String(document.getElementById("settingsYamlInput").value || "");
+        const { res, body } = await postJson("/internal/settings-document", { document: documentText });
+        if (!res.ok) {
+          if (statusEl) statusEl.textContent = `Could not apply YAML (${body?.reason || res.status}).`;
+          return;
+        }
+        if (statusEl) statusEl.textContent = "YAML applied.";
+        settingsYamlLoaded = true;
+        await pollStatus();
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Could not apply YAML: ${err}`;
+      } finally {
+        settingsYamlRequestInFlight = false;
+      }
+    }
+
+    async function saveSelectedModelSettings() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      if (!selectedModel || modelSettingsSaveInFlight) return;
+      modelSettingsSaveInFlight = true;
+      const statusEl = document.getElementById("modelSettingsStatus");
+      const saveBtn = document.getElementById("saveModelSettingsBtn");
+      if (saveBtn) saveBtn.disabled = true;
+      if (statusEl) statusEl.textContent = "Saving model settings...";
+      try {
+        const settings = collectSelectedModelSettings();
+        const { res, body } = await postJson("/internal/models/settings", {
+          model_id: selectedModel.id,
+          settings,
+        });
+        if (!res.ok) {
+          if (statusEl) statusEl.textContent = `Could not save model settings (${body?.reason || res.status}).`;
+          return;
+        }
+        modelSettingsStatusModelId = String(selectedModel?.id || "");
+        if (statusEl) statusEl.textContent = "Model settings updated.";
+        await pollStatus();
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Could not save model settings: ${err}`;
+      } finally {
+        modelSettingsSaveInFlight = false;
+        if (saveBtn) saveBtn.disabled = false;
+      }
+    }
+
+    async function downloadProjectorForSelectedModel() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      if (!selectedModel || projectorDownloadInFlight) return;
+      projectorDownloadInFlight = true;
+      const statusEl = document.getElementById("projectorStatusText");
+      const button = document.getElementById("downloadProjectorBtn");
+      if (button) button.disabled = true;
+      if (statusEl) statusEl.textContent = "Downloading vision encoder...";
+      try {
+        const { res, body } = await postJson("/internal/models/download-projector", { model_id: selectedModel.id });
+        if (!res.ok) {
+          if (statusEl) statusEl.textContent = `Could not download encoder (${body?.reason || res.status}).`;
+          return;
+        }
+        if (button) {
+          button.dataset.projectorFilename = String(body?.projector_filename || "");
+        }
+        if (statusEl) statusEl.textContent = `Vision encoder ready: ${body?.projector_filename || "downloaded"}`;
+        await pollStatus();
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Could not download encoder: ${err}`;
+      } finally {
+        projectorDownloadInFlight = false;
+        if (button) button.disabled = false;
+      }
     }
 
     function setEditModalOpen(open) {
@@ -4094,6 +4969,10 @@ CHAT_HTML = """<!doctype html>
             closeEditMessageModal();
             return;
           }
+          if (legacySettingsModalOpen) {
+            closeLegacySettingsModal();
+            return;
+          }
           if (settingsModalOpen) {
             closeSettingsModal();
             return;
@@ -4112,6 +4991,27 @@ CHAT_HTML = """<!doctype html>
       document.getElementById("settingsModal").addEventListener("click", (event) => {
         if (event.target === event.currentTarget) {
           closeSettingsModal();
+        }
+      });
+      document.getElementById("settingsAdvancedBtn").addEventListener("click", openLegacySettingsModal);
+      document.getElementById("settingsWorkspaceTabModel").addEventListener("click", () => {
+        showSettingsWorkspaceTab("model");
+      });
+      document.getElementById("settingsWorkspaceTabYaml").addEventListener("click", () => {
+        showSettingsWorkspaceTab("yaml");
+      });
+      document.getElementById("saveModelSettingsBtn").addEventListener("click", saveSelectedModelSettings);
+      document.getElementById("downloadProjectorBtn").addEventListener("click", downloadProjectorForSelectedModel);
+      document.getElementById("settingsYamlReloadBtn").addEventListener("click", loadSettingsDocument);
+      document.getElementById("settingsYamlApplyBtn").addEventListener("click", applySettingsDocument);
+      document.getElementById("generationMode").addEventListener("change", (event) => {
+        updateSeedFieldState(normalizeGenerationMode(event.target?.value));
+      });
+      document.getElementById("legacySettingsCloseBtn").addEventListener("click", closeLegacySettingsModal);
+      document.getElementById("legacySettingsBackdrop").addEventListener("click", closeLegacySettingsModal);
+      document.getElementById("legacySettingsModal").addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) {
+          closeLegacySettingsModal();
         }
       });
     }
@@ -4143,40 +5043,9 @@ CHAT_HTML = """<!doctype html>
       toggle.setAttribute("title", `Switch to ${target} theme`);
     }
 
-    function persistSettingsFromInputs() {
-      const current = collectSettings();
-      saveSettings(current);
-      applyTheme(current.theme);
-    }
-
     function bindSettings() {
       const settings = loadSettings();
-      const normalizedGenerationMode = normalizeGenerationMode(settings.generation_mode);
-      const normalizedSeed = normalizeSeedValue(settings.seed, defaultSettings.seed);
-
-      document.getElementById("temperature").value = String(settings.temperature);
-      document.getElementById("top_p").value = String(settings.top_p);
-      document.getElementById("top_k").value = String(settings.top_k);
-      document.getElementById("repetition_penalty").value = String(settings.repetition_penalty);
-      document.getElementById("presence_penalty").value = String(settings.presence_penalty);
-      document.getElementById("max_tokens").value = String(settings.max_tokens);
-      document.getElementById("stream").value = String(settings.stream);
-      document.getElementById("generationMode").value = normalizedGenerationMode;
-      document.getElementById("seed").value = String(normalizedSeed);
-      document.getElementById("systemPrompt").value = settings.system_prompt;
-      updateSeedFieldState(normalizedGenerationMode);
-
       applyTheme(settings.theme);
-
-      document.querySelectorAll("#settingsModal input, #settingsModal select, #settingsModal textarea").forEach((el) => {
-        el.addEventListener("change", persistSettingsFromInputs);
-      });
-      document.getElementById("seed").addEventListener("input", persistSettingsFromInputs);
-      document.getElementById("generationMode").addEventListener("change", (event) => {
-        const generationMode = normalizeGenerationMode(event.target?.value);
-        updateSeedFieldState(generationMode);
-        persistSettingsFromInputs();
-      });
     }
 
     function setSendEnabled() {
@@ -5585,114 +6454,6 @@ CHAT_HTML = """<!doctype html>
       await applyLargeModelCompatibilityOverride(true);
     }
 
-    function renderModelsList(statusPayload) {
-      const container = document.getElementById("modelsList");
-      if (!container) return;
-      const models = Array.isArray(statusPayload?.models) ? statusPayload.models : [];
-      const ssdAvailable = statusPayload?.storage_targets?.ssd?.available === true;
-      container.replaceChildren();
-      if (models.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "runtime-compact";
-        empty.textContent = "No models registered yet.";
-        container.appendChild(empty);
-        return;
-      }
-
-      for (const model of models) {
-        const row = document.createElement("div");
-        row.className = "model-row";
-        row.dataset.modelId = String(model?.id || "");
-
-        const head = document.createElement("div");
-        head.className = "model-row-head";
-        const name = document.createElement("span");
-        name.className = "model-row-name";
-        name.textContent = String(model?.filename || "unknown.gguf");
-        const status = document.createElement("span");
-        status.className = "model-status-pill";
-        status.textContent = formatModelStatusLabel(model?.status);
-        head.appendChild(name);
-        head.appendChild(status);
-
-        const actions = document.createElement("div");
-        actions.className = "model-row-actions";
-        if (model?.status === "downloading") {
-          const cancelBtn = document.createElement("button");
-          cancelBtn.type = "button";
-          cancelBtn.className = "ghost-btn";
-          cancelBtn.dataset.action = "cancel-download";
-          cancelBtn.textContent = "Stop download";
-          cancelBtn.title = "Stop the active download for this model";
-          actions.appendChild(cancelBtn);
-        } else if (model?.status !== "ready" && model?.source_type === "url") {
-          const downloadBtn = document.createElement("button");
-          downloadBtn.type = "button";
-          downloadBtn.className = "ghost-btn";
-          downloadBtn.dataset.action = "download";
-          downloadBtn.textContent = model?.status === "failed" ? "Resume download" : "Download";
-          actions.appendChild(downloadBtn);
-        }
-        if (model?.is_active !== true && model?.status === "ready") {
-          const activeBtn = document.createElement("button");
-          activeBtn.type = "button";
-          activeBtn.className = "ghost-btn";
-          activeBtn.dataset.action = "activate";
-          activeBtn.textContent = "Set active";
-          actions.appendChild(activeBtn);
-        }
-        if (ssdAvailable && model?.status === "ready" && model?.storage?.location !== "ssd") {
-          const ssdBtn = document.createElement("button");
-          ssdBtn.type = "button";
-          ssdBtn.className = "ghost-btn";
-          ssdBtn.dataset.action = "move-to-ssd";
-          ssdBtn.textContent = "Move to SSD";
-          ssdBtn.title = "Copy this model to the attached SSD and keep using it from there";
-          actions.appendChild(ssdBtn);
-        }
-        if (String(model?.id || "").length > 0) {
-          const deleteBtn = document.createElement("button");
-          deleteBtn.type = "button";
-          deleteBtn.className = "ghost-btn danger-btn";
-          deleteBtn.dataset.action = "delete";
-          if (model?.status === "downloading") {
-            deleteBtn.textContent = "Cancel + delete";
-            deleteBtn.title = "Cancel the download and remove any partial data for this model";
-          } else {
-            deleteBtn.textContent = "Delete model";
-            deleteBtn.title = "Delete the model file (if present) and remove it from the list";
-          }
-          actions.appendChild(deleteBtn);
-        }
-        if (model?.is_active === true) {
-          const activeLabel = document.createElement("span");
-          activeLabel.className = "runtime-compact";
-          activeLabel.textContent = "Active model";
-          actions.appendChild(activeLabel);
-        }
-        if (model?.storage?.location === "ssd") {
-          const storageLabel = document.createElement("span");
-          storageLabel.className = "runtime-compact";
-          storageLabel.textContent = "On SSD";
-          actions.appendChild(storageLabel);
-        }
-        if (model?.status === "downloading") {
-          const progress = document.createElement("span");
-          progress.className = "runtime-compact";
-          progress.textContent = `Downloading ${Number(model?.percent || 0)}% (${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)})`;
-          actions.appendChild(progress);
-        } else if (model?.status === "failed" && Number(model?.bytes_total || 0) > 0) {
-          const progress = document.createElement("span");
-          progress.className = "runtime-compact";
-          progress.textContent = `Failed at ${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)}`;
-          actions.appendChild(progress);
-        }
-        row.appendChild(head);
-        row.appendChild(actions);
-        container.appendChild(row);
-      }
-    }
-
     function renderUploadState(statusPayload) {
       const upload = statusPayload?.upload || {};
       const cancelBtn = document.getElementById("cancelUploadBtn");
@@ -6254,7 +7015,7 @@ CHAT_HTML = """<!doctype html>
       renderCompatibilityWarnings(statusPayload);
       renderLlamaRuntimeStatus(statusPayload);
       renderSystemRuntime(statusPayload?.system);
-      renderModelsList(statusPayload);
+      renderSettingsWorkspace(statusPayload);
       renderUploadState(statusPayload);
       setSendEnabled();
     }
@@ -6358,7 +7119,7 @@ CHAT_HTML = """<!doctype html>
         renderDownloadPrompt(latestStatus);
         renderCompatibilityWarnings(latestStatus);
         renderSystemRuntime(latestStatus.system);
-        renderModelsList(latestStatus);
+        renderSettingsWorkspace(latestStatus);
         renderUploadState(latestStatus);
         setSendEnabled();
         return latestStatus;
@@ -6398,7 +7159,6 @@ CHAT_HTML = """<!doctype html>
       activeRequest = requestCtx;
 
       const settings = collectSettings();
-      saveSettings(settings);
 
       const baseHistoryLength = chatHistory.length;
       const userView = appendMessage("user", userBubblePayload.text, {
@@ -6749,7 +7509,7 @@ CHAT_HTML = """<!doctype html>
       const current = document.documentElement.getAttribute("data-theme") || defaultSettings.theme;
       const next = current === "dark" ? "light" : "dark";
       applyTheme(next);
-      saveSettings(collectSettings());
+      saveSettings({ theme: next });
     }
 
     bindSettings();
@@ -6776,10 +7536,6 @@ CHAT_HTML = """<!doctype html>
     });
     document.getElementById("startDownloadBtn").addEventListener("click", startModelDownload);
     document.getElementById("statusResumeDownloadBtn").addEventListener("click", startModelDownload);
-    document.getElementById("downloadCountdownEnabled").addEventListener("change", (event) => {
-      const enabled = event.target?.value !== "false";
-      updateCountdownPreference(enabled);
-    });
     document.getElementById("registerModelBtn").addEventListener("click", registerModelFromUrl);
     document.getElementById("uploadModelBtn").addEventListener("click", uploadLocalModel);
     document.getElementById("cancelUploadBtn").addEventListener("click", cancelLocalModelUpload);
@@ -6795,9 +7551,15 @@ CHAT_HTML = """<!doctype html>
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       const action = target.dataset?.action;
-      if (!action) return;
       const row = target.closest(".model-row");
       const modelId = row?.dataset?.modelId;
+      if (!action) {
+        if (modelId) {
+          selectedSettingsModelId = String(modelId);
+          renderSettingsWorkspace(latestStatus);
+        }
+        return;
+      }
       if (action === "download") {
         startModelDownloadForModel(modelId);
       } else if (action === "cancel-download") {
@@ -7229,14 +7991,12 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 status_code=409,
                 content={"updated": False, "reason": "orchestrator_disabled"},
             )
-        payload = await request.json()
-        enabled = bool(payload.get("enabled", True))
-        state = set_download_countdown_enabled(runtime_cfg, enabled)
         return JSONResponse(
             status_code=200,
             content={
-                "updated": True,
-                "countdown_enabled": bool(state.get("countdown_enabled", True)),
+                "updated": False,
+                "reason": "temporarily_disabled",
+                "countdown_enabled": False,
             },
         )
 
@@ -7291,6 +8051,115 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         )
         status_code = 202 if started else 200
         return JSONResponse(status_code=status_code, content={"started": started, "reason": reason, "model_id": model_id})
+
+    @app.post("/internal/models/settings")
+    async def update_model_settings_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        payload = await request.json()
+        model_id = str(payload.get("model_id") or "").strip()
+        settings = payload.get("settings")
+        if not model_id:
+            return JSONResponse(status_code=400, content={"updated": False, "reason": "model_id_required"})
+        if not isinstance(settings, dict):
+            return JSONResponse(status_code=400, content={"updated": False, "reason": "settings_required"})
+        updated, reason, model = update_model_settings(runtime_cfg, model_id=model_id, settings=settings)
+        if not updated:
+            return JSONResponse(status_code=404, content={"updated": False, "reason": reason, "model_id": model_id})
+        restarted = False
+        restart_reason = "not_required"
+        state = ensure_models_state(runtime_cfg)
+        if model_id == str(state.get("active_model_id") or ""):
+            restarted, restart_reason = await restart_managed_llama_process(app)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "updated": True,
+                "reason": reason,
+                "model_id": model_id,
+                "model": model,
+                "restarted": restarted,
+                "restart_reason": restart_reason,
+            },
+        )
+
+    @app.get("/internal/settings-document")
+    async def get_settings_document(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "format": "yaml",
+                "document": export_settings_document_yaml(runtime_cfg),
+            },
+        )
+
+    @app.post("/internal/settings-document")
+    async def apply_settings_document_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        payload = await request.json()
+        document = str(payload.get("document") or "")
+        if not document.strip():
+            return JSONResponse(status_code=400, content={"updated": False, "reason": "document_required"})
+        updated, reason, settings_document = apply_settings_document_yaml(runtime_cfg, document)
+        if not updated:
+            return JSONResponse(status_code=400, content={"updated": False, "reason": reason, **settings_document})
+        restarted, restart_reason = await restart_managed_llama_process(app)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "updated": True,
+                "reason": reason,
+                "active_model_id": settings_document.get("active_model_id"),
+                "document": yaml.safe_dump(settings_document, sort_keys=False, allow_unicode=True),
+                "restarted": restarted,
+                "restart_reason": restart_reason,
+            },
+        )
+
+    @app.post("/internal/models/download-projector")
+    async def download_projector_for_model_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        payload = await request.json()
+        model_id = str(payload.get("model_id") or "").strip()
+        if not model_id:
+            return JSONResponse(status_code=400, content={"downloaded": False, "reason": "model_id_required"})
+        downloaded, reason, projector_filename = await asyncio.to_thread(
+            download_default_projector_for_model,
+            runtime=runtime_cfg,
+            model_id=model_id,
+        )
+        if not downloaded:
+            return JSONResponse(
+                status_code=400 if reason != "model_not_found" else 404,
+                content={"downloaded": False, "reason": reason, "model_id": model_id},
+            )
+        state = ensure_models_state(runtime_cfg)
+        model = get_model_by_id(state, model_id)
+        if isinstance(model, dict):
+            settings = normalize_model_settings(model.get("settings"), filename=str(model.get("filename") or ""))
+            settings["vision"]["projector_filename"] = projector_filename
+            model["settings"] = settings
+            save_models_state(runtime_cfg, state)
+        restarted = False
+        restart_reason = "not_required"
+        if str(state.get("active_model_id") or "") == model_id:
+            restarted, restart_reason = await restart_managed_llama_process(app)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "downloaded": True,
+                "reason": reason,
+                "model_id": model_id,
+                "projector_filename": projector_filename,
+                "restarted": restarted,
+                "restart_reason": restart_reason,
+            },
+        )
 
     @app.post("/internal/models/cancel-download")
     async def cancel_selected_model_download(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
