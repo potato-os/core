@@ -1376,6 +1376,20 @@ CHAT_HTML = """<!doctype html>
       line-height: 1.4;
     }
 
+    .status-summary {
+      display: grid;
+      gap: 8px;
+    }
+
+    .status-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .status-actions[hidden] {
+      display: none;
+    }
+
     .runtime-card {
       margin-top: 10px;
       background: color-mix(in srgb, var(--panel) 90%, var(--status-bg));
@@ -2865,7 +2879,12 @@ CHAT_HTML = """<!doctype html>
       <section class="sidebar-section">
         <h2 class="brand">Potato OS</h2>
         <p id="sidebarNote" class="sidebar-note">v0.2</p>
-        <div id="statusText" class="status-card">Checking status...</div>
+        <div class="status-summary">
+          <div id="statusText" class="status-card">Checking status...</div>
+          <div id="statusActions" class="status-actions" hidden>
+            <button id="statusResumeDownloadBtn" class="ghost-btn" type="button">Resume</button>
+          </div>
+        </div>
         <div id="downloadPrompt" class="download-prompt" hidden>
           <p class="download-prompt-title">Model download required</p>
           <p id="downloadPromptHint" class="download-prompt-hint">Auto-download starts in 5:00.</p>
@@ -4826,12 +4845,17 @@ CHAT_HTML = """<!doctype html>
       const autoStartRemaining = Number(statusPayload.download.auto_start_remaining_seconds);
       const freeBytes = Number(statusPayload?.system?.storage_free_bytes);
       const downloadError = String(statusPayload?.download?.error || "");
+      const resumableFailedModel = findResumableFailedModel(statusPayload);
       if (
         downloadError === "insufficient_storage"
         || (Number.isFinite(freeBytes) && freeBytes < 512 * 1024 * 1024)
       ) {
         const free = formatBytes(statusPayload?.system?.storage_free_bytes);
         hint.textContent = `Not enough free storage for this model. Free space: ${free}. Delete model files and retry.`;
+      } else if (downloadError === "download_failed" && resumableFailedModel) {
+        hint.textContent =
+          `Last download failed at ${formatBytes(resumableFailedModel?.bytes_downloaded)} ` +
+          `of ${formatBytes(resumableFailedModel?.bytes_total)}. Resume when ready.`;
       } else if (!countdownEnabled) {
         hint.textContent = "Auto-download is paused. Start manually or re-enable it in settings.";
       } else if (Number.isFinite(autoStartRemaining) && autoStartRemaining > 0) {
@@ -4841,12 +4865,26 @@ CHAT_HTML = """<!doctype html>
       }
 
       if (downloadStartInFlight) {
-        startBtn.textContent = "Starting...";
+        startBtn.textContent = resumableFailedModel ? "Resuming..." : "Starting...";
         startBtn.disabled = true;
       } else {
-        startBtn.textContent = "Start download now";
+        startBtn.textContent = resumableFailedModel ? "Resume download" : "Start download now";
         startBtn.disabled = false;
       }
+    }
+
+    function renderStatusActions(statusPayload) {
+      const actions = document.getElementById("statusActions");
+      const resumeBtn = document.getElementById("statusResumeDownloadBtn");
+      if (!actions || !resumeBtn) return;
+      const hasModel = statusPayload?.model_present === true;
+      const state = String(statusPayload?.state || "").toUpperCase();
+      const downloadError = String(statusPayload?.download?.error || "");
+      const resumableFailedModel = findResumableFailedModel(statusPayload);
+      const showResume = hasModel && state === "READY" && downloadError === "download_failed" && !!resumableFailedModel;
+      actions.hidden = !showResume;
+      resumeBtn.disabled = downloadStartInFlight;
+      resumeBtn.textContent = downloadStartInFlight ? "Resuming..." : "Resume";
     }
 
     function setRuntimeDetailsExpanded(expanded) {
@@ -5309,6 +5347,14 @@ CHAT_HTML = """<!doctype html>
       return models.find((item) => String(item?.id || "") === String(modelId || "")) || null;
     }
 
+    function findResumableFailedModel(statusPayload) {
+      const models = Array.isArray(statusPayload?.models) ? statusPayload.models : [];
+      return models.find((item) => (
+        String(item?.source_type || "") === "url"
+        && String(item?.status || "").toLowerCase() === "failed"
+      )) || null;
+    }
+
     function formatModelStatusLabel(rawStatus) {
       const normalized = String(rawStatus || "unknown").trim().toLowerCase();
       if (!normalized) return "unknown";
@@ -5584,7 +5630,7 @@ CHAT_HTML = """<!doctype html>
           downloadBtn.type = "button";
           downloadBtn.className = "ghost-btn";
           downloadBtn.dataset.action = "download";
-          downloadBtn.textContent = "Download";
+          downloadBtn.textContent = model?.status === "failed" ? "Resume download" : "Download";
           actions.appendChild(downloadBtn);
         }
         if (model?.is_active !== true && model?.status === "ready") {
@@ -5634,6 +5680,11 @@ CHAT_HTML = """<!doctype html>
           const progress = document.createElement("span");
           progress.className = "runtime-compact";
           progress.textContent = `Downloading ${Number(model?.percent || 0)}% (${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)})`;
+          actions.appendChild(progress);
+        } else if (model?.status === "failed" && Number(model?.bytes_total || 0) > 0) {
+          const progress = document.createElement("span");
+          progress.className = "runtime-compact";
+          progress.textContent = `Failed at ${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)}`;
           actions.appendChild(progress);
         }
         row.appendChild(head);
@@ -5898,14 +5949,25 @@ CHAT_HTML = """<!doctype html>
       downloadStartInFlight = true;
       renderDownloadPrompt(latestStatus || { download: { auto_start_remaining_seconds: 0 } });
       try {
-        const res = await fetch("/internal/start-model-download", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-        });
-        const body = await res.json().catch(() => ({}));
+        const resumableFailedModel = findResumableFailedModel(latestStatus);
+        const failedDownload = String(latestStatus?.download?.error || "") === "download_failed";
+        let res;
+        let body;
+        if (resumableFailedModel && failedDownload) {
+          ({ res, body } = await postJson("/internal/models/download", { model_id: resumableFailedModel.id }));
+        } else {
+          res = await fetch("/internal/start-model-download", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+          });
+          body = await res.json().catch(() => ({}));
+        }
         if (!res.ok) {
           const reason = body?.reason ? ` (${body.reason})` : "";
-          appendMessage("assistant", `Could not start model download${reason}.`);
+          appendMessage(
+            "assistant",
+            `${resumableFailedModel && failedDownload ? "Could not resume model download" : "Could not start model download"}${reason}.`
+          );
           return;
         }
         if (!body?.started && body?.reason === "already_running") {
@@ -5915,10 +5977,13 @@ CHAT_HTML = """<!doctype html>
         } else if (!body?.started && body?.reason === "insufficient_storage") {
           setComposerActivity("Model likely too large for free storage. Delete files and retry.");
         } else if (body?.started) {
-          setComposerActivity("Model download started.");
+          setComposerActivity(resumableFailedModel && failedDownload ? "Model download resumed." : "Model download started.");
         }
       } catch (err) {
-        appendMessage("assistant", `Could not start model download: ${err}`);
+        appendMessage(
+          "assistant",
+          `Could not ${String(latestStatus?.download?.error || "") === "download_failed" ? "resume" : "start"} model download: ${err}`
+        );
       } finally {
         downloadStartInFlight = false;
         await pollStatus();
@@ -6167,8 +6232,13 @@ CHAT_HTML = """<!doctype html>
       latestStatus = statusPayload;
       const downloaded = formatBytes(statusPayload.download.bytes_downloaded);
       const total = formatBytes(statusPayload.download.bytes_total);
-      const text = `State: ${statusPayload.state} | Download: ${statusPayload.download.percent}% (${downloaded} / ${total})`;
+      const downloadError = String(statusPayload?.download?.error || "");
+      const downloadText = downloadError === "download_failed"
+        ? `Download failed (${downloaded} / ${total})`
+        : `Download: ${statusPayload.download.percent}% (${downloaded} / ${total})`;
+      const text = `State: ${statusPayload.state} | ${downloadText}`;
       document.getElementById("statusText").textContent = text;
+      renderStatusActions(statusPayload);
       setSidebarNote(statusPayload?.system);
       const modelNameField = document.getElementById("modelName");
       if (modelNameField) {
@@ -6213,6 +6283,7 @@ CHAT_HTML = """<!doctype html>
         const statusErrText = err?.name === "AbortError" ? "request timeout" : String(err);
         if (latestStatus && typeof latestStatus === "object" && latestStatus.state && latestStatus.state !== "DOWN") {
           document.getElementById("statusText").textContent = `Status warning: ${statusErrText}`;
+          renderStatusActions({});
           return latestStatus;
         }
         latestStatus = {
@@ -6278,6 +6349,7 @@ CHAT_HTML = """<!doctype html>
           },
         };
         document.getElementById("statusText").textContent = `Status error: ${statusErrText}`;
+        renderStatusActions({});
         const modelNameField = document.getElementById("modelName");
         if (modelNameField) {
           modelNameField.value = "Unknown model (status unavailable)";
@@ -6703,6 +6775,7 @@ CHAT_HTML = """<!doctype html>
       setRuntimeDetailsExpanded(!runtimeDetailsExpanded);
     });
     document.getElementById("startDownloadBtn").addEventListener("click", startModelDownload);
+    document.getElementById("statusResumeDownloadBtn").addEventListener("click", startModelDownload);
     document.getElementById("downloadCountdownEnabled").addEventListener("change", (event) => {
       const enabled = event.target?.value !== "false";
       updateCountdownPreference(enabled);
