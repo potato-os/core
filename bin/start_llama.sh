@@ -171,7 +171,7 @@ model_has_vl_name() {
 model_is_qwen35_vision() {
   local model_name
   model_name="$(model_filename_lower)"
-  [[ "${model_name}" == *qwen*3.5*2b* || "${model_name}" == *qwen*3.5*4b* ]]
+  [[ "${model_name}" == *qwen*3.5* ]]
 }
 
 model_requires_mmproj() {

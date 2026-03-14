@@ -338,6 +338,48 @@ printf '%s\n' "$@" > "$ARGS_OUT"
     assert "16384" not in args
 
 
+def test_start_llama_qwen35_a3b_vision_enabled_uses_mmproj(tmp_path: Path):
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model_path = model_dir / "Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ2_M.gguf"
+    model_path.write_bytes(b"gguf")
+    mmproj_path = model_dir / "mmproj-Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf"
+    mmproj_path.write_bytes(b"mmproj")
+
+    args_out = tmp_path / "args.txt"
+    _write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+    env["POTATO_MMPROJ_PATH"] = str(mmproj_path)
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--model" in args
+    assert str(model_path) in args
+    assert "--mmproj" in args
+    assert str(mmproj_path) in args
+    assert "--ctx-size" in args
+    assert "4096" in args
+    assert "16384" not in args
+
+
 def test_start_llama_qwen35_a3b_honors_explicit_ctx_override(tmp_path: Path):
     fakebin = tmp_path / "fakebin"
     fakebin.mkdir()
