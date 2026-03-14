@@ -236,6 +236,74 @@ def test_chat_does_not_force_seed_when_absent(client, runtime, monkeypatch):
     assert "seed" not in forwarded
 
 
+def test_chat_applies_persisted_active_model_settings_when_request_omits_them(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+    save_models_state(
+        runtime,
+        {
+            "active_model_id": "default",
+            "default_model_id": "default",
+            "default_model_downloaded_once": True,
+            "models": [
+                {
+                    "id": "default",
+                    "filename": runtime.model_path.name,
+                    "source_type": "url",
+                    "status": "ready",
+                    "error": None,
+                    "settings": {
+                        "chat": {
+                            "temperature": 0.15,
+                            "top_p": 0.95,
+                            "top_k": 33,
+                            "repetition_penalty": 1.1,
+                            "presence_penalty": 0.25,
+                            "max_tokens": 2048,
+                            "stream": False,
+                            "generation_mode": "deterministic",
+                            "seed": 7,
+                            "system_prompt": "Keep it short.",
+                        }
+                    },
+                }
+            ],
+        },
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-model-defaults",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                },
+            )
+        )
+
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "qwen", "messages": [{"role": "user", "content": "hello"}]},
+        )
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert forwarded["temperature"] == 0.15
+    assert forwarded["top_p"] == 0.95
+    assert forwarded["top_k"] == 33
+    assert forwarded["repetition_penalty"] == 1.1
+    assert forwarded["presence_penalty"] == 0.25
+    assert forwarded["max_tokens"] == 2048
+    assert forwarded["stream"] is False
+    assert forwarded["generation_mode"] == "deterministic"
+    assert forwarded["seed"] == 7
+    assert forwarded["messages"][0] == {"role": "system", "content": "Keep it short."}
+    assert forwarded["messages"][1] == {"role": "user", "content": "hello"}
+
+
 def test_chat_remains_available_when_active_model_is_healthy_but_download_error_exists(
     client,
     runtime,

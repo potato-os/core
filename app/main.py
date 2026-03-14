@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,12 +33,20 @@ except ModuleNotFoundError:
     )
 
 try:
+    from app.constants import (
+        is_qwen35_filename,
+        is_qwen3_vl_filename,
+        projector_repo_for_model,
+    )
     from app.model_state import (
+        DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
         MODELS_STATE_VERSION,
         MODEL_URL,
+        ModelSettingsValidationError,
         _default_model_record,
         apply_model_chat_defaults,
+        build_model_capabilities,
         delete_model,
         describe_model_storage,
         ensure_models_state,
@@ -45,12 +54,15 @@ try:
         is_qwen35_a3b_filename,
         model_file_present,
         model_present,
+        model_supports_vision_filename,
         move_model_to_ssd,
+        normalize_model_settings,
         register_model_url,
         resolve_active_model,
         resolve_model_runtime_path,
         save_models_state,
         set_download_countdown_enabled,
+        update_model_settings,
         validate_model_url,
         _model_file_path,
         _sanitize_filename,
@@ -125,12 +137,20 @@ try:
         _run_vcgencmd,
     )
 except ModuleNotFoundError:
+    from constants import (  # type: ignore[no-redef]
+        is_qwen35_filename,
+        is_qwen3_vl_filename,
+        projector_repo_for_model,
+    )
     from model_state import (  # type: ignore[no-redef]
+        DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
         MODELS_STATE_VERSION,
         MODEL_URL,
+        ModelSettingsValidationError,
         _default_model_record,
         apply_model_chat_defaults,
+        build_model_capabilities,
         delete_model,
         describe_model_storage,
         ensure_models_state,
@@ -138,12 +158,15 @@ except ModuleNotFoundError:
         is_qwen35_a3b_filename,
         model_file_present,
         model_present,
+        model_supports_vision_filename,
         move_model_to_ssd,
+        normalize_model_settings,
         register_model_url,
         resolve_active_model,
         resolve_model_runtime_path,
         save_models_state,
         set_download_countdown_enabled,
+        update_model_settings,
         validate_model_url,
         _model_file_path,
         _sanitize_filename,
@@ -224,15 +247,13 @@ logging.basicConfig(level=logging.INFO)
 MAX_MODEL_UPLOAD_BYTES = MODEL_UPLOAD_LIMIT_16GB_BYTES
 MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS = 20.0
 MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
+# Temporarily pause implicit bootstrap model downloads until the new model-first
+# settings flow is in place. Manual downloads remain supported.
+AUTO_DOWNLOAD_BOOTSTRAP_ENABLED = False
+LLAMA_READY_HEALTH_POLLS_REQUIRED = 2
 
 DEFAULT_CHAT_SETTINGS = {
-    "temperature": 0.7,
-    "top_p": 0.8,
-    "top_k": 20,
-    "repetition_penalty": 1.0,
-    "presence_penalty": 1.5,
-    "max_tokens": 16384,
-    "stream": True,
+    **DEFAULT_MODEL_CHAT_SETTINGS,
 }
 
 WEB_ASSETS_DIR = Path(__file__).resolve().parent / "assets"
@@ -259,6 +280,106 @@ def _empty_llama_runtime_switch_state() -> dict[str, Any]:
         "last_bundle_path": None,
     }
 
+
+def _empty_llama_readiness_state() -> dict[str, Any]:
+    return {
+        "generation": 0,
+        "model_path": None,
+        "status": "idle",
+        "transport_healthy": False,
+        "ready": False,
+        "healthy_polls": 0,
+        "last_error": None,
+        "last_ready_at_unix": None,
+    }
+
+
+def reset_llama_readiness_state(
+    app: FastAPI,
+    *,
+    model_path: Path | str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    previous = getattr(app.state, "llama_readiness_state", None)
+    generation = 1
+    if isinstance(previous, dict):
+        generation = max(0, int(previous.get("generation") or 0)) + 1
+    next_state = _empty_llama_readiness_state()
+    next_state["generation"] = generation
+    next_state["model_path"] = str(model_path) if model_path else None
+    next_state["status"] = "loading" if model_path else "idle"
+    next_state["last_error"] = reason
+    app.state.llama_readiness_state = next_state
+    return dict(next_state)
+
+
+def get_llama_readiness_state(app: FastAPI, *, active_model_path: Path | None = None) -> dict[str, Any]:
+    state = getattr(app.state, "llama_readiness_state", None)
+    if not isinstance(state, dict):
+        state = _empty_llama_readiness_state()
+        app.state.llama_readiness_state = state
+    target_path = str(active_model_path) if active_model_path is not None else None
+    if target_path and state.get("model_path") != target_path:
+        return reset_llama_readiness_state(app, model_path=active_model_path, reason="model_changed")
+    if target_path is None and state.get("model_path") is not None:
+        return reset_llama_readiness_state(app, reason="no_model")
+    return dict(state)
+
+
+async def refresh_llama_readiness(
+    app: FastAPI,
+    runtime: RuntimeConfig,
+    *,
+    active_model_path: Path | None,
+) -> dict[str, Any]:
+    state = get_llama_readiness_state(app, active_model_path=active_model_path)
+    target_path = str(active_model_path) if active_model_path is not None else None
+    next_state = app.state.llama_readiness_state
+
+    if target_path is None:
+        return dict(next_state)
+
+    proc = getattr(app.state, "llama_process", None)
+    running = proc is not None and proc.returncode is None
+    if not running:
+        next_state.update(
+            {
+                "status": "loading",
+                "transport_healthy": False,
+                "ready": False,
+                "healthy_polls": 0,
+            }
+        )
+        return dict(next_state)
+
+    transport_healthy = await check_llama_health(runtime, busy_is_healthy=False)
+    next_state["transport_healthy"] = transport_healthy
+    if not transport_healthy:
+        next_state.update(
+            {
+                "status": "loading",
+                "ready": False,
+                "healthy_polls": 0,
+            }
+        )
+        return dict(next_state)
+
+    next_state["healthy_polls"] = min(
+        LLAMA_READY_HEALTH_POLLS_REQUIRED,
+        max(0, int(next_state.get("healthy_polls") or 0)) + 1,
+    )
+    if int(next_state["healthy_polls"]) >= LLAMA_READY_HEALTH_POLLS_REQUIRED:
+        if not next_state.get("ready"):
+            next_state["last_ready_at_unix"] = time.time()
+        next_state["ready"] = True
+        next_state["status"] = "ready"
+        next_state["last_error"] = None
+    else:
+        next_state["ready"] = False
+        next_state["status"] = "warming"
+    return dict(next_state)
+
+
 def get_runtime(request: Request) -> RuntimeConfig:
     return request.app.state.runtime
 
@@ -268,6 +389,11 @@ def get_chat_repository(request: Request) -> ChatRepositoryManager:
 
 
 async def restart_managed_llama_process(app: FastAPI) -> tuple[bool, str]:
+    try:
+        current_model_path = getattr(app.state.runtime, "model_path", None)
+    except Exception:
+        current_model_path = None
+    reset_llama_readiness_state(app, model_path=current_model_path, reason="restart_requested")
     proc = app.state.llama_process
     terminated_running = False
 
@@ -387,6 +513,8 @@ def compute_auto_download_remaining_seconds(
     countdown_enabled: bool = True,
     default_model_downloaded_once: bool = False,
 ) -> int:
+    if not AUTO_DOWNLOAD_BOOTSTRAP_ENABLED:
+        return 0
     if not runtime.enable_orchestrator:
         return 0
     if not countdown_enabled:
@@ -417,6 +545,8 @@ def should_auto_start_download(
     countdown_enabled: bool = True,
     default_model_downloaded_once: bool = False,
 ) -> bool:
+    if not AUTO_DOWNLOAD_BOOTSTRAP_ENABLED:
+        return False
     if model_present or download_active:
         return False
     if not runtime.enable_orchestrator:
@@ -440,6 +570,90 @@ def is_download_task_active(task: asyncio.Task[Any] | None) -> bool:
     return task is not None and not task.done()
 
 
+def default_projector_candidates_for_model(filename: str | None) -> list[str]:
+    model_name = str(filename or "").strip().lower()
+    if not model_name:
+        return []
+    if "qwen3" in model_name and "vl" in model_name:
+        if "2b" in model_name:
+            return [
+                "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf",
+                "mmproj-Qwen3VL-2B-Instruct-F16.gguf",
+            ]
+        if "4b" in model_name:
+            return [
+                "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+                "mmproj-Qwen3-VL-4B-Instruct-Q8_0.gguf",
+                "mmproj-Qwen3VL-4B-Instruct-F16.gguf",
+                "mmproj-Qwen3-VL-4B-Instruct-F16.gguf",
+            ]
+    if "qwen" in model_name and "3.5" in model_name:
+        stem = Path(str(filename or "")).stem
+        stem_candidates = [stem]
+        trimmed_stem = stem
+        while True:
+            next_stem = re.sub(
+                r"-(?:\d+(?:\.\d+)?bpw|I?Q\d+(?:_[A-Za-z0-9]+)*)$",
+                "",
+                trimmed_stem,
+                flags=re.IGNORECASE,
+            )
+            if next_stem == trimmed_stem or not next_stem:
+                break
+            trimmed_stem = next_stem
+            if trimmed_stem not in stem_candidates:
+                stem_candidates.append(trimmed_stem)
+
+        candidates: list[str] = []
+        for candidate_stem in stem_candidates:
+            candidate_name = f"mmproj-{candidate_stem}-f16.gguf"
+            if candidate_name not in candidates:
+                candidates.append(candidate_name)
+        for fallback in ("mmproj-F16.gguf", "mmproj-BF16.gguf", "mmproj-F32.gguf"):
+            if fallback not in candidates:
+                candidates.append(fallback)
+        return candidates
+    return []
+
+
+def build_model_projector_status(runtime: RuntimeConfig, model: dict[str, Any]) -> dict[str, Any]:
+    filename = str(model.get("filename") or "")
+    settings = normalize_model_settings(model.get("settings"), filename=filename)
+    vision = settings.get("vision", {})
+    projector_mode = str(vision.get("projector_mode") or "default").strip().lower()
+    configured_filename = str(vision.get("projector_filename") or "").strip() or None
+    default_candidates = default_projector_candidates_for_model(filename)
+    search_names: list[str] = []
+    if projector_mode == "custom":
+        if configured_filename:
+            search_names.append(configured_filename)
+    else:
+        for candidate in default_candidates:
+            if candidate not in search_names:
+                search_names.append(candidate)
+        if configured_filename and configured_filename not in search_names:
+            search_names.append(configured_filename)
+
+    resolved_name = configured_filename
+    present = False
+    resolved_path = None
+    for candidate in search_names:
+        candidate_path = runtime.base_dir / "models" / candidate
+        if candidate_path.exists():
+            present = True
+            resolved_name = candidate
+            resolved_path = candidate_path
+            break
+
+    return {
+        "configured_filename": configured_filename,
+        "filename": resolved_name,
+        "present": present,
+        "path": str(resolved_path) if resolved_path is not None else None,
+        "default_candidates": default_candidates,
+    }
+
+
 async def build_status(
     runtime: RuntimeConfig,
     *,
@@ -452,15 +666,28 @@ async def build_status(
     active_model, active_model_path = resolve_active_model(models_state, runtime)
     has_model = model_file_present(runtime, str(active_model["filename"]))
     download = read_download_progress(runtime)
-    llama_healthy = False
+    llama_running = False
+    llama_transport_healthy = False
+    llama_ready = False
     storage_targets = build_model_storage_target_status(runtime)
     ssd_models_dir_raw = storage_targets.get("ssd", {}).get("models_dir")
     ssd_models_dir = Path(str(ssd_models_dir_raw)) if ssd_models_dir_raw else None
 
     if has_model:
-        llama_healthy = await check_llama_health(runtime)
+        readiness_state: dict[str, Any] | None = None
+        if app is not None and runtime.enable_orchestrator:
+            readiness_state = get_llama_readiness_state(app, active_model_path=active_model_path)
+            proc = getattr(app.state, "llama_process", None)
+            llama_running = proc is not None and proc.returncode is None
+        if readiness_state is not None:
+            llama_transport_healthy = bool(readiness_state.get("transport_healthy", False))
+            llama_ready = bool(readiness_state.get("ready", False))
+        else:
+            llama_ready = await check_llama_health(runtime)
+            llama_transport_healthy = llama_ready
+            llama_running = llama_ready
 
-    active_backend, fallback_active = _resolve_backend_active(runtime, has_model, llama_healthy)
+    active_backend, fallback_active = _resolve_backend_active(runtime, has_model, llama_ready)
     effective_mode = runtime.chat_backend_mode
     if effective_mode not in {"auto", "llama", "fake"}:
         effective_mode = "llama"
@@ -469,7 +696,7 @@ async def build_status(
 
     if active_backend == "fake":
         state = "READY"
-    elif has_model and llama_healthy:
+    elif has_model and llama_ready:
         state = "READY"
     elif download.get("error"):
         state = "ERROR"
@@ -519,6 +746,9 @@ async def build_status(
                 "status": status_label,
                 "error": item.get("error"),
                 "is_active": model_id == models_state.get("active_model_id"),
+                "settings": normalize_model_settings(item.get("settings"), filename=filename),
+                "capabilities": build_model_capabilities(filename),
+                "projector": build_model_projector_status(runtime, item),
                 "storage": describe_model_storage(runtime, filename, ssd_dir=ssd_models_dir),
                 **model_progress,
             }
@@ -528,9 +758,10 @@ async def build_status(
     download_payload["active"] = bool(download_active)
     download_payload["auto_start_seconds"] = int(max(0, runtime.auto_download_idle_seconds))
     download_payload["auto_start_remaining_seconds"] = int(max(0, auto_start_remaining_seconds))
-    download_payload["countdown_enabled"] = bool(models_state.get("countdown_enabled", True))
+    download_payload["countdown_enabled"] = bool(models_state.get("countdown_enabled", True)) and AUTO_DOWNLOAD_BOOTSTRAP_ENABLED
     download_payload["auto_download_completed_once"] = bool(models_state.get("default_model_downloaded_once", False))
     download_payload["current_model_id"] = current_download_model_id
+    download_payload["auto_download_paused"] = not AUTO_DOWNLOAD_BOOTSTRAP_ENABLED
 
     upload_snapshot = {
         "active": False,
@@ -580,14 +811,19 @@ async def build_status(
             "filename": active_model_path.name,
             "active_model_id": models_state.get("active_model_id"),
             "storage": describe_model_storage(runtime, active_model_path.name, ssd_dir=ssd_models_dir),
+            "settings": normalize_model_settings(active_model.get("settings"), filename=active_model_path.name),
+            "capabilities": build_model_capabilities(active_model_path.name),
+            "projector": build_model_projector_status(runtime, active_model),
         },
         "models": models_payload,
         "storage_targets": storage_targets,
         "download": download_payload,
         "upload": upload_snapshot,
         "llama_server": {
-            "running": llama_healthy,
-            "healthy": llama_healthy,
+            "running": llama_running or llama_transport_healthy,
+            "healthy": llama_ready,
+            "ready": llama_ready,
+            "transport_healthy": llama_transport_healthy,
             "url": runtime.llama_base_url,
         },
         "backend": {
@@ -648,6 +884,32 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env["POTATO_ALLOW_FAKE_FALLBACK"] = "1" if runtime.allow_fake_fallback else "0"
     env["POTATO_LLAMA_PORT"] = str(runtime.llama_port)
     env["POTATO_LLAMA_NO_MMAP"] = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_VL"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "0"
+    env.pop("POTATO_MMPROJ_PATH", None)
+    try:
+        state = ensure_models_state(runtime)
+        active_model = get_model_by_id(state, str(state.get("active_model_id") or ""))
+    except Exception:
+        active_model = None
+    if isinstance(active_model, dict):
+        active_filename = str(active_model.get("filename") or "")
+        active_settings = normalize_model_settings(active_model.get("settings"), filename=active_filename)
+        vision_settings = active_settings.get("vision", {})
+        if model_supports_vision_filename(active_filename) and bool(vision_settings.get("enabled", False)):
+            if is_qwen3_vl_filename(active_filename):
+                env["POTATO_VISION_MODEL_NAME_PATTERN_VL"] = "1"
+            if is_qwen35_filename(active_filename):
+                env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+            projector_status = build_model_projector_status(runtime, active_model)
+            if projector_status.get("present") and projector_status.get("path"):
+                env["POTATO_MMPROJ_PATH"] = str(projector_status["path"])
+            else:
+                projector_mode = str(vision_settings.get("projector_mode") or "default").strip().lower()
+                projector_filename = str(vision_settings.get("projector_filename") or "").strip()
+                if projector_mode == "custom" and projector_filename:
+                    env["POTATO_MMPROJ_PATH"] = str(runtime.base_dir / "models" / projector_filename)
     env.setdefault("POTATO_MODEL_URL", MODEL_URL)
     return env
 
@@ -1147,6 +1409,10 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                     else:
                         logger.warning("start_llama script missing: %s", runtime.start_llama_script)
 
+                await refresh_llama_readiness(app, runtime, active_model_path=active_model_path)
+            else:
+                reset_llama_readiness_state(app, reason="model_missing")
+
             await asyncio.sleep(2)
         except asyncio.CancelledError:
             raise
@@ -1202,8 +1468,188 @@ def shutil_which(cmd: str) -> str | None:
 def _merge_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     merged = dict(payload)
     for key, value in DEFAULT_CHAT_SETTINGS.items():
+        if key == "seed" and "seed" not in merged:
+            continue
         merged.setdefault(key, value)
     return merged
+
+
+def _merge_active_model_chat_defaults(payload: dict[str, Any], *, runtime: RuntimeConfig) -> dict[str, Any]:
+    merged = dict(payload)
+    chat_settings = get_active_model_settings(runtime).get("chat", {})
+    if not isinstance(chat_settings, dict):
+        chat_settings = {}
+
+    for key in (
+        "temperature",
+        "top_p",
+        "top_k",
+        "repetition_penalty",
+        "presence_penalty",
+        "max_tokens",
+        "stream",
+        "generation_mode",
+    ):
+        if key not in merged and key in chat_settings:
+            merged[key] = chat_settings[key]
+
+    if "seed" not in merged and str(chat_settings.get("generation_mode") or "").strip().lower() == "deterministic":
+        merged["seed"] = chat_settings.get("seed")
+
+    system_prompt = str(chat_settings.get("system_prompt") or "").strip()
+    messages = merged.get("messages")
+    if system_prompt and isinstance(messages, list):
+        has_system_message = any(
+            isinstance(message, dict) and str(message.get("role") or "").strip().lower() == "system"
+            for message in messages
+        )
+        if not has_system_message:
+            merged["messages"] = [{"role": "system", "content": system_prompt}, *messages]
+
+    return merged
+
+
+def get_active_model_settings(runtime: RuntimeConfig) -> dict[str, Any]:
+    state = ensure_models_state(runtime)
+    active_model = get_model_by_id(state, str(state.get("active_model_id") or ""))
+    if not isinstance(active_model, dict):
+        active_model = state["models"][0]
+    filename = str(active_model.get("filename") or "")
+    return normalize_model_settings(active_model.get("settings"), filename=filename)
+
+
+def build_settings_document_payload(runtime: RuntimeConfig) -> dict[str, Any]:
+    models_state = ensure_models_state(runtime)
+    runtime_settings = read_llama_runtime_settings(runtime)
+    models_payload: list[dict[str, Any]] = []
+    for item in models_state.get("models", []):
+        if not isinstance(item, dict):
+            continue
+        filename = str(item.get("filename") or "")
+        models_payload.append(
+            {
+                "id": str(item.get("id") or ""),
+                "settings": normalize_model_settings(item.get("settings"), filename=filename),
+            }
+        )
+    return {
+        "version": 1,
+        "active_model_id": str(models_state.get("active_model_id") or ""),
+        "runtime": {
+            "memory_loading_mode": str(runtime_settings.get("memory_loading_mode") or "auto"),
+            "allow_unsupported_large_models": bool(runtime_settings.get("allow_unsupported_large_models", False)),
+        },
+        "models": models_payload,
+    }
+
+
+def export_settings_document_yaml(runtime: RuntimeConfig) -> str:
+    return yaml.safe_dump(build_settings_document_payload(runtime), sort_keys=False, allow_unicode=True)
+
+
+def apply_settings_document_yaml(runtime: RuntimeConfig, document: str) -> tuple[bool, str, dict[str, Any]]:
+    try:
+        payload = yaml.safe_load(document) or {}
+    except yaml.YAMLError:
+        return False, "invalid_yaml", {}
+    if not isinstance(payload, dict):
+        return False, "invalid_document", {}
+
+    current_models_state = ensure_models_state(runtime)
+    next_models_state = json.loads(json.dumps(current_models_state))
+    next_runtime_settings = read_llama_runtime_settings(runtime)
+
+    active_model_id = str(payload.get("active_model_id") or next_models_state.get("active_model_id") or "").strip()
+    model_entries = payload.get("models")
+    if model_entries is not None and not isinstance(model_entries, list):
+        return False, "invalid_models", {}
+
+    if isinstance(model_entries, list):
+        for item in model_entries:
+            if not isinstance(item, dict):
+                return False, "invalid_models", {}
+            model_id = str(item.get("id") or "").strip()
+            if not model_id:
+                return False, "model_id_required", {}
+            model = get_model_by_id(next_models_state, model_id)
+            if model is None:
+                return False, "model_not_found", {"model_id": model_id}
+            filename = str(model.get("filename") or "")
+            try:
+                model["settings"] = normalize_model_settings(item.get("settings"), filename=filename)
+            except ModelSettingsValidationError as exc:
+                return False, "invalid_settings", {"field": exc.field, "model_id": model_id}
+
+    if active_model_id:
+        if get_model_by_id(next_models_state, active_model_id) is None:
+            return False, "active_model_not_found", {"active_model_id": active_model_id}
+        next_models_state["active_model_id"] = active_model_id
+
+    runtime_payload = payload.get("runtime")
+    if runtime_payload is not None:
+        if not isinstance(runtime_payload, dict):
+            return False, "invalid_runtime", {}
+        if "memory_loading_mode" in runtime_payload:
+            next_runtime_settings["memory_loading_mode"] = normalize_llama_memory_loading_mode(
+                runtime_payload.get("memory_loading_mode")
+            )
+        if "allow_unsupported_large_models" in runtime_payload:
+            next_runtime_settings["allow_unsupported_large_models"] = normalize_allow_unsupported_large_models(
+                runtime_payload.get("allow_unsupported_large_models")
+            )
+
+    save_models_state(runtime, next_models_state)
+    write_llama_runtime_settings(
+        runtime,
+        memory_loading_mode=str(next_runtime_settings.get("memory_loading_mode") or "auto"),
+        allow_unsupported_large_models=bool(next_runtime_settings.get("allow_unsupported_large_models", False)),
+        power_calibration=next_runtime_settings.get("power_calibration"),
+    )
+    return True, "updated", build_settings_document_payload(runtime)
+
+
+def curated_projector_repo_for_model(filename: str) -> str | None:
+    return projector_repo_for_model(filename)
+
+
+def download_default_projector_for_model(*, runtime: RuntimeConfig, model_id: str) -> tuple[bool, str, str | None]:
+    state = ensure_models_state(runtime)
+    model = get_model_by_id(state, model_id)
+    if model is None:
+        return False, "model_not_found", None
+    filename = str(model.get("filename") or "")
+    if not model_supports_vision_filename(filename):
+        return False, "vision_not_supported", None
+    repo = curated_projector_repo_for_model(filename)
+    candidates = default_projector_candidates_for_model(filename)
+    if not repo or not candidates:
+        return False, "projector_repo_unknown", None
+
+    models_dir = runtime.base_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    client = httpx.Client(follow_redirects=True, timeout=120.0)
+    try:
+        for candidate in candidates:
+            target_path = models_dir / candidate
+            if target_path.exists():
+                return True, "downloaded", candidate
+            url = f"https://huggingface.co/{repo}/resolve/main/{candidate}"
+            part_path = target_path.with_suffix(target_path.suffix + ".part")
+            try:
+                with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    with part_path.open("wb") as handle:
+                        for chunk in response.iter_bytes():
+                            if chunk:
+                                handle.write(chunk)
+                part_path.replace(target_path)
+                return True, "downloaded", candidate
+            except Exception:
+                part_path.unlink(missing_ok=True)
+                continue
+    finally:
+        client.close()
+    return False, "download_failed", None
 
 
 def _forward_headers(request: Request) -> dict[str, str]:
@@ -1374,6 +1820,20 @@ CHAT_HTML = """<!doctype html>
       padding: 12px;
       font-size: 13px;
       line-height: 1.4;
+    }
+
+    .status-summary {
+      display: grid;
+      gap: 8px;
+    }
+
+    .status-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .status-actions[hidden] {
+      display: none;
     }
 
     .runtime-card {
@@ -1744,6 +2204,7 @@ CHAT_HTML = """<!doctype html>
       display: flex;
       flex-direction: column;
       gap: 6px;
+      position: relative;
     }
 
     .message-bubble {
@@ -1754,6 +2215,74 @@ CHAT_HTML = """<!doctype html>
       line-height: 1.5;
       font-size: 15px;
       box-shadow: 0 3px 14px rgba(16, 23, 42, 0.06);
+      cursor: text;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .message-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      align-self: flex-end;
+      margin-top: -2px;
+      opacity: 0;
+      transform: translateY(-2px);
+      pointer-events: none;
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+
+    .message-row.message-row-actions-hidden .message-actions {
+      display: none !important;
+    }
+
+    .message-stack:hover .message-actions,
+    .message-stack:focus-within .message-actions,
+    .message-actions[data-visible="true"] {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    .message-action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      color: var(--text-muted);
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+      transition: transform 120ms ease, color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+    }
+
+    .message-action-btn:hover,
+    .message-action-btn:focus-visible {
+      color: var(--text);
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+      background: color-mix(in srgb, var(--panel-muted) 82%, transparent);
+      transform: translateY(-1px);
+      outline: none;
+    }
+
+    .message-action-btn[data-copied="true"] {
+      color: #0f766e;
+      border-color: rgba(16, 163, 127, 0.38);
+      background: rgba(16, 163, 127, 0.12);
+    }
+
+    .message-action-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      pointer-events: none;
     }
 
     .message-bubble.processing {
@@ -1926,6 +2455,14 @@ CHAT_HTML = """<!doctype html>
       font-size: 12.5px;
       line-height: 1.35;
       padding: 0 4px;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .message-bubble *,
+    .message-text {
+      user-select: text;
+      -webkit-user-select: text;
     }
 
     .message-row.user .message-meta {
@@ -2006,43 +2543,6 @@ CHAT_HTML = """<!doctype html>
       transition: transform 120ms ease, border-color 120ms ease, background-color 120ms ease, opacity 120ms ease;
     }
 
-    .thinking-toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      border: 1px solid rgba(59, 130, 246, 0.38);
-      background: color-mix(in srgb, #2563eb 10%, var(--panel-muted));
-      color: color-mix(in srgb, #2563eb 72%, var(--text) 28%);
-      border-radius: 999px;
-      padding: 7px 13px;
-      font-size: 13px;
-      font-weight: 650;
-      cursor: pointer;
-      transition: transform 120ms ease, border-color 120ms ease, background-color 120ms ease, opacity 120ms ease;
-      user-select: none;
-    }
-
-    .thinking-toggle:hover {
-      transform: translateY(-1px);
-    }
-
-    .thinking-toggle.off {
-      border-color: var(--border);
-      background: var(--panel-muted);
-      color: var(--text-muted);
-      font-weight: 560;
-    }
-
-    .thinking-toggle-icon {
-      display: inline-flex;
-      width: 15px;
-      height: 15px;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      line-height: 1;
-    }
-
     .attach-btn {
       display: inline-flex;
       align-items: center;
@@ -2076,6 +2576,13 @@ CHAT_HTML = """<!doctype html>
       transform: translateY(-1px);
     }
 
+    .attach-btn:disabled,
+    .ghost-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+    }
+
     .image-meta {
       font-size: 12px;
       color: var(--text-muted);
@@ -2083,6 +2590,17 @@ CHAT_HTML = """<!doctype html>
       border-radius: 999px;
       padding: 5px 10px;
       background: var(--panel-muted);
+    }
+
+    .composer-vision-notice {
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-muted);
+    }
+
+    .composer-vision-notice[hidden] {
+      display: none !important;
     }
 
     .image-preview-wrap {
@@ -2210,22 +2728,7 @@ CHAT_HTML = """<!doctype html>
       100% { transform: translateX(-18%); }
     }
 
-    .settings {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--panel);
-      padding: 10px 12px 12px;
-      box-shadow: var(--shadow-soft);
-    }
-
-    .settings summary {
-      cursor: pointer;
-      font-weight: 600;
-      color: var(--text);
-    }
-
     .settings-grid {
-      margin-top: 12px;
       display: grid;
       gap: 12px;
       grid-template-columns: 1fr;
@@ -2240,24 +2743,178 @@ CHAT_HTML = """<!doctype html>
       min-width: 0;
     }
 
+    .settings-utility-card > label,
+    .settings-chat-panel > label.full,
+    .settings-field-grid > label {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+      min-width: 0;
+      padding: 12px 14px;
+      border-radius: 18px;
+      border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 90%, white 10%), color-mix(in srgb, var(--panel-muted) 84%, transparent));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      font-size: 12.5px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      color: var(--text-muted);
+    }
+
+    .settings-field-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .settings-field-hint {
+      font-size: 11px;
+      font-weight: 600;
+      color: color-mix(in srgb, var(--text-muted) 90%, transparent);
+      letter-spacing: 0;
+    }
+
+    .settings-chat-panel > label.full {
+      padding: 14px 16px;
+    }
+
     .settings-grid input,
     .settings-grid select,
     .settings-grid textarea {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--panel-muted);
+      border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+      border-radius: 14px;
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, white 8%), color-mix(in srgb, var(--panel-muted) 86%, transparent));
       color: var(--text);
-      padding: 8px 10px;
+      padding: 10px 12px;
       font: inherit;
       width: 100%;
       max-width: 100%;
       min-width: 0;
       box-sizing: border-box;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      transition: border-color 140ms ease, box-shadow 160ms ease, background 160ms ease, transform 140ms ease;
+    }
+
+    .settings-utility-card input:not([type="file"]),
+    .settings-utility-card select,
+    .settings-utility-card textarea,
+    .settings-chat-panel input:not([type="checkbox"]):not([type="file"]),
+    .settings-chat-panel select,
+    .settings-chat-panel textarea {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+      border-radius: 14px;
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, white 6%), color-mix(in srgb, var(--panel-muted) 76%, transparent));
+      color: var(--text);
+      padding: 11px 13px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.4;
+      box-sizing: border-box;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      transition: border-color 140ms ease, box-shadow 160ms ease, background 160ms ease;
+    }
+
+    .settings-utility-card input[type="file"] {
+      width: 100%;
+      min-width: 0;
+      font: inherit;
+      color: var(--text);
+    }
+
+    .settings-chat-panel textarea,
+    .settings-utility-card textarea {
+      min-height: 110px;
+      resize: vertical;
+    }
+
+    .settings-chat-panel select,
+    .settings-utility-card select {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      padding-right: 38px;
+      background-image:
+        linear-gradient(45deg, transparent 50%, color-mix(in srgb, var(--text-muted) 88%, transparent) 50%),
+        linear-gradient(135deg, color-mix(in srgb, var(--text-muted) 88%, transparent) 50%, transparent 50%);
+      background-position:
+        calc(100% - 20px) calc(50% - 2px),
+        calc(100% - 14px) calc(50% - 2px);
+      background-size: 6px 6px, 6px 6px;
+      background-repeat: no-repeat;
+    }
+
+    .settings-segmented {
+      display: inline-grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px;
+      padding: 4px;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+      background: color-mix(in srgb, var(--panel-muted) 82%, transparent);
+      width: fit-content;
+      min-width: 100%;
+    }
+
+    .settings-segment-btn {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: 999px;
+      padding: 9px 12px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      cursor: pointer;
+      transition: background 140ms ease, color 140ms ease, box-shadow 160ms ease;
+    }
+
+    .settings-segment-btn:hover {
+      color: var(--text);
+    }
+
+    .settings-segment-btn.active {
+      background: color-mix(in srgb, var(--panel) 96%, white 4%);
+      color: var(--text);
+      box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+    }
+
+    .settings-segment-btn:focus-visible {
+      outline: none;
+      box-shadow:
+        0 0 0 3px color-mix(in srgb, #f59e0b 12%, transparent),
+        0 4px 10px rgba(15, 23, 42, 0.08);
     }
 
     .settings-grid textarea {
-      min-height: 70px;
+      min-height: 86px;
       resize: vertical;
+    }
+
+    .settings-grid input:focus,
+    .settings-grid select:focus,
+    .settings-grid textarea:focus,
+    .settings-utility-card input:not([type="file"]):focus,
+    .settings-utility-card select:focus,
+    .settings-utility-card textarea:focus,
+    .settings-chat-panel input:not([type="checkbox"]):not([type="file"]):focus,
+    .settings-chat-panel select:focus,
+    .settings-chat-panel textarea:focus,
+    .settings-yaml-input:focus,
+    .edit-modal-input:focus {
+      outline: none;
+      border-color: color-mix(in srgb, #f59e0b 44%, var(--border));
+      box-shadow:
+        0 0 0 4px color-mix(in srgb, #f59e0b 12%, transparent),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      background: color-mix(in srgb, var(--panel) 94%, white 6%);
     }
 
     #seed:disabled {
@@ -2285,15 +2942,39 @@ CHAT_HTML = """<!doctype html>
       margin: 0;
       font-size: 13px;
       color: var(--text-muted);
-      letter-spacing: 0.02em;
-      font-weight: 720;
+      letter-spacing: 0.04em;
+      font-weight: 800;
       text-transform: none;
     }
 
     .settings-section-note {
-      font-size: 12px;
+      font-size: 12.5px;
       color: var(--text-muted);
-      line-height: 1.4;
+      line-height: 1.5;
+    }
+
+    .settings-modal .ghost-btn {
+      border-color: color-mix(in srgb, var(--border) 62%, transparent);
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, white 8%), color-mix(in srgb, var(--panel-muted) 84%, transparent));
+      color: var(--text);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .settings-modal .ghost-btn:hover {
+      border-color: color-mix(in srgb, #f59e0b 22%, var(--border));
+      background:
+        linear-gradient(180deg, color-mix(in srgb, #f59e0b 8%, var(--panel)), color-mix(in srgb, var(--panel-muted) 80%, transparent));
+      box-shadow: 0 10px 18px rgba(15, 23, 42, 0.07);
+    }
+
+    .settings-modal .ghost-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
     }
 
     .settings-subdetails {
@@ -2350,6 +3031,553 @@ CHAT_HTML = """<!doctype html>
       margin-top: 4px;
     }
 
+    .sidebar-actions {
+      margin-top: 10px;
+    }
+
+    .sidebar-settings-btn {
+      width: 100%;
+      justify-content: center;
+      font-weight: 650;
+    }
+
+    body.settings-modal-open,
+    body.edit-modal-open {
+      overflow: hidden;
+    }
+
+    .settings-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      background: rgba(15, 23, 42, 0.48);
+      backdrop-filter: blur(4px);
+      z-index: 42;
+    }
+
+    .settings-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      z-index: 43;
+      pointer-events: none;
+    }
+
+    .settings-backdrop[hidden],
+    .settings-modal[hidden],
+    .edit-backdrop[hidden],
+    .edit-modal[hidden] {
+      display: none !important;
+      pointer-events: none !important;
+    }
+
+    body.settings-modal-open .settings-backdrop,
+    body.edit-modal-open .edit-backdrop {
+      display: block;
+    }
+
+    body.settings-modal-open .settings-modal,
+    body.edit-modal-open .edit-modal {
+      display: grid;
+    }
+
+    .settings-modal-shell {
+      width: min(1180px, calc(100vw - 28px));
+      max-height: calc(100vh - 28px);
+      overflow: auto;
+      border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+      border-radius: 32px;
+      background:
+        radial-gradient(circle at top left, color-mix(in srgb, #f59e0b 10%, transparent), transparent 32%),
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 95%, white 5%), color-mix(in srgb, var(--panel-muted) 30%, var(--panel) 70%));
+      box-shadow: 0 34px 90px rgba(15, 23, 42, 0.22);
+      padding: 26px;
+      pointer-events: auto;
+    }
+
+    .settings-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 20px;
+      margin-bottom: 10px;
+    }
+
+    .settings-modal-header-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .settings-modal-title {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+
+    .settings-modal-note {
+      margin: 10px 0 0;
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--text-muted);
+      max-width: 58ch;
+    }
+
+    .settings-close-btn {
+      flex-shrink: 0;
+    }
+
+    .settings-advanced-btn {
+      min-width: 0;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+      padding-inline: 14px;
+    }
+
+    body.legacy-settings-modal-open {
+      overflow: hidden;
+    }
+
+    body.legacy-settings-modal-open .legacy-settings-backdrop {
+      display: block;
+    }
+
+    body.legacy-settings-modal-open .legacy-settings-modal {
+      display: grid;
+    }
+
+    .settings-workspace-shell {
+      display: grid;
+      gap: 20px;
+    }
+
+    .settings-workspace-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 6px;
+      border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--panel-muted) 78%, transparent);
+      width: fit-content;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .settings-workspace-tab {
+      border: 1px solid transparent;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--text-muted);
+      font: inherit;
+      font-weight: 700;
+      padding: 10px 16px;
+      cursor: pointer;
+    }
+
+    .settings-workspace-tab.active {
+      background: color-mix(in srgb, var(--panel) 94%, white 6%);
+      color: var(--text);
+      border-color: color-mix(in srgb, #f59e0b 26%, var(--border));
+      box-shadow: 0 8px 16px rgba(15, 23, 42, 0.08);
+    }
+
+    .settings-workspace-panel[hidden] {
+      display: none !important;
+    }
+
+    .settings-workspace-grid {
+      display: grid;
+      gap: 22px;
+      grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.15fr);
+      align-items: start;
+    }
+
+    .settings-section {
+      gap: 16px;
+      border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+      border-radius: 22px;
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, white 6%), color-mix(in srgb, var(--panel-muted) 16%, var(--panel) 84%));
+      padding: 18px;
+      box-shadow: 0 16px 34px rgba(15, 23, 42, 0.06);
+    }
+
+    .settings-panel-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+    }
+
+    .settings-panel-heading-copy {
+      display: grid;
+      gap: 4px;
+    }
+
+    .settings-utility-card {
+      display: grid;
+      gap: 12px;
+      border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel-muted) 86%, transparent), color-mix(in srgb, var(--panel) 92%, var(--panel-muted) 8%));
+      padding: 14px;
+    }
+
+    .settings-model-list-wrap {
+      border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+      padding-top: 8px;
+    }
+
+    .settings-danger-zone {
+      margin-top: 4px;
+      border-top: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+      padding-top: 10px;
+    }
+
+    .settings-danger-zone summary {
+      list-style: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      user-select: none;
+    }
+
+    .settings-danger-zone summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .settings-danger-zone summary::before {
+      content: "▸";
+      display: inline-block;
+      margin-right: 8px;
+      transition: transform 140ms ease;
+    }
+
+    .settings-danger-zone[open] summary::before {
+      transform: rotate(90deg);
+    }
+
+    .settings-danger-zone-body {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+      padding-top: 4px;
+    }
+
+    .settings-danger-note {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-muted);
+      margin: 0;
+    }
+
+    .settings-model-list {
+      display: grid;
+      gap: 12px;
+      max-height: 56vh;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .selected-model-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 18px;
+      padding: 20px;
+      border-radius: 22px;
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, white 4%), color-mix(in srgb, var(--panel-muted) 32%, var(--panel)));
+      border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+    }
+
+    .selected-model-header-copy {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .selected-model-header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #modelName {
+      margin: 0;
+      font-size: clamp(19px, 2vw, 24px);
+      font-weight: 760;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+
+    .selected-model-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      align-items: center;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.45;
+      min-height: 18px;
+    }
+
+    .selected-model-meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .selected-model-meta-item::before {
+      content: "";
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+      flex: 0 0 auto;
+    }
+
+    .settings-save-btn {
+      white-space: nowrap;
+      font-weight: 700;
+      border-color: color-mix(in srgb, #347ae3 22%, var(--border));
+      background: color-mix(in srgb, #347ae3 10%, var(--panel));
+    }
+
+    .settings-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-height: 28px;
+    }
+
+    .settings-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+      background: color-mix(in srgb, var(--panel-muted) 74%, transparent);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .settings-chip[data-kind="active"] {
+      border-color: color-mix(in srgb, #10a37f 40%, var(--border));
+      background: color-mix(in srgb, #10a37f 14%, var(--panel));
+      color: color-mix(in srgb, var(--text) 82%, #10a37f 18%);
+    }
+
+    .settings-chip[data-kind="vision"] {
+      border-color: color-mix(in srgb, #347ae3 40%, var(--border));
+      background: color-mix(in srgb, #347ae3 12%, var(--panel));
+      color: color-mix(in srgb, var(--text) 82%, #347ae3 18%);
+    }
+
+    .settings-chip[data-kind="status"] {
+      border-color: color-mix(in srgb, #f59e0b 38%, var(--border));
+      background: color-mix(in srgb, #f59e0b 12%, var(--panel));
+      color: color-mix(in srgb, var(--text) 80%, #b45309 20%);
+    }
+
+    .settings-chat-panel {
+      gap: 16px;
+    }
+
+    .settings-field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .settings-field-grid label:first-child,
+    .settings-field-grid label:nth-child(2) {
+      grid-column: span 1;
+    }
+
+    .settings-subpanel {
+      border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+      border-radius: 18px;
+      padding: 16px;
+      background: color-mix(in srgb, var(--panel-muted) 58%, transparent);
+      display: grid;
+      gap: 14px;
+    }
+
+    .settings-subpanel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .settings-subpanel-title {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.01em;
+      color: var(--text);
+    }
+
+    .settings-inline-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+
+    .settings-yaml-input {
+      width: 100%;
+      min-height: 460px;
+      resize: vertical;
+      border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+      border-radius: 18px;
+      background: color-mix(in srgb, var(--panel-muted) 76%, transparent);
+      color: var(--text);
+      font: 500 13px/1.5 "SFMono-Regular", "Menlo", "Monaco", monospace;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+
+    .edit-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      background: rgba(15, 23, 42, 0.54);
+      backdrop-filter: blur(4px);
+      z-index: 44;
+    }
+
+    .edit-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      z-index: 45;
+      pointer-events: none;
+    }
+
+    .edit-modal-shell {
+      width: min(760px, calc(100vw - 32px));
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      pointer-events: auto;
+    }
+
+    .edit-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .edit-modal-title {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.1;
+    }
+
+    .edit-modal-note {
+      margin: 6px 0 0;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text-muted);
+    }
+
+    .edit-modal-input {
+      width: 100%;
+      min-height: 200px;
+      max-height: 52vh;
+      resize: vertical;
+      border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+      border-radius: 22px;
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--composer-bg) 94%, white 6%), color-mix(in srgb, var(--panel-muted) 62%, var(--composer-bg)));
+      color: var(--text);
+      font: inherit;
+      font-size: 16px;
+      line-height: 1.5;
+      padding: 18px 20px;
+      box-sizing: border-box;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
+
+    .edit-modal-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .edit-modal-hint {
+      font-size: 12.5px;
+      line-height: 1.4;
+      color: var(--text-muted);
+    }
+
+    .edit-modal-action-row {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .edit-send-btn {
+      min-width: 118px;
+    }
+
+    .edit-modal .ghost-btn,
+    .edit-modal .primary-btn {
+      border-radius: 999px;
+      padding: 10px 16px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .edit-modal .ghost-btn {
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 90%, white 10%), color-mix(in srgb, var(--panel-muted) 84%, transparent));
+      border-color: color-mix(in srgb, var(--border) 62%, transparent);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .edit-modal .primary-btn {
+      border: 1px solid color-mix(in srgb, #f59e0b 26%, #10a37f 44%);
+      background: linear-gradient(135deg, #f59e0b, #f97316);
+      color: #fffaf2;
+      box-shadow: 0 12px 24px rgba(249, 115, 22, 0.22);
+    }
+
     .model-row-actions {
       display: grid;
       grid-template-columns: 1fr;
@@ -2364,48 +3592,94 @@ CHAT_HTML = """<!doctype html>
     }
 
     .model-row {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--panel-muted);
-      padding: 8px;
+      border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, white 8%), color-mix(in srgb, var(--panel-muted) 10%, var(--panel) 90%));
+      padding: 14px;
       display: grid;
-      gap: 6px;
+      gap: 10px;
+      cursor: pointer;
+      transition: border-color 140ms ease, transform 140ms ease, box-shadow 180ms ease, background 180ms ease;
+    }
+
+    .model-row.selected {
+      border-color: color-mix(in srgb, #f59e0b 30%, var(--border));
+      box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, #f59e0b 18%, transparent),
+        0 16px 32px rgba(15, 23, 42, 0.10);
+      transform: translateY(-1px);
+      background:
+        linear-gradient(135deg, color-mix(in srgb, #f59e0b 8%, var(--panel)) 0%, color-mix(in srgb, var(--panel-muted) 88%, transparent) 42%, color-mix(in srgb, #2f7cf6 5%, var(--panel)) 100%);
+    }
+
+    .model-row:hover {
+      border-color: color-mix(in srgb, #f59e0b 18%, var(--border));
+      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+      transform: translateY(-1px);
     }
 
     .model-row-head {
       font-size: 12px;
       color: var(--text);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .model-row-name {
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .model-row-meta {
       display: flex;
-      justify-content: space-between;
+      flex-wrap: wrap;
       gap: 8px;
       align-items: center;
     }
 
-    .model-row-name {
-      font-weight: 600;
-      overflow-wrap: anywhere;
+    .model-mini-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--panel-muted) 82%, transparent);
+      border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 700;
     }
 
     .model-status-pill {
-      border: 1px solid var(--border);
+      border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
       border-radius: 999px;
-      padding: 2px 8px;
+      padding: 5px 10px;
       font-size: 11px;
       color: var(--text-muted);
-      background: var(--panel);
+      background: color-mix(in srgb, var(--panel-muted) 78%, transparent);
       white-space: nowrap;
+      font-weight: 700;
     }
 
     .model-row-actions {
       display: flex;
       gap: 6px;
       flex-wrap: wrap;
+      align-items: center;
+      padding-top: 4px;
+      border-top: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
     }
 
     .model-row-actions .ghost-btn {
       width: auto;
       font-size: 12px;
-      padding: 5px 10px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--panel-muted) 75%, transparent);
     }
 
     .danger-btn {
@@ -2542,10 +3816,6 @@ CHAT_HTML = """<!doctype html>
       font-size: 16px;
     }
 
-    .settings {
-      box-shadow: none;
-    }
-
     :focus-visible {
       outline: 2px solid var(--focus);
       outline-offset: 2px;
@@ -2572,6 +3842,65 @@ CHAT_HTML = """<!doctype html>
       }
       body.sidebar-open .sidebar {
         transform: translateX(0);
+      }
+      .settings-modal {
+        padding: 12px;
+      }
+      .settings-modal-shell {
+        width: min(100vw - 16px, 100%);
+        max-height: calc(100vh - 16px);
+        padding: 14px;
+        border-radius: 16px;
+      }
+      .settings-modal-header {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .settings-workspace-grid {
+        grid-template-columns: 1fr;
+      }
+      .selected-model-header {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .model-row-head {
+        grid-template-columns: 1fr;
+      }
+      .settings-field-grid {
+        grid-template-columns: 1fr;
+      }
+      .settings-segmented {
+        width: 100%;
+      }
+      .edit-modal {
+        padding: 12px;
+      }
+      .edit-modal-shell {
+        width: min(100vw - 16px, 100%);
+        max-height: calc(100vh - 16px);
+        padding: 14px;
+        border-radius: 18px;
+      }
+      .edit-modal-header {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .edit-modal-input {
+        min-height: 160px;
+        border-radius: 18px;
+        padding: 15px 16px;
+      }
+      .edit-modal-actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .edit-modal-action-row {
+        width: 100%;
+        justify-content: stretch;
+      }
+      .edit-modal-action-row .ghost-btn,
+      .edit-modal-action-row .primary-btn {
+        flex: 1 1 0;
       }
       .chat-shell {
         padding: 12px;
@@ -2619,8 +3948,13 @@ CHAT_HTML = """<!doctype html>
       </div>
       <section class="sidebar-section">
         <h2 class="brand">Potato OS</h2>
-        <p id="sidebarNote" class="sidebar-note">v0.2</p>
-        <div id="statusText" class="status-card">Checking status...</div>
+        <p id="sidebarNote" class="sidebar-note">V0.3 Pre-Alpha</p>
+        <div class="status-summary">
+          <div id="statusText" class="status-card">Checking status...</div>
+          <div id="statusActions" class="status-actions" hidden>
+            <button id="statusResumeDownloadBtn" class="ghost-btn" type="button">Resume</button>
+          </div>
+        </div>
         <div id="downloadPrompt" class="download-prompt" hidden>
           <p class="download-prompt-title">Model download required</p>
           <p id="downloadPromptHint" class="download-prompt-hint">Auto-download starts in 5:00.</p>
@@ -2672,133 +4006,9 @@ CHAT_HTML = """<!doctype html>
           </div>
         </div>
       </section>
-      <details class="settings">
-        <summary>Settings</summary>
-        <div class="settings-grid">
-          <section id="settingsRuntimeSection" class="settings-section full">
-            <h3 class="settings-section-title">Runtime controls</h3>
-            <label class="full" style="display:flex; align-items:center; gap:8px;">
-              <input id="largeModelOverrideEnabled" type="checkbox">
-              <span>Allow unsupported large models (try anyway)</span>
-            </label>
-            <div class="settings-action-row full">
-              <button id="applyLargeModelOverrideBtn" class="ghost-btn" type="button">Apply compatibility override</button>
-            </div>
-            <div id="largeModelOverrideStatus" class="runtime-compact">Compatibility override: default warnings</div>
-            <label class="full">GGUF loading mode (requires runtime restart)
-              <select id="llamaMemoryLoadingMode">
-                <option value="auto">Automatic (profile-based)</option>
-                <option value="full_ram">Full RAM load (--no-mmap)</option>
-                <option value="mmap">Memory-mapped (mmap)</option>
-              </select>
-            </label>
-            <div class="settings-action-row full">
-              <button id="applyLlamaMemoryLoadingBtn" class="ghost-btn" type="button">Apply memory loading + restart</button>
-            </div>
-            <div id="llamaMemoryLoadingStatus" class="runtime-compact">Current memory loading: unknown</div>
-            <div class="full">
-              <h3 class="settings-section-title">Llama Runtime Bundle</h3>
-              <div id="llamaRuntimeCurrent" class="runtime-compact">Current runtime: unknown</div>
-              <label class="full">Installed/Test Bundles
-                <select id="llamaRuntimeBundleSelect">
-                  <option value="">No bundles discovered</option>
-                </select>
-              </label>
-              <div class="settings-action-row full">
-                <button id="switchLlamaRuntimeBtn" class="ghost-btn" type="button">Switch llama runtime</button>
-              </div>
-              <div id="llamaRuntimeSwitchStatus" class="runtime-compact">No runtime switch in progress.</div>
-            </div>
-            <div class="settings-action-row full">
-              <button id="resetRuntimeBtn" class="ghost-btn danger-btn" type="button">Unload model + clean memory + restart</button>
-            </div>
-          </section>
-          <section id="settingsModelSection" class="settings-section full">
-            <h3 class="settings-section-title">Models</h3>
-            <label class="full">Loaded Model
-              <input id="modelName" type="text" value="Checking..." readonly>
-            </label>
-            <label class="full">Auto-download default model
-              <select id="downloadCountdownEnabled">
-                <option value="true">Enabled</option>
-                <option value="false">Paused</option>
-              </select>
-            </label>
-            <label class="full">Add model by URL
-              <input id="modelUrlInput" type="url" placeholder="https://.../model.gguf">
-            </label>
-            <div class="settings-action-row full">
-              <button id="registerModelBtn" class="ghost-btn" type="button">Add URL model</button>
-            </div>
-            <label class="full">Upload local GGUF to Pi
-              <input id="modelUploadInput" type="file" accept=".gguf,application/octet-stream">
-            </label>
-            <div class="settings-action-row full">
-              <button id="uploadModelBtn" class="ghost-btn" type="button">Upload model</button>
-              <button id="cancelUploadBtn" class="ghost-btn" type="button" hidden>Cancel upload</button>
-              <button id="purgeModelsBtn" class="ghost-btn danger-btn" type="button">Delete all models</button>
-            </div>
-            <div id="modelUploadStatus" class="runtime-compact full">No upload in progress.</div>
-            <div class="full">
-              <h3 class="settings-section-title">Available Models</h3>
-              <div id="modelsList" class="runtime-details"></div>
-            </div>
-          </section>
-          <section id="settingsAdvancedSection" class="settings-section full">
-            <h3 class="settings-section-title">Chat & advanced</h3>
-            <label class="full">System Prompt (optional)
-              <textarea id="systemPrompt" placeholder="Set assistant behavior for this chat"></textarea>
-            </label>
-          <label>Streaming
-            <select id="stream">
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          </label>
-          <label>Generation Mode
-            <select id="generationMode">
-              <option value="random">Random</option>
-              <option value="deterministic">Deterministic</option>
-            </select>
-          </label>
-          <label>Seed
-            <input id="seed" type="number" step="1">
-          </label>
-          <label>Temperature
-            <input id="temperature" type="number" step="0.1" min="0" max="2">
-          </label>
-          <label>Top P
-            <input id="top_p" type="number" step="0.1" min="0" max="1">
-          </label>
-          <label>Top K
-            <input id="top_k" type="number" step="1" min="0">
-          </label>
-          <label>Repetition Penalty
-            <input id="repetition_penalty" type="number" step="0.1" min="0">
-          </label>
-          <label>Presence Penalty
-            <input id="presence_penalty" type="number" step="0.1">
-          </label>
-          <label>Max Tokens
-            <input id="max_tokens" type="number" step="1" min="1">
-          </label>
-            <details id="settingsPowerCalibration" class="settings-subdetails full">
-              <summary>Power calibration</summary>
-              <div class="settings-section-note">Optional wall-meter calibration for Pi 5 power estimates.</div>
-              <div id="powerCalibrationLiveStatus" class="runtime-compact">Current PMIC raw power: --</div>
-              <label class="full">Wall meter reading (W)
-                <input id="powerCalibrationWallWatts" type="number" min="0" step="0.01" placeholder="e.g. 9.4">
-              </label>
-              <div class="settings-action-row full">
-                <button id="capturePowerCalibrationSampleBtn" class="ghost-btn" type="button">Capture calibration sample</button>
-                <button id="fitPowerCalibrationBtn" class="ghost-btn" type="button">Compute calibration</button>
-                <button id="resetPowerCalibrationBtn" class="ghost-btn danger-btn" type="button">Reset calibration</button>
-              </div>
-              <div id="powerCalibrationStatus" class="runtime-compact">Power calibration: default correction</div>
-            </details>
-          </section>
-        </div>
-      </details>
+      <div class="sidebar-actions">
+        <button id="settingsOpenBtn" class="ghost-btn sidebar-settings-btn" type="button">Settings</button>
+      </div>
     </aside>
 
     <main class="chat-shell">
@@ -2813,6 +4023,7 @@ CHAT_HTML = """<!doctype html>
         <div class="header-actions">
           <span id="statusBadge" class="badge offline">
             <span id="statusDot" class="indicator-dot offline" aria-hidden="true"></span>
+            <span id="statusSpinner" class="chip-spinner" aria-hidden="true" hidden></span>
             <span id="statusLabel">DISCONNECTED:llama.cpp</span>
           </span>
           <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch theme">
@@ -2833,10 +4044,6 @@ CHAT_HTML = """<!doctype html>
         <textarea id="userPrompt" rows="3" placeholder="Message Potato OS..."></textarea>
         <div class="composer-bottom">
           <div class="composer-left">
-            <button id="thinkingToggleBtn" class="thinking-toggle off" type="button" aria-pressed="false" title="Toggle model reasoning / deep thinking">
-              <span class="thinking-toggle-icon" aria-hidden="true">◌</span>
-              <span id="thinkingToggleLabel">Deep thinking</span>
-            </button>
             <input id="imageInput" class="visually-hidden-file" type="file" accept="image/*">
             <button id="attachImageBtn" class="attach-btn" type="button">Attach image</button>
             <button id="clearImageBtn" class="ghost-btn" type="button" hidden>Remove image</button>
@@ -2851,6 +4058,7 @@ CHAT_HTML = """<!doctype html>
             <button id="sendBtn" class="send-btn" type="submit">Send</button>
           </div>
         </div>
+        <div id="composerVisionNotice" class="composer-vision-notice" hidden></div>
         <div id="imagePreviewWrap" class="image-preview-wrap" hidden>
           <img id="imagePreview" alt="Selected upload preview">
         </div>
@@ -2858,6 +4066,242 @@ CHAT_HTML = """<!doctype html>
       </form>
 
     </main>
+  </div>
+  <div id="settingsBackdrop" class="settings-backdrop" hidden></div>
+  <div id="settingsModal" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle" hidden>
+    <div class="settings-modal-shell settings-workspace-shell">
+      <div class="settings-modal-header">
+        <div>
+          <h2 id="settingsModalTitle" class="settings-modal-title">Settings</h2>
+          <p class="settings-modal-note">Model profiles, downloads, vision encoders, and YAML in one place.</p>
+        </div>
+        <div class="settings-modal-header-actions">
+          <button id="settingsAdvancedBtn" class="ghost-btn settings-advanced-btn" type="button" aria-label="Open advanced settings" title="Advanced settings">Advanced</button>
+          <button id="settingsCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close settings">Close</button>
+        </div>
+      </div>
+      <div class="settings-workspace-tabs" role="tablist" aria-label="Settings views">
+        <button id="settingsWorkspaceTabModel" class="settings-workspace-tab active" type="button" role="tab" aria-selected="true">Model</button>
+        <button id="settingsWorkspaceTabYaml" class="settings-workspace-tab" type="button" role="tab" aria-selected="false">YAML</button>
+      </div>
+      <div id="settingsModelWorkspace" class="settings-workspace-panel">
+        <div class="settings-workspace-grid">
+          <section class="settings-section settings-models-column">
+            <div class="settings-panel-heading">
+              <div class="settings-panel-heading-copy">
+                <h3 class="settings-section-title">Models</h3>
+                <div class="settings-section-note">Auto-download bootstrap is paused for now. Use explicit downloads only.</div>
+              </div>
+            </div>
+            <div class="settings-utility-card">
+              <label class="full">Add model by URL
+                <input id="modelUrlInput" type="url" placeholder="https://.../model.gguf">
+              </label>
+              <div class="settings-action-row full">
+                <button id="registerModelBtn" class="ghost-btn" type="button">Add URL model</button>
+              </div>
+              <div id="modelUrlStatus" class="runtime-compact full">Add an HTTPS .gguf URL to register another model.</div>
+              <label class="full">Upload local GGUF to Pi
+                <input id="modelUploadInput" type="file" accept=".gguf,application/octet-stream">
+              </label>
+              <div class="settings-action-row full">
+                <button id="uploadModelBtn" class="ghost-btn" type="button">Upload model</button>
+                <button id="cancelUploadBtn" class="ghost-btn" type="button" hidden>Cancel upload</button>
+              </div>
+              <div id="modelUploadStatus" class="runtime-compact full">No upload in progress.</div>
+              <details class="settings-danger-zone full">
+                <summary>Danger zone</summary>
+                <div class="settings-danger-zone-body">
+                  <p class="settings-danger-note">Bulk deletion is tucked away so the main workspace can stay focused on setup and diagnostics.</p>
+                  <button id="purgeModelsBtn" class="ghost-btn danger-btn" type="button">Delete all models</button>
+                </div>
+              </details>
+            </div>
+            <div class="full settings-model-list-wrap">
+              <div id="modelsList" class="runtime-details settings-model-list"></div>
+            </div>
+          </section>
+          <section class="settings-section settings-editor-column">
+            <div class="selected-model-header">
+              <div class="selected-model-header-copy">
+                <h3 class="settings-section-title">Selected model</h3>
+                <div id="modelName">Checking...</div>
+                <div id="modelIdentityMeta" class="selected-model-meta" aria-live="polite"></div>
+                <div id="modelSettingsStatus" class="runtime-compact">Select a model to edit its chat and vision settings.</div>
+              </div>
+              <div class="selected-model-header-actions">
+                <button id="discardModelSettingsBtn" class="ghost-btn" type="button" hidden>Discard changes</button>
+                <button id="saveModelSettingsBtn" class="ghost-btn settings-save-btn" type="button">Save model settings</button>
+              </div>
+            </div>
+            <div id="modelCapabilitiesChips" class="settings-chip-row" aria-live="polite"></div>
+            <div id="modelCapabilitiesText" class="settings-section-note">Capabilities unknown.</div>
+            <section class="settings-subpanel full settings-chat-panel">
+              <div class="settings-subpanel-header">
+                <h4 class="settings-subpanel-title">Chat profile</h4>
+              </div>
+              <label class="full">System Prompt (optional)
+                <textarea id="systemPrompt" placeholder="Set assistant behavior for this model"></textarea>
+              </label>
+              <div class="settings-field-grid">
+                <label>
+                  <span class="settings-field-label">Streaming</span>
+                  <div class="settings-segmented" data-target="stream" role="group" aria-label="Streaming">
+                    <button type="button" class="settings-segment-btn" data-target="stream" data-value="true">On</button>
+                    <button type="button" class="settings-segment-btn" data-target="stream" data-value="false">Off</button>
+                  </div>
+                  <input id="stream" type="hidden" value="true">
+                </label>
+                <label>
+                  <span class="settings-field-label">Generation Mode</span>
+                  <div class="settings-segmented" data-target="generationMode" role="group" aria-label="Generation Mode">
+                    <button type="button" class="settings-segment-btn" data-target="generationMode" data-value="random">Random</button>
+                    <button type="button" class="settings-segment-btn" data-target="generationMode" data-value="deterministic">Deterministic</button>
+                  </div>
+                  <input id="generationMode" type="hidden" value="random">
+                </label>
+                <label><span class="settings-field-label">Seed <span class="settings-field-hint">Only used in deterministic mode</span></span>
+                  <input id="seed" type="number" step="1">
+                </label>
+                <label><span class="settings-field-label">Temperature</span>
+                  <input id="temperature" type="number" step="0.1" min="0" max="2">
+                </label>
+                <label><span class="settings-field-label">Top P</span>
+                  <input id="top_p" type="number" step="0.1" min="0" max="1">
+                </label>
+                <label><span class="settings-field-label">Top K</span>
+                  <input id="top_k" type="number" step="1" min="0">
+                </label>
+                <label><span class="settings-field-label">Repetition Penalty</span>
+                  <input id="repetition_penalty" type="number" step="0.1" min="0">
+                </label>
+                <label><span class="settings-field-label">Presence Penalty</span>
+                  <input id="presence_penalty" type="number" step="0.1">
+                </label>
+                <label><span class="settings-field-label">Max Tokens</span>
+                  <input id="max_tokens" type="number" step="1" min="1">
+                </label>
+              </div>
+            </section>
+            <section id="settingsVisionSection" class="settings-subpanel full">
+              <div class="settings-subpanel-header">
+                <h4 class="settings-subpanel-title">Vision</h4>
+                <label class="settings-inline-toggle">
+                  <input id="visionEnabled" type="checkbox">
+                  <span>Enable vision</span>
+                </label>
+              </div>
+              <div id="projectorStatusText" class="runtime-compact">No vision projector configured.</div>
+              <div class="settings-action-row full">
+                <button id="downloadProjectorBtn" class="ghost-btn" type="button">Download vision encoder</button>
+              </div>
+            </section>
+          </section>
+        </div>
+      </div>
+      <div id="settingsYamlPanel" class="settings-workspace-panel" hidden>
+        <section class="settings-section full">
+          <h3 class="settings-section-title">Whole settings document</h3>
+          <div class="settings-section-note">Edit and apply the full settings document atomically.</div>
+          <textarea id="settingsYamlInput" class="settings-yaml-input" spellcheck="false" placeholder="Loading YAML..."></textarea>
+          <div class="settings-action-row full">
+            <button id="settingsYamlReloadBtn" class="ghost-btn" type="button">Reload YAML</button>
+            <button id="settingsYamlApplyBtn" class="ghost-btn" type="button">Apply YAML</button>
+          </div>
+          <div id="settingsYamlStatus" class="runtime-compact">No YAML loaded yet.</div>
+        </section>
+      </div>
+    </div>
+  </div>
+  <div id="legacySettingsBackdrop" class="settings-backdrop legacy-settings-backdrop" hidden></div>
+  <div id="legacySettingsModal" class="settings-modal legacy-settings-modal" role="dialog" aria-modal="true" aria-labelledby="legacySettingsModalTitle" hidden>
+    <div class="settings-modal-shell">
+      <div class="settings-modal-header">
+        <div>
+          <h2 id="legacySettingsModalTitle" class="settings-modal-title">Advanced settings</h2>
+          <p class="settings-modal-note">Legacy runtime and diagnostic controls kept around during the migration.</p>
+        </div>
+        <button id="legacySettingsCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close advanced settings">Close</button>
+      </div>
+      <div class="settings-grid">
+        <section id="legacySettingsRuntimeSection" class="settings-section full">
+          <h3 class="settings-section-title">Runtime controls</h3>
+          <div class="settings-section-note">Automatic default-model bootstrap download is temporarily paused.</div>
+          <label class="full" style="display:flex; align-items:center; gap:8px;">
+            <input id="largeModelOverrideEnabled" type="checkbox">
+            <span>Allow unsupported large models (try anyway)</span>
+          </label>
+          <div class="settings-action-row full">
+            <button id="applyLargeModelOverrideBtn" class="ghost-btn" type="button">Apply compatibility override</button>
+          </div>
+          <div id="largeModelOverrideStatus" class="runtime-compact">Compatibility override: default warnings</div>
+          <label class="full">GGUF loading mode (requires runtime restart)
+            <select id="llamaMemoryLoadingMode">
+              <option value="auto">Automatic (profile-based)</option>
+              <option value="full_ram">Full RAM load (--no-mmap)</option>
+              <option value="mmap">Memory-mapped (mmap)</option>
+            </select>
+          </label>
+          <div class="settings-action-row full">
+            <button id="applyLlamaMemoryLoadingBtn" class="ghost-btn" type="button">Apply memory loading + restart</button>
+          </div>
+          <div id="llamaMemoryLoadingStatus" class="runtime-compact">Current memory loading: unknown</div>
+          <div class="full">
+            <h3 class="settings-section-title">Llama Runtime Bundle</h3>
+            <div id="llamaRuntimeCurrent" class="runtime-compact">Current runtime: unknown</div>
+            <label class="full">Installed/Test Bundles
+              <select id="llamaRuntimeBundleSelect">
+                <option value="">No bundles discovered</option>
+              </select>
+            </label>
+            <div class="settings-action-row full">
+              <button id="switchLlamaRuntimeBtn" class="ghost-btn" type="button">Switch llama runtime</button>
+            </div>
+            <div id="llamaRuntimeSwitchStatus" class="runtime-compact">No runtime switch in progress.</div>
+          </div>
+          <div class="settings-action-row full">
+            <button id="resetRuntimeBtn" class="ghost-btn danger-btn" type="button">Unload model + clean memory + restart</button>
+          </div>
+        </section>
+        <section class="settings-section full">
+          <h3 class="settings-section-title">Power calibration</h3>
+          <details id="settingsPowerCalibration" class="settings-subdetails full" open>
+            <summary>PMIC to wall-meter calibration</summary>
+            <div class="settings-section-note">Optional wall-meter calibration for Pi 5 power estimates.</div>
+            <div id="powerCalibrationLiveStatus" class="runtime-compact">Current PMIC raw power: --</div>
+            <label class="full">Wall meter reading (W)
+              <input id="powerCalibrationWallWatts" type="number" min="0" step="0.01" placeholder="e.g. 9.4">
+            </label>
+            <div class="settings-action-row full">
+              <button id="capturePowerCalibrationSampleBtn" class="ghost-btn" type="button">Capture calibration sample</button>
+              <button id="fitPowerCalibrationBtn" class="ghost-btn" type="button">Compute calibration</button>
+              <button id="resetPowerCalibrationBtn" class="ghost-btn danger-btn" type="button">Reset calibration</button>
+            </div>
+            <div id="powerCalibrationStatus" class="runtime-compact">Power calibration: default correction</div>
+          </details>
+        </section>
+      </div>
+    </div>
+  </div>
+  <div id="editBackdrop" class="edit-backdrop" hidden></div>
+  <div id="editModal" class="edit-modal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle" hidden>
+    <div class="edit-modal-shell">
+      <div class="edit-modal-header">
+        <div>
+          <h2 id="editModalTitle" class="edit-modal-title">Edit message</h2>
+          <p id="editModalNote" class="edit-modal-note">Update the message and resend from this point in the conversation.</p>
+        </div>
+        <button id="editCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close edit message dialog">Close</button>
+      </div>
+      <textarea id="editMessageInput" class="edit-modal-input" placeholder="Update your message..."></textarea>
+      <div class="edit-modal-actions">
+        <div id="editModalHint" class="edit-modal-hint">Everything after this turn will be replaced by the new run.</div>
+        <div class="edit-modal-action-row">
+          <button id="editCancelBtn" class="ghost-btn" type="button">Cancel</button>
+          <button id="editSendBtn" class="primary-btn edit-send-btn" type="button">Send</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/assets/vendor/marked.umd.js"></script>
@@ -2873,7 +4317,6 @@ CHAT_HTML = """<!doctype html>
       stream: true,
       generation_mode: "random",
       seed: 42,
-      thinking_enabled: false,
       theme: "light",
       system_prompt: "",
     };
@@ -2926,9 +4369,27 @@ CHAT_HTML = """<!doctype html>
     let runtimeReconnectAttempts = 0;
     let statusPollSeq = 0;
     let statusPollAppliedSeq = 0;
-    let runtimeDetailsExpanded = false;
+    let runtimeDetailsExpanded = true;
     let mobileSidebarMql = null;
+    let settingsModalOpen = false;
+    let legacySettingsModalOpen = false;
+    let settingsModalOpenedAtMs = 0;
+    let editModalOpen = false;
+    let settingsWorkspaceTab = "model";
+    let selectedSettingsModelId = "";
+    let settingsYamlLoaded = false;
+    let settingsYamlRequestInFlight = false;
+    let modelSettingsSaveInFlight = false;
+    let modelSettingsStatusModelId = "";
+    let modelSettingsDraftDirty = false;
+    let modelSettingsDraftModelId = "";
+    let displayedSettingsModelId = "";
+    let projectorDownloadInFlight = false;
+    let messagesPinnedToBottom = true;
+    let messagePointerSelectionActive = false;
     const chatHistory = [];
+    const conversationTurns = [];
+    let activeEditState = null;
     let pendingImage = null;
     let pendingImageReader = null;
     let pendingImageToken = 0;
@@ -2963,80 +4424,24 @@ CHAT_HTML = """<!doctype html>
       return fallback;
     }
 
-    function normalizeThinkingEnabled(rawValue, fallback = defaultSettings.thinking_enabled) {
-      if (rawValue === true || rawValue === false) return rawValue;
-      if (typeof rawValue === "string") {
-        const normalized = rawValue.trim().toLowerCase();
-        if (normalized === "true") return true;
-        if (normalized === "false") return false;
-      }
-      return Boolean(fallback);
-    }
-
-    function isQwen35A3BModelName(rawName) {
-      const value = String(rawName || "").trim().toLowerCase();
-      return Boolean(value)
-        && value.includes("qwen")
-        && value.includes("3.5")
-        && value.includes("35b")
-        && value.includes("a3b");
-    }
-
-    function thinkingToggleSupported(statusPayload = latestStatus) {
-      return isQwen35A3BModelName(statusPayload?.model?.filename);
-    }
-
-    function getThinkingEnabledFromUi() {
-      const btn = document.getElementById("thinkingToggleBtn");
-      if (!btn) return defaultSettings.thinking_enabled;
-      return btn.getAttribute("aria-pressed") === "true";
-    }
-
-    function setThinkingToggleState(rawEnabled, options = {}) {
-      const btn = document.getElementById("thinkingToggleBtn");
-      const label = document.getElementById("thinkingToggleLabel");
-      if (!btn) return;
-      const enabled = normalizeThinkingEnabled(rawEnabled);
-      const supported = thinkingToggleSupported(options.statusPayload);
-      btn.classList.toggle("off", !enabled);
-      btn.setAttribute("aria-pressed", enabled ? "true" : "false");
-      btn.dataset.supported = supported ? "true" : "false";
-      btn.title = supported
-        ? (enabled ? "Deep thinking enabled" : "Deep thinking disabled")
-        : "Deep thinking toggle is used for Qwen3.5 A3B";
-      if (label) {
-        label.textContent = supported
-          ? (enabled ? "Deep thinking on" : "Deep thinking off")
-          : "Deep thinking";
-      }
-    }
-
-    function toggleThinkingMode() {
-      setThinkingToggleState(!getThinkingEnabledFromUi());
-      saveSettings(collectSettings());
-    }
-
     function loadSettings() {
       const raw = localStorage.getItem(settingsKey);
       if (!raw) {
-        return { ...defaultSettings, theme: detectSystemTheme() };
+        return { theme: detectSystemTheme() };
       }
       try {
-        const parsed = { ...defaultSettings, ...JSON.parse(raw) };
+        const parsedRaw = JSON.parse(raw);
         return {
-          ...parsed,
-          generation_mode: normalizeGenerationMode(parsed.generation_mode),
-          seed: normalizeSeedValue(parsed.seed, defaultSettings.seed),
-          thinking_enabled: normalizeThinkingEnabled(parsed.thinking_enabled, defaultSettings.thinking_enabled),
-          theme: normalizeTheme(parsed.theme, detectSystemTheme()),
+          theme: normalizeTheme(parsedRaw?.theme, detectSystemTheme()),
         };
       } catch (_err) {
-        return { ...defaultSettings, theme: detectSystemTheme() };
+        return { theme: detectSystemTheme() };
       }
     }
 
     function saveSettings(settings) {
-      localStorage.setItem(settingsKey, JSON.stringify(settings));
+      const theme = normalizeTheme(settings?.theme, detectSystemTheme());
+      localStorage.setItem(settingsKey, JSON.stringify({ theme }));
     }
 
     function parseNumber(id, fallback) {
@@ -3258,22 +4663,333 @@ CHAT_HTML = """<!doctype html>
       };
     }
 
-    function collectSettings() {
+    function normalizeChatSettings(rawSettings) {
+      const chat = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+      const generationMode = normalizeGenerationMode(chat.generation_mode);
+      return {
+        temperature: Number.isFinite(Number(chat.temperature)) ? Number(chat.temperature) : defaultSettings.temperature,
+        top_p: Number.isFinite(Number(chat.top_p)) ? Number(chat.top_p) : defaultSettings.top_p,
+        top_k: Number.isFinite(Number(chat.top_k)) ? Number(chat.top_k) : defaultSettings.top_k,
+        repetition_penalty: Number.isFinite(Number(chat.repetition_penalty)) ? Number(chat.repetition_penalty) : defaultSettings.repetition_penalty,
+        presence_penalty: Number.isFinite(Number(chat.presence_penalty)) ? Number(chat.presence_penalty) : defaultSettings.presence_penalty,
+        max_tokens: Number.isFinite(Number(chat.max_tokens)) ? Number(chat.max_tokens) : defaultSettings.max_tokens,
+        stream: chat.stream !== false,
+        generation_mode: generationMode,
+        seed: normalizeSeedValue(chat.seed, defaultSettings.seed),
+        system_prompt: String(chat.system_prompt || "").trim(),
+      };
+    }
+
+    function normalizeVisionSettings(rawSettings) {
+      const vision = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+      return {
+        enabled: Boolean(vision.enabled),
+        projector_mode: String(vision.projector_mode || "default"),
+        projector_filename: String(vision.projector_filename || ""),
+      };
+    }
+
+    function normalizeProjectorStatus(rawProjector, visionSettings = {}) {
+      const projector = rawProjector && typeof rawProjector === "object" ? rawProjector : {};
+      const defaultCandidates = Array.isArray(projector.default_candidates)
+        ? projector.default_candidates.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const legacyDefaultFilename = String(projector.default_filename || "").trim();
+      if (legacyDefaultFilename && !defaultCandidates.includes(legacyDefaultFilename)) {
+        defaultCandidates.unshift(legacyDefaultFilename);
+      }
+      const resolvedFilename = String(
+        projector.filename
+        || projector.selected_filename
+        || visionSettings.projector_filename
+        || ""
+      ).trim();
+      return {
+        present: projector.present === true || projector.available === true,
+        filename: resolvedFilename,
+        defaultFilename: defaultCandidates[0] || "",
+        defaultCandidates,
+      };
+    }
+
+    function resolveActiveRuntimeModel(statusPayload = latestStatus) {
+      const topModel = statusPayload?.model && typeof statusPayload.model === "object"
+        ? statusPayload.model
+        : null;
+      if (typeof topModel?.capabilities?.vision === "boolean") {
+        return topModel;
+      }
+      const models = getSettingsModels(statusPayload);
+      const activeModelId = String(topModel?.active_model_id || "");
+      if (activeModelId) {
+        const exact = models.find((item) => String(item?.id || "") === activeModelId);
+        if (exact) return exact;
+      }
+      const activeFilename = String(topModel?.filename || "").trim();
+      if (activeFilename) {
+        const exactFilename = models.find((item) => String(item?.filename || "").trim() === activeFilename);
+        if (exactFilename) return exactFilename;
+      }
+      const active = models.find((item) => item?.is_active === true);
+      return active || topModel || null;
+    }
+
+    function activeRuntimeVisionCapability(statusPayload = latestStatus) {
+      const activeModel = resolveActiveRuntimeModel(statusPayload);
+      const supportsVision = activeModel?.capabilities?.vision;
+      return typeof supportsVision === "boolean" ? supportsVision : null;
+    }
+
+    function formatTextOnlyImageNotice(statusPayload = latestStatus) {
+      const activeModel = resolveActiveRuntimeModel(statusPayload);
+      const modelName = String(activeModel?.filename || "The current model").trim();
+      return `${modelName} is text-only. Switch to a vision-capable model in Settings to send images.`;
+    }
+
+    function formatImageRejectedNotice(statusPayload = latestStatus) {
+      if (activeRuntimeVisionCapability(statusPayload) === false) {
+        return formatTextOnlyImageNotice(statusPayload);
+      }
+      return "This model can't process images right now. Switch to a vision-capable model or configure its vision encoder in Settings.";
+    }
+
+    function setComposerVisionNotice(message) {
+      const notice = document.getElementById("composerVisionNotice");
+      if (!notice) return;
+      const text = String(message || "").trim();
+      notice.textContent = text;
+      notice.hidden = text.length === 0;
+    }
+
+    function showTextOnlyImageBlockedState(statusPayload = latestStatus) {
+      const notice = formatTextOnlyImageNotice(statusPayload);
+      setComposerVisionNotice(notice);
+      setComposerActivity(notice);
+      setComposerStatusChip("Current model is text-only.", { phase: "image" });
+      hideComposerStatusChip();
+      setCancelEnabled(false);
+      focusPromptInput();
+    }
+
+    function renderComposerCapabilities(statusPayload = latestStatus) {
+      const attachBtn = document.getElementById("attachImageBtn");
+      const clearBtn = document.getElementById("clearImageBtn");
+      if (!attachBtn) return;
+      const visionCapability = activeRuntimeVisionCapability(statusPayload);
+      const explicitTextOnly = visionCapability === false;
+      const blockedMessage = explicitTextOnly ? formatTextOnlyImageNotice(statusPayload) : "";
+      setComposerVisionNotice(blockedMessage);
+      attachBtn.disabled = requestInFlight || explicitTextOnly;
+      attachBtn.setAttribute("aria-disabled", attachBtn.disabled ? "true" : "false");
+      attachBtn.setAttribute("title", explicitTextOnly ? blockedMessage : "Attach image");
+      attachBtn.setAttribute("aria-label", explicitTextOnly ? blockedMessage : "Attach image");
+      if (clearBtn) {
+        clearBtn.disabled = requestInFlight;
+      }
+      if (explicitTextOnly && pendingImage) {
+        clearPendingImage();
+        setComposerActivity("Image removed.");
+      }
+    }
+
+    function getSettingsModels(statusPayload = latestStatus) {
+      return Array.isArray(statusPayload?.models) ? statusPayload.models : [];
+    }
+
+    function resolveSelectedSettingsModel(statusPayload = latestStatus) {
+      const models = getSettingsModels(statusPayload);
+      if (models.length === 0) return null;
+      if (selectedSettingsModelId) {
+        const exact = models.find((item) => String(item?.id || "") === selectedSettingsModelId);
+        if (exact) return exact;
+      }
+      const activeModelId = String(statusPayload?.model?.active_model_id || "");
+      const active = models.find((item) => String(item?.id || "") === activeModelId || item?.is_active === true);
+      if (active) {
+        selectedSettingsModelId = String(active.id || "");
+        return active;
+      }
+      selectedSettingsModelId = String(models[0]?.id || "");
+      return models[0];
+    }
+
+    function getActiveChatSettings(statusPayload = latestStatus) {
+      const activeChat = statusPayload?.model?.settings?.chat;
+      return normalizeChatSettings(activeChat);
+    }
+
+    function collectSelectedModelSettings() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      const supportsVision = Boolean(selectedModel?.capabilities?.vision);
       const generationMode = normalizeGenerationMode(document.getElementById("generationMode").value);
       const seed = normalizeSeedValue(document.getElementById("seed").value, defaultSettings.seed);
       return {
-        temperature: parseNumber("temperature", defaultSettings.temperature),
-        top_p: parseNumber("top_p", defaultSettings.top_p),
-        top_k: parseNumber("top_k", defaultSettings.top_k),
-        repetition_penalty: parseNumber("repetition_penalty", defaultSettings.repetition_penalty),
-        presence_penalty: parseNumber("presence_penalty", defaultSettings.presence_penalty),
-        max_tokens: parseNumber("max_tokens", defaultSettings.max_tokens),
-        stream: document.getElementById("stream").value === "true",
-        generation_mode: generationMode,
-        seed,
-        thinking_enabled: getThinkingEnabledFromUi(),
+        chat: {
+          temperature: parseNumber("temperature", defaultSettings.temperature),
+          top_p: parseNumber("top_p", defaultSettings.top_p),
+          top_k: parseNumber("top_k", defaultSettings.top_k),
+          repetition_penalty: parseNumber("repetition_penalty", defaultSettings.repetition_penalty),
+          presence_penalty: parseNumber("presence_penalty", defaultSettings.presence_penalty),
+          max_tokens: parseNumber("max_tokens", defaultSettings.max_tokens),
+          stream: document.getElementById("stream").value === "true",
+          generation_mode: generationMode,
+          seed,
+          system_prompt: document.getElementById("systemPrompt").value.trim(),
+        },
+        vision: {
+          enabled: supportsVision && Boolean(document.getElementById("visionEnabled")?.checked),
+          projector_mode: "default",
+          projector_filename: supportsVision
+            ? String(document.getElementById("downloadProjectorBtn")?.dataset?.projectorFilename || "")
+            : "",
+        },
+      };
+    }
+
+    function markModelSettingsDraftDirty() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      modelSettingsDraftDirty = true;
+      modelSettingsDraftModelId = String(selectedModel?.id || "");
+      const statusEl = document.getElementById("modelSettingsStatus");
+      const discardBtn = document.getElementById("discardModelSettingsBtn");
+      if (statusEl) {
+        statusEl.textContent = "Unsaved changes.";
+      }
+      if (discardBtn) {
+        discardBtn.hidden = false;
+        discardBtn.disabled = modelSettingsSaveInFlight;
+      }
+    }
+
+    function clearModelSettingsDraftState() {
+      modelSettingsDraftDirty = false;
+      modelSettingsDraftModelId = "";
+      const discardBtn = document.getElementById("discardModelSettingsBtn");
+      if (discardBtn) {
+        discardBtn.hidden = true;
+        discardBtn.disabled = true;
+      }
+    }
+
+    function setModelUrlStatus(message) {
+      const statusEl = document.getElementById("modelUrlStatus");
+      if (statusEl) {
+        statusEl.textContent = String(message || "");
+      }
+    }
+
+    function formatModelUrlStatus(reason, fallbackStatus) {
+      const normalized = String(reason || "").trim().toLowerCase();
+      if (normalized === "https_required") {
+        return "Use an HTTPS model URL that ends with .gguf.";
+      }
+      if (normalized === "gguf_required") {
+        return "Model URL must point to a .gguf file.";
+      }
+      if (normalized === "filename_missing") {
+        return "Model URL must include a model filename.";
+      }
+      if (normalized === "already_exists") {
+        return "That model URL is already registered.";
+      }
+      return `Could not add model URL (${reason || fallbackStatus}).`;
+    }
+
+    function isEditingModelSettingsField() {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return false;
+      if (!active.id) return false;
+      return [
+        "systemPrompt",
+        "seed",
+        "temperature",
+        "top_p",
+        "top_k",
+        "repetition_penalty",
+        "presence_penalty",
+        "max_tokens",
+        "visionEnabled",
+      ].includes(String(active.id));
+    }
+
+    function shouldPauseSelectedModelSettingsRender() {
+      return settingsModalOpen
+        && settingsWorkspaceTab === "model"
+        && (modelSettingsDraftDirty || isEditingModelSettingsField());
+    }
+
+    function modelSettingsFormHasUnsavedValues(chat, vision) {
+      const systemPromptEl = document.getElementById("systemPrompt");
+      const streamEl = document.getElementById("stream");
+      const generationModeEl = document.getElementById("generationMode");
+      const seedEl = document.getElementById("seed");
+      const temperatureEl = document.getElementById("temperature");
+      const topPEl = document.getElementById("top_p");
+      const topKEl = document.getElementById("top_k");
+      const repetitionPenaltyEl = document.getElementById("repetition_penalty");
+      const presencePenaltyEl = document.getElementById("presence_penalty");
+      const maxTokensEl = document.getElementById("max_tokens");
+      const visionEnabledEl = document.getElementById("visionEnabled");
+      if (
+        !systemPromptEl || !streamEl || !generationModeEl || !seedEl || !temperatureEl
+        || !topPEl || !topKEl || !repetitionPenaltyEl || !presencePenaltyEl || !maxTokensEl
+      ) {
+        return false;
+      }
+      return (
+        String(systemPromptEl.value || "") !== String(chat.system_prompt || "")
+        || String(streamEl.value || "") !== String(chat.stream)
+        || String(generationModeEl.value || "") !== String(chat.generation_mode)
+        || String(seedEl.value || "") !== String(chat.seed)
+        || String(temperatureEl.value || "") !== String(chat.temperature)
+        || String(topPEl.value || "") !== String(chat.top_p)
+        || String(topKEl.value || "") !== String(chat.top_k)
+        || String(repetitionPenaltyEl.value || "") !== String(chat.repetition_penalty)
+        || String(presencePenaltyEl.value || "") !== String(chat.presence_penalty)
+        || String(maxTokensEl.value || "") !== String(chat.max_tokens)
+        || (visionEnabledEl ? Boolean(visionEnabledEl.checked) !== Boolean(vision.enabled) : false)
+      );
+    }
+
+    function selectedModelHasUnsavedChanges(statusPayload = latestStatus) {
+      const selectedModel = resolveSelectedSettingsModel(statusPayload);
+      const selectedModelId = String(selectedModel?.id || "");
+      if (!selectedModelId) return false;
+      const chat = normalizeChatSettings(selectedModel?.settings?.chat);
+      const vision = normalizeVisionSettings(selectedModel?.settings?.vision);
+      return (
+        (modelSettingsDraftDirty && modelSettingsDraftModelId === selectedModelId)
+        || (
+          displayedSettingsModelId === selectedModelId
+          && modelSettingsFormHasUnsavedValues(chat, vision)
+        )
+      );
+    }
+
+    function blockModelSelectionChange() {
+      const statusEl = document.getElementById("modelSettingsStatus");
+      if (statusEl) {
+        statusEl.textContent = "Save or discard changes before switching models.";
+      }
+    }
+
+    function discardSelectedModelSettings() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      if (!selectedModel) return;
+      clearModelSettingsDraftState();
+      displayedSettingsModelId = "";
+      modelSettingsStatusModelId = "";
+      renderSelectedModelSettings(latestStatus);
+      const statusEl = document.getElementById("modelSettingsStatus");
+      if (statusEl) {
+        statusEl.textContent = "Changes discarded.";
+      }
+    }
+
+    function collectSettings() {
+      return {
+        ...getActiveChatSettings(),
         theme: document.documentElement.getAttribute("data-theme") || defaultSettings.theme,
-        system_prompt: document.getElementById("systemPrompt").value.trim(),
       };
     }
 
@@ -3337,6 +5053,11 @@ CHAT_HTML = """<!doctype html>
         hideComposerStatusChip();
         setCancelEnabled(false);
         focusPromptInput();
+        return;
+      }
+      if (activeRuntimeVisionCapability(latestStatus) === false) {
+        clearPendingImage();
+        showTextOnlyImageBlockedState(latestStatus);
         return;
       }
       if (!String(file.type || "").startsWith("image/")) {
@@ -3495,8 +5216,37 @@ CHAT_HTML = """<!doctype html>
       };
     }
 
+    function extractApiErrorMessage(body) {
+      if (!body || typeof body !== "object") return "";
+      const candidate = body?.error?.message || body?.detail || body?.message || "";
+      return typeof candidate === "string" ? candidate.trim() : "";
+    }
+
+    function formatChatFailureMessage(statusCode, body, requestCtx = {}) {
+      const apiMessage = extractApiErrorMessage(body);
+      const normalized = apiMessage.toLowerCase();
+      if (
+        requestCtx?.hasImageRequest
+        && (
+          normalized.includes("image input is not supported")
+          || normalized.includes("mmproj")
+        )
+      ) {
+        return formatImageRejectedNotice(latestStatus);
+      }
+      if (apiMessage) {
+        return `Request failed (${statusCode}): ${apiMessage}`;
+      }
+      return `Request failed (${statusCode}).`;
+    }
+
     function openImagePicker() {
       if (requestInFlight) return;
+      if (activeRuntimeVisionCapability(latestStatus) === false) {
+        clearPendingImage();
+        showTextOnlyImageBlockedState(latestStatus);
+        return;
+      }
       const input = document.getElementById("imageInput");
       if (!input) return;
       input.value = "";
@@ -3535,6 +5285,771 @@ CHAT_HTML = """<!doctype html>
       }
     }
 
+    function setSettingsModalOpen(open) {
+      settingsModalOpen = Boolean(open);
+      const modal = document.getElementById("settingsModal");
+      const backdrop = document.getElementById("settingsBackdrop");
+      document.body.classList.toggle("settings-modal-open", settingsModalOpen);
+      if (modal) {
+        modal.hidden = !settingsModalOpen;
+      }
+      if (backdrop) {
+        backdrop.hidden = !settingsModalOpen;
+      }
+      if (settingsModalOpen) {
+        settingsModalOpenedAtMs = performance.now();
+        setSidebarOpen(false);
+      } else {
+        closeLegacySettingsModal();
+      }
+    }
+
+    function setLegacySettingsModalOpen(open) {
+      legacySettingsModalOpen = Boolean(open);
+      const modal = document.getElementById("legacySettingsModal");
+      const backdrop = document.getElementById("legacySettingsBackdrop");
+      document.body.classList.toggle("legacy-settings-modal-open", legacySettingsModalOpen);
+      if (modal) {
+        modal.hidden = !legacySettingsModalOpen;
+      }
+      if (backdrop) {
+        backdrop.hidden = !legacySettingsModalOpen;
+      }
+      if (legacySettingsModalOpen) {
+        setSidebarOpen(false);
+      }
+    }
+
+    function showSettingsWorkspaceTab(tabName) {
+      settingsWorkspaceTab = tabName === "yaml" ? "yaml" : "model";
+      const modelPanel = document.getElementById("settingsModelWorkspace");
+      const yamlPanel = document.getElementById("settingsYamlPanel");
+      const modelTabBtn = document.getElementById("settingsWorkspaceTabModel");
+      const yamlTabBtn = document.getElementById("settingsWorkspaceTabYaml");
+      const isYaml = settingsWorkspaceTab === "yaml";
+      if (modelPanel) modelPanel.hidden = isYaml;
+      if (yamlPanel) yamlPanel.hidden = !isYaml;
+      if (modelTabBtn) {
+        modelTabBtn.classList.toggle("active", !isYaml);
+        modelTabBtn.setAttribute("aria-selected", !isYaml ? "true" : "false");
+      }
+      if (yamlTabBtn) {
+        yamlTabBtn.classList.toggle("active", isYaml);
+        yamlTabBtn.setAttribute("aria-selected", isYaml ? "true" : "false");
+      }
+      if (isYaml && !settingsYamlLoaded) {
+        loadSettingsDocument();
+      }
+    }
+
+    function openSettingsModal() {
+      showSettingsWorkspaceTab(settingsWorkspaceTab);
+      renderSettingsWorkspace(latestStatus);
+      setSettingsModalOpen(true);
+    }
+
+    function closeSettingsModal() {
+      setSettingsModalOpen(false);
+    }
+
+    function openLegacySettingsModal() {
+      setLegacySettingsModalOpen(true);
+    }
+
+    function closeLegacySettingsModal() {
+      setLegacySettingsModalOpen(false);
+    }
+
+    function syncSegmentedControl(targetId) {
+      const currentValue = String(document.getElementById(targetId)?.value || "");
+      document.querySelectorAll(`.settings-segmented[data-target="${targetId}"] .settings-segment-btn`).forEach((button) => {
+        const active = String(button.dataset.value || "") === currentValue;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+    }
+
+    function setSegmentedControlValue(targetId, value) {
+      const input = document.getElementById(targetId);
+      if (!input) return;
+      input.value = String(value || "");
+      syncSegmentedControl(targetId);
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function renderSelectedModelSettings(statusPayload) {
+      const selectedModel = resolveSelectedSettingsModel(statusPayload);
+      const selectedModelId = String(selectedModel?.id || "");
+      const modelNameField = document.getElementById("modelName");
+      const modelIdentityMeta = document.getElementById("modelIdentityMeta");
+      const capabilitiesChips = document.getElementById("modelCapabilitiesChips");
+      const capabilitiesText = document.getElementById("modelCapabilitiesText");
+      const statusEl = document.getElementById("modelSettingsStatus");
+      const saveBtn = document.getElementById("saveModelSettingsBtn");
+      const discardBtn = document.getElementById("discardModelSettingsBtn");
+      const projectorBtn = document.getElementById("downloadProjectorBtn");
+      const projectorStatus = document.getElementById("projectorStatusText");
+      const visionSection = document.getElementById("settingsVisionSection");
+      const visionEnabled = document.getElementById("visionEnabled");
+      if (!selectedModel) {
+        clearModelSettingsDraftState();
+        displayedSettingsModelId = "";
+        if (modelNameField) modelNameField.textContent = "No model selected";
+        if (modelIdentityMeta) modelIdentityMeta.replaceChildren();
+        if (capabilitiesText) capabilitiesText.textContent = "Register or upload a model to configure it.";
+        if (capabilitiesChips) capabilitiesChips.replaceChildren();
+        if (statusEl) statusEl.textContent = "No models registered yet.";
+        if (saveBtn) saveBtn.disabled = true;
+        if (discardBtn) {
+          discardBtn.hidden = true;
+          discardBtn.disabled = true;
+        }
+        if (projectorBtn) projectorBtn.disabled = true;
+        if (visionSection) visionSection.hidden = true;
+        return;
+      }
+
+      const chat = normalizeChatSettings(selectedModel?.settings?.chat);
+      const vision = normalizeVisionSettings(selectedModel?.settings?.vision);
+      const supportsVision = Boolean(selectedModel?.capabilities?.vision);
+      const projector = normalizeProjectorStatus(selectedModel?.projector, vision);
+      const preserveDraft = (
+        (modelSettingsDraftDirty && modelSettingsDraftModelId === selectedModelId)
+        || (
+          displayedSettingsModelId === selectedModelId
+          && modelSettingsFormHasUnsavedValues(chat, vision)
+        )
+        || isEditingModelSettingsField()
+      );
+
+      if (modelNameField) {
+        modelNameField.textContent = String(selectedModel?.filename || "");
+      }
+      if (modelIdentityMeta) {
+        modelIdentityMeta.replaceChildren();
+        const metaBits = [];
+        if (selectedModel?.storage?.location === "ssd") metaBits.push("Stored on SSD");
+        else if (selectedModel?.storage?.location) metaBits.push(`Stored on ${String(selectedModel.storage.location).toUpperCase()}`);
+        if (selectedModel?.source_type === "url") metaBits.push("Added from URL");
+        else if (selectedModel?.source_type === "upload") metaBits.push("Uploaded locally");
+        if (selectedModel?.status === "failed" && selectedModel?.error) {
+          metaBits.push(String(selectedModel.error));
+        }
+        for (const bit of metaBits) {
+          const item = document.createElement("span");
+          item.className = "selected-model-meta-item";
+          item.textContent = String(bit);
+          modelIdentityMeta.appendChild(item);
+        }
+      }
+      if (capabilitiesText) {
+        const bits = [
+          selectedModel?.is_active ? "Active" : "Inactive",
+          selectedModel?.status ? `Status: ${formatModelStatusLabel(selectedModel.status)}` : "",
+          supportsVision ? "Vision capable" : "Text only",
+        ].filter(Boolean);
+        capabilitiesText.textContent = bits.join(" · ");
+      }
+      if (capabilitiesChips) {
+        const chipSpecs = [
+          {
+            kind: "active",
+            text: selectedModel?.is_active ? "Active" : "Inactive",
+          },
+          {
+            kind: "status",
+            text: formatModelStatusLabel(selectedModel?.status),
+          },
+          {
+            kind: "vision",
+            text: supportsVision ? "Vision" : "Text only",
+          },
+        ];
+        capabilitiesChips.replaceChildren(...chipSpecs.map((chip) => {
+          const node = document.createElement("span");
+          node.className = "settings-chip";
+          node.dataset.kind = String(chip.kind || "");
+          node.textContent = String(chip.text || "");
+          return node;
+        }));
+      }
+      if (statusEl) {
+        if (preserveDraft) {
+          statusEl.textContent = "Unsaved changes.";
+        } else {
+          const currentText = String(statusEl.textContent || "");
+          const keepRecentSuccess = (
+            modelSettingsStatusModelId === selectedModelId
+            && /updated|saved/i.test(currentText)
+          );
+          if (!keepRecentSuccess) {
+            statusEl.textContent = selectedModel?.status === "failed"
+              ? `Model state: ${String(selectedModel?.error || "failed")}`
+              : "Update the selected model profile and save to persist it.";
+          }
+        }
+      }
+
+      if (!preserveDraft) {
+        document.getElementById("systemPrompt").value = chat.system_prompt;
+        document.getElementById("stream").value = String(chat.stream);
+        document.getElementById("generationMode").value = chat.generation_mode;
+        document.getElementById("seed").value = String(chat.seed);
+        document.getElementById("temperature").value = String(chat.temperature);
+        document.getElementById("top_p").value = String(chat.top_p);
+        document.getElementById("top_k").value = String(chat.top_k);
+        document.getElementById("repetition_penalty").value = String(chat.repetition_penalty);
+        document.getElementById("presence_penalty").value = String(chat.presence_penalty);
+        document.getElementById("max_tokens").value = String(chat.max_tokens);
+        syncSegmentedControl("stream");
+        syncSegmentedControl("generationMode");
+        updateSeedFieldState(chat.generation_mode);
+        displayedSettingsModelId = selectedModelId;
+      }
+
+      if (visionSection) {
+        visionSection.hidden = !supportsVision;
+      }
+      if (visionEnabled) {
+        visionEnabled.checked = supportsVision ? vision.enabled : false;
+        visionEnabled.disabled = !supportsVision;
+      }
+      if (projectorStatus) {
+        if (!supportsVision) {
+          projectorStatus.textContent = "This model does not use a vision encoder.";
+        } else if (projector.present) {
+          projectorStatus.textContent = `Vision encoder ready: ${projector.filename || projector.defaultFilename || "available"}`;
+        } else {
+          projectorStatus.textContent = `No encoder installed. Default: ${projector.defaultFilename || "unknown"}`;
+        }
+      }
+      if (projectorBtn) {
+        projectorBtn.hidden = !supportsVision;
+        projectorBtn.disabled = !supportsVision || projectorDownloadInFlight;
+        projectorBtn.dataset.modelId = String(selectedModel?.id || "");
+        projectorBtn.dataset.projectorFilename = supportsVision
+          ? String(projector.filename || vision.projector_filename || "")
+          : "";
+        projectorBtn.textContent = projector.present ? "Re-download vision encoder" : "Download vision encoder";
+      }
+      if (saveBtn) {
+        saveBtn.disabled = modelSettingsSaveInFlight;
+      }
+      if (discardBtn) {
+        const hasUnsavedChanges = selectedModelHasUnsavedChanges(statusPayload);
+        discardBtn.hidden = !hasUnsavedChanges;
+        discardBtn.disabled = modelSettingsSaveInFlight || !hasUnsavedChanges;
+      }
+    }
+
+    function renderModelsList(statusPayload) {
+      const container = document.getElementById("modelsList");
+      if (!container) return;
+      const models = Array.isArray(statusPayload?.models) ? statusPayload.models : [];
+      const ssdAvailable = statusPayload?.storage_targets?.ssd?.available === true;
+      const selectedModel = resolveSelectedSettingsModel(statusPayload);
+      container.replaceChildren();
+      if (models.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "runtime-compact";
+        empty.textContent = "No models registered yet.";
+        container.appendChild(empty);
+        return;
+      }
+
+      for (const model of models) {
+        const row = document.createElement("div");
+        row.className = "model-row";
+        row.dataset.modelId = String(model?.id || "");
+        if (String(model?.id || "") === String(selectedModel?.id || "")) {
+          row.classList.add("selected");
+        }
+
+        const head = document.createElement("div");
+        head.className = "model-row-head";
+        const name = document.createElement("span");
+        name.className = "model-row-name";
+        name.textContent = String(model?.filename || "unknown.gguf");
+        const status = document.createElement("span");
+        status.className = "model-status-pill";
+        status.textContent = formatModelStatusLabel(model?.status);
+        head.appendChild(name);
+        head.appendChild(status);
+
+        const meta = document.createElement("div");
+        meta.className = "model-row-meta";
+        const metaBits = [];
+        if (model?.is_active === true) metaBits.push("Active");
+        if (model?.capabilities?.vision) metaBits.push("Vision");
+        if (model?.storage?.location === "ssd") metaBits.push("SSD");
+        if (String(model?.source_type || "") === "url") metaBits.push("URL");
+        for (const bit of metaBits) {
+          const chip = document.createElement("span");
+          chip.className = "model-mini-chip";
+          chip.textContent = String(bit);
+          meta.appendChild(chip);
+        }
+
+        const actions = document.createElement("div");
+        actions.className = "model-row-actions";
+        if (model?.status === "downloading") {
+          const cancelBtn = document.createElement("button");
+          cancelBtn.type = "button";
+          cancelBtn.className = "ghost-btn";
+          cancelBtn.dataset.action = "cancel-download";
+          cancelBtn.textContent = "Stop download";
+          cancelBtn.title = "Stop the active download for this model";
+          actions.appendChild(cancelBtn);
+        } else if (model?.status !== "ready" && model?.source_type === "url") {
+          const downloadBtn = document.createElement("button");
+          downloadBtn.type = "button";
+          downloadBtn.className = "ghost-btn";
+          downloadBtn.dataset.action = "download";
+          downloadBtn.textContent = model?.status === "failed" ? "Resume download" : "Download";
+          actions.appendChild(downloadBtn);
+        }
+        if (model?.is_active !== true && model?.status === "ready") {
+          const activeBtn = document.createElement("button");
+          activeBtn.type = "button";
+          activeBtn.className = "ghost-btn";
+          activeBtn.dataset.action = "activate";
+          activeBtn.textContent = "Set active";
+          actions.appendChild(activeBtn);
+        }
+        if (ssdAvailable && model?.status === "ready" && model?.storage?.location !== "ssd") {
+          const ssdBtn = document.createElement("button");
+          ssdBtn.type = "button";
+          ssdBtn.className = "ghost-btn";
+          ssdBtn.dataset.action = "move-to-ssd";
+          ssdBtn.textContent = "Move to SSD";
+          ssdBtn.title = "Copy this model to the attached SSD and keep using it from there";
+          actions.appendChild(ssdBtn);
+        }
+        if (String(model?.id || "").length > 0) {
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "ghost-btn danger-btn";
+          deleteBtn.dataset.action = "delete";
+          deleteBtn.textContent = model?.status === "downloading" ? "Cancel + delete" : "Delete model";
+          actions.appendChild(deleteBtn);
+        }
+        if (model?.is_active === true) {
+          const activeLabel = document.createElement("span");
+          activeLabel.className = "runtime-compact";
+          activeLabel.textContent = "Active model";
+          actions.appendChild(activeLabel);
+        }
+        if (model?.storage?.location === "ssd") {
+          const storageLabel = document.createElement("span");
+          storageLabel.className = "runtime-compact";
+          storageLabel.textContent = "On SSD";
+          actions.appendChild(storageLabel);
+        }
+        if (model?.status === "downloading") {
+          const progress = document.createElement("span");
+          progress.className = "runtime-compact";
+          progress.textContent = `Downloading ${Number(model?.percent || 0)}% (${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)})`;
+          actions.appendChild(progress);
+        } else if (model?.status === "failed" && Number(model?.bytes_total || 0) > 0) {
+          const progress = document.createElement("span");
+          progress.className = "runtime-compact";
+          progress.textContent = `Failed at ${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)}`;
+          actions.appendChild(progress);
+        }
+        row.appendChild(head);
+        if (meta.childElementCount > 0) {
+          row.appendChild(meta);
+        }
+        row.appendChild(actions);
+        container.appendChild(row);
+      }
+    }
+
+    function renderSettingsWorkspace(statusPayload) {
+      renderModelsList(statusPayload);
+      if (!shouldPauseSelectedModelSettingsRender()) {
+        renderSelectedModelSettings(statusPayload);
+      }
+      showSettingsWorkspaceTab(settingsWorkspaceTab);
+    }
+
+    async function loadSettingsDocument() {
+      if (settingsYamlRequestInFlight) return;
+      settingsYamlRequestInFlight = true;
+      const statusEl = document.getElementById("settingsYamlStatus");
+      if (statusEl) statusEl.textContent = "Loading YAML...";
+      try {
+        const res = await fetch("/internal/settings-document", { cache: "no-store" });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (statusEl) statusEl.textContent = `Could not load YAML (${body?.reason || res.status}).`;
+          return;
+        }
+        document.getElementById("settingsYamlInput").value = String(body?.document || "");
+        settingsYamlLoaded = true;
+        if (statusEl) statusEl.textContent = "YAML loaded.";
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Could not load YAML: ${err}`;
+      } finally {
+        settingsYamlRequestInFlight = false;
+      }
+    }
+
+    async function applySettingsDocument() {
+      if (settingsYamlRequestInFlight) return;
+      settingsYamlRequestInFlight = true;
+      const statusEl = document.getElementById("settingsYamlStatus");
+      if (statusEl) statusEl.textContent = "Applying YAML...";
+      try {
+        const documentText = String(document.getElementById("settingsYamlInput").value || "");
+        const { res, body } = await postJson("/internal/settings-document", { document: documentText });
+        if (!res.ok) {
+          if (statusEl) statusEl.textContent = `Could not apply YAML (${body?.reason || res.status}).`;
+          return;
+        }
+        clearModelSettingsDraftState();
+        displayedSettingsModelId = "";
+        modelSettingsStatusModelId = "";
+        if (body?.active_model_id) {
+          selectedSettingsModelId = String(body.active_model_id);
+        }
+        if (statusEl) statusEl.textContent = "YAML applied.";
+        settingsYamlLoaded = true;
+        await pollStatus();
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Could not apply YAML: ${err}`;
+      } finally {
+        settingsYamlRequestInFlight = false;
+      }
+    }
+
+    async function saveSelectedModelSettings() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      if (!selectedModel || modelSettingsSaveInFlight) return;
+      modelSettingsSaveInFlight = true;
+      const statusEl = document.getElementById("modelSettingsStatus");
+      const saveBtn = document.getElementById("saveModelSettingsBtn");
+      const discardBtn = document.getElementById("discardModelSettingsBtn");
+      if (saveBtn) saveBtn.disabled = true;
+      if (discardBtn) discardBtn.disabled = true;
+      if (statusEl) statusEl.textContent = "Saving model settings...";
+      try {
+        const settings = collectSelectedModelSettings();
+        const { res, body } = await postJson("/internal/models/settings", {
+          model_id: selectedModel.id,
+          settings,
+        });
+        if (!res.ok) {
+          if (statusEl) statusEl.textContent = `Could not save model settings (${body?.reason || res.status}).`;
+          return;
+        }
+        clearModelSettingsDraftState();
+        displayedSettingsModelId = "";
+        modelSettingsStatusModelId = String(selectedModel?.id || "");
+        if (statusEl) statusEl.textContent = "Model settings updated.";
+        await pollStatus();
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Could not save model settings: ${err}`;
+      } finally {
+        modelSettingsSaveInFlight = false;
+        if (saveBtn) saveBtn.disabled = false;
+        if (discardBtn) discardBtn.disabled = false;
+      }
+    }
+
+    async function downloadProjectorForSelectedModel() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      if (!selectedModel || projectorDownloadInFlight) return;
+      projectorDownloadInFlight = true;
+      const statusEl = document.getElementById("projectorStatusText");
+      const button = document.getElementById("downloadProjectorBtn");
+      if (button) button.disabled = true;
+      if (statusEl) statusEl.textContent = "Downloading vision encoder...";
+      try {
+        const { res, body } = await postJson("/internal/models/download-projector", { model_id: selectedModel.id });
+        if (!res.ok) {
+          if (statusEl) statusEl.textContent = `Could not download encoder (${body?.reason || res.status}).`;
+          return;
+        }
+        if (button) {
+          button.dataset.projectorFilename = String(body?.projector_filename || "");
+        }
+        if (statusEl) statusEl.textContent = `Vision encoder ready: ${body?.projector_filename || "downloaded"}`;
+        await pollStatus();
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Could not download encoder: ${err}`;
+      } finally {
+        projectorDownloadInFlight = false;
+        if (button) button.disabled = false;
+      }
+    }
+
+    function setEditModalOpen(open) {
+      editModalOpen = Boolean(open);
+      const modal = document.getElementById("editModal");
+      const backdrop = document.getElementById("editBackdrop");
+      document.body.classList.toggle("edit-modal-open", editModalOpen);
+      if (modal) {
+        modal.hidden = !editModalOpen;
+      }
+      if (backdrop) {
+        backdrop.hidden = !editModalOpen;
+      }
+      if (editModalOpen) {
+        setSidebarOpen(false);
+      }
+    }
+
+    function closeEditMessageModal(options = {}) {
+      activeEditState = null;
+      setEditModalOpen(false);
+      if (options.restoreFocus !== false) {
+        focusPromptInput();
+      }
+    }
+
+    function setEditModalBusy(busy) {
+      const input = document.getElementById("editMessageInput");
+      const sendBtn = document.getElementById("editSendBtn");
+      const cancelBtn = document.getElementById("editCancelBtn");
+      const closeBtn = document.getElementById("editCloseBtn");
+      if (input) input.disabled = Boolean(busy);
+      if (sendBtn) sendBtn.disabled = Boolean(busy);
+      if (cancelBtn) cancelBtn.disabled = Boolean(busy);
+      if (closeBtn) closeBtn.disabled = Boolean(busy);
+    }
+
+    function updateEditModalCopy(state) {
+      const note = document.getElementById("editModalNote");
+      const hint = document.getElementById("editModalHint");
+      const sendBtn = document.getElementById("editSendBtn");
+      const isGenerating = Boolean(state?.wasGenerating);
+      if (note) {
+        note.textContent = isGenerating
+          ? "Update the message, stop the current reply, and restart from this point."
+          : "Update the message and resend from this point in the conversation.";
+      }
+      if (hint) {
+        hint.textContent = isGenerating
+          ? "Sending will cancel the in-progress response and replace everything from this turn onward."
+          : "Everything after this turn will be replaced by the new run.";
+      }
+      if (sendBtn) {
+        sendBtn.textContent = isGenerating ? "Cancel & send" : "Send";
+      }
+    }
+
+    function openEditMessageModal(messageView) {
+      const turn = messageView?.turnRef;
+      if (!turn || messageView?.role !== "user") return;
+      const input = document.getElementById("editMessageInput");
+      activeEditState = {
+        turn,
+        wasGenerating: Boolean(requestInFlight),
+      };
+      updateEditModalCopy(activeEditState);
+      if (input) {
+        input.value = String(turn.userText || messageView.editText || "");
+      }
+      setEditModalBusy(false);
+      setEditModalOpen(true);
+      window.setTimeout(() => {
+        if (!input) return;
+        input.focus({ preventScroll: true });
+        if (typeof input.setSelectionRange === "function") {
+          input.setSelectionRange(input.value.length, input.value.length);
+        }
+      }, 0);
+    }
+
+    function getMessagesBox() {
+      return document.getElementById("messages");
+    }
+
+    function isMessagesPinned(box = getMessagesBox()) {
+      if (!box) return true;
+      return (box.scrollHeight - box.clientHeight - box.scrollTop) <= 24;
+    }
+
+    function setMessagesPinnedState(pinned) {
+      messagesPinnedToBottom = Boolean(pinned);
+    }
+
+    function createMessageActionIcon(kind) {
+      const svgNS = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("aria-hidden", "true");
+      if (kind === "copy") {
+        const back = document.createElementNS(svgNS, "rect");
+        back.setAttribute("x", "9");
+        back.setAttribute("y", "4");
+        back.setAttribute("width", "11");
+        back.setAttribute("height", "13");
+        back.setAttribute("rx", "2");
+        const front = document.createElementNS(svgNS, "rect");
+        front.setAttribute("x", "4");
+        front.setAttribute("y", "9");
+        front.setAttribute("width", "11");
+        front.setAttribute("height", "11");
+        front.setAttribute("rx", "2");
+        svg.appendChild(back);
+        svg.appendChild(front);
+        return svg;
+      }
+      const path = document.createElementNS(svgNS, "path");
+      path.setAttribute("d", "M4 20h4l10-10a2.5 2.5 0 0 0-4-4L4 16v4");
+      const tip = document.createElementNS(svgNS, "path");
+      tip.setAttribute("d", "M13.5 6.5l4 4");
+      svg.appendChild(path);
+      svg.appendChild(tip);
+      return svg;
+    }
+
+    async function copyTextToClipboard(text) {
+      const value = String(text || "");
+      if (!value) return false;
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+      const probe = document.createElement("textarea");
+      probe.value = value;
+      probe.setAttribute("readonly", "readonly");
+      probe.style.position = "fixed";
+      probe.style.top = "-9999px";
+      probe.style.opacity = "0";
+      document.body.appendChild(probe);
+      probe.focus();
+      probe.select();
+      try {
+        return document.execCommand("copy");
+      } finally {
+        document.body.removeChild(probe);
+      }
+    }
+
+    function flashCopiedState(button) {
+      if (!button) return;
+      button.dataset.copied = "true";
+      button.setAttribute("title", "Copied");
+      window.setTimeout(() => {
+        if (!button.isConnected) return;
+        delete button.dataset.copied;
+        button.setAttribute("title", "Copy message");
+      }, 1400);
+    }
+
+    function populatePromptForEditing(text) {
+      const prompt = document.getElementById("userPrompt");
+      if (!prompt) return;
+      prompt.value = String(text || "");
+      focusPromptInput();
+    }
+
+    function createMessageActions(messageView, options = {}) {
+      const actions = document.createElement("div");
+      actions.className = "message-actions";
+      actions.dataset.visible = "false";
+
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "message-action-btn";
+      copyBtn.dataset.action = "copy";
+      copyBtn.setAttribute("aria-label", "Copy message");
+      copyBtn.setAttribute("title", "Copy message");
+      copyBtn.appendChild(createMessageActionIcon("copy"));
+      copyBtn.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const copied = await copyTextToClipboard(messageView.copyText || messageView.editText || messageView.bubble?.innerText || "");
+          if (copied) {
+            flashCopiedState(copyBtn);
+          }
+        } catch (error) {
+          console.warn("Clipboard copy failed", error);
+        }
+      });
+      actions.appendChild(copyBtn);
+
+      if (options.editable === true) {
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "message-action-btn";
+        editBtn.dataset.action = "edit";
+        editBtn.setAttribute("aria-label", "Edit message");
+        editBtn.setAttribute("title", "Edit message");
+        editBtn.appendChild(createMessageActionIcon("edit"));
+        editBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openEditMessageModal(messageView);
+        });
+        actions.appendChild(editBtn);
+      }
+
+      return actions;
+    }
+
+    function setMessageActionsVisible(messageView, visible) {
+      if (!messageView?.actions) return;
+      if (messageView.row) {
+        messageView.row.classList.toggle("message-row-actions-hidden", !visible);
+      }
+      messageView.actions.hidden = !visible;
+      messageView.actions.dataset.visible = visible ? "true" : "false";
+    }
+
+    function hasActiveMessageSelection(box = getMessagesBox()) {
+      if (!box || typeof window === "undefined" || typeof window.getSelection !== "function") {
+        return false;
+      }
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount < 1) {
+        return false;
+      }
+      const range = selection.getRangeAt(0);
+      const container = range.commonAncestorContainer;
+      const node = container?.nodeType === Node.TEXT_NODE ? container.parentNode : container;
+      return Boolean(node && box.contains(node));
+    }
+
+    function handleMessagesChanged(shouldFollow, options = {}) {
+      const box = getMessagesBox();
+      if (!box) return;
+      const forceFollow = options.forceFollow === true;
+      if (forceFollow || (shouldFollow && !messagePointerSelectionActive && !hasActiveMessageSelection(box))) {
+        box.scrollTop = box.scrollHeight;
+        setMessagesPinnedState(true);
+      }
+    }
+
+    function bindMessagesScroller() {
+      const box = getMessagesBox();
+      if (!box) return;
+      box.addEventListener("pointerdown", (event) => {
+        if (event.target instanceof Element && event.target.closest(".message-bubble, .message-meta")) {
+          messagePointerSelectionActive = true;
+        }
+      });
+      const clearPointerSelection = () => {
+        messagePointerSelectionActive = false;
+      };
+      box.addEventListener("pointerup", clearPointerSelection);
+      box.addEventListener("pointercancel", clearPointerSelection);
+      document.addEventListener("pointerup", clearPointerSelection);
+      document.addEventListener("selectionchange", () => {
+        if (!hasActiveMessageSelection(box) && !document.activeElement?.closest?.(".message-bubble, .message-meta")) {
+          messagePointerSelectionActive = false;
+        }
+      });
+      box.addEventListener("scroll", () => {
+        setMessagesPinnedState(isMessagesPinned(box));
+      });
+      setMessagesPinnedState(isMessagesPinned(box));
+    }
+
     function bindMobileSidebar() {
       mobileSidebarMql = window.matchMedia("(max-width: 900px)");
       const sync = () => {
@@ -3556,11 +6071,109 @@ CHAT_HTML = """<!doctype html>
 
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
+          if (editModalOpen) {
+            closeEditMessageModal();
+            return;
+          }
+          if (legacySettingsModalOpen) {
+            closeLegacySettingsModal();
+            return;
+          }
+          if (settingsModalOpen) {
+            closeSettingsModal();
+            return;
+          }
           setSidebarOpen(false);
         }
       });
 
       sync();
+    }
+
+    function bindSettingsModal() {
+      document.getElementById("settingsOpenBtn").addEventListener("click", openSettingsModal);
+      document.getElementById("settingsCloseBtn").addEventListener("click", closeSettingsModal);
+      document.getElementById("settingsBackdrop").addEventListener("click", closeSettingsModal);
+      document.getElementById("settingsModal").addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) {
+          closeSettingsModal();
+        }
+      });
+      document.getElementById("settingsModal").addEventListener("input", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (
+          target.closest("#systemPrompt, #seed, #temperature, #top_p, #top_k, #repetition_penalty, #presence_penalty, #max_tokens, #visionEnabled")
+        ) {
+          markModelSettingsDraftDirty();
+        }
+      });
+      document.getElementById("settingsModal").addEventListener("change", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (
+          target.closest("#systemPrompt, #seed, #temperature, #top_p, #top_k, #repetition_penalty, #presence_penalty, #max_tokens, #visionEnabled")
+        ) {
+          markModelSettingsDraftDirty();
+        }
+      });
+      document.getElementById("settingsModal").addEventListener("keydown", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (
+          target.closest("#systemPrompt, #seed, #temperature, #top_p, #top_k, #repetition_penalty, #presence_penalty, #max_tokens")
+        ) {
+          markModelSettingsDraftDirty();
+        }
+      });
+      document.getElementById("settingsAdvancedBtn").addEventListener("click", openLegacySettingsModal);
+      document.getElementById("settingsWorkspaceTabModel").addEventListener("click", () => {
+        showSettingsWorkspaceTab("model");
+      });
+      document.getElementById("settingsWorkspaceTabYaml").addEventListener("click", () => {
+        showSettingsWorkspaceTab("yaml");
+      });
+      document.getElementById("saveModelSettingsBtn").addEventListener("click", saveSelectedModelSettings);
+      document.getElementById("discardModelSettingsBtn").addEventListener("click", discardSelectedModelSettings);
+      document.getElementById("downloadProjectorBtn").addEventListener("click", downloadProjectorForSelectedModel);
+      document.getElementById("settingsYamlReloadBtn").addEventListener("click", loadSettingsDocument);
+      document.getElementById("settingsYamlApplyBtn").addEventListener("click", applySettingsDocument);
+      document.querySelectorAll(".settings-segment-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+          markModelSettingsDraftDirty();
+          setSegmentedControlValue(String(button.dataset.target || ""), String(button.dataset.value || ""));
+        });
+      });
+      document.getElementById("generationMode").addEventListener("change", (event) => {
+        updateSeedFieldState(normalizeGenerationMode(event.target?.value));
+      });
+      syncSegmentedControl("stream");
+      syncSegmentedControl("generationMode");
+      document.getElementById("legacySettingsCloseBtn").addEventListener("click", closeLegacySettingsModal);
+      document.getElementById("legacySettingsBackdrop").addEventListener("click", closeLegacySettingsModal);
+      document.getElementById("legacySettingsModal").addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) {
+          closeLegacySettingsModal();
+        }
+      });
+    }
+
+    function bindEditModal() {
+      document.getElementById("editCloseBtn").addEventListener("click", () => closeEditMessageModal());
+      document.getElementById("editCancelBtn").addEventListener("click", () => closeEditMessageModal());
+      document.getElementById("editBackdrop").addEventListener("click", () => closeEditMessageModal());
+      document.getElementById("editModal").addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) {
+          closeEditMessageModal();
+        }
+      });
+      document.getElementById("editSendBtn").addEventListener("click", submitEditMessageModal);
+      document.getElementById("editMessageInput").addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          submitEditMessageModal();
+        }
+      });
     }
 
     function applyTheme(theme) {
@@ -3572,41 +6185,9 @@ CHAT_HTML = """<!doctype html>
       toggle.setAttribute("title", `Switch to ${target} theme`);
     }
 
-    function persistSettingsFromInputs() {
-      const current = collectSettings();
-      saveSettings(current);
-      applyTheme(current.theme);
-    }
-
     function bindSettings() {
       const settings = loadSettings();
-      const normalizedGenerationMode = normalizeGenerationMode(settings.generation_mode);
-      const normalizedSeed = normalizeSeedValue(settings.seed, defaultSettings.seed);
-
-      document.getElementById("temperature").value = String(settings.temperature);
-      document.getElementById("top_p").value = String(settings.top_p);
-      document.getElementById("top_k").value = String(settings.top_k);
-      document.getElementById("repetition_penalty").value = String(settings.repetition_penalty);
-      document.getElementById("presence_penalty").value = String(settings.presence_penalty);
-      document.getElementById("max_tokens").value = String(settings.max_tokens);
-      document.getElementById("stream").value = String(settings.stream);
-      document.getElementById("generationMode").value = normalizedGenerationMode;
-      document.getElementById("seed").value = String(normalizedSeed);
-      document.getElementById("systemPrompt").value = settings.system_prompt;
-      setThinkingToggleState(settings.thinking_enabled);
-      updateSeedFieldState(normalizedGenerationMode);
-
       applyTheme(settings.theme);
-
-      document.querySelectorAll("details input, details select, details textarea").forEach((el) => {
-        el.addEventListener("change", persistSettingsFromInputs);
-      });
-      document.getElementById("seed").addEventListener("input", persistSettingsFromInputs);
-      document.getElementById("generationMode").addEventListener("change", (event) => {
-        const generationMode = normalizeGenerationMode(event.target?.value);
-        updateSeedFieldState(generationMode);
-        persistSettingsFromInputs();
-      });
     }
 
     function setSendEnabled() {
@@ -3616,11 +6197,13 @@ CHAT_HTML = """<!doctype html>
         sendBtn.disabled = false;
         sendBtn.textContent = "Stop";
         sendBtn.classList.add("stop-mode");
+        renderComposerCapabilities(latestStatus);
         return;
       }
       sendBtn.textContent = "Send";
       sendBtn.classList.remove("stop-mode");
       sendBtn.disabled = !ready;
+      renderComposerCapabilities(latestStatus);
     }
 
     function setComposerActivity(message) {
@@ -3993,6 +6576,8 @@ CHAT_HTML = """<!doctype html>
 
     function appendMessage(role, content = "", options = {}) {
       const box = document.getElementById("messages");
+      const forceFollow = options.forceFollow === true;
+      const shouldFollow = forceFollow ? true : isMessagesPinned(box);
       const row = document.createElement("div");
       row.className = `message-row ${role}`;
 
@@ -4003,21 +6588,41 @@ CHAT_HTML = """<!doctype html>
       bubble.className = "message-bubble";
       renderBubbleContent(bubble, content, { ...options, role });
 
+      const messageView = {
+        row,
+        stack,
+        bubble,
+        role,
+        copyText: String(options.copyText ?? content ?? ""),
+        editText: String(options.editText ?? content ?? ""),
+      };
+
+      const actions = createMessageActions(messageView, {
+        editable: role === "user" && !options.imageDataUrl && !options.imageName,
+      });
+      messageView.actions = actions;
+
       const meta = document.createElement("div");
       meta.className = "message-meta";
       meta.hidden = true;
+      messageView.meta = meta;
 
       stack.appendChild(bubble);
+      stack.appendChild(actions);
       stack.appendChild(meta);
       row.appendChild(stack);
       box.appendChild(row);
-      box.scrollTop = box.scrollHeight;
-      return { row, stack, bubble, meta, role };
+      const actionsVisible = options.actionsHidden === true ? false : Boolean(String(content || "").trim());
+      setMessageActionsVisible(messageView, actionsVisible);
+      handleMessagesChanged(shouldFollow, { forceFollow });
+      return messageView;
     }
 
     function setMessageProcessingState(messageView, options = {}) {
       const bubble = messageView?.bubble || messageView;
       if (!bubble) return;
+      const box = document.getElementById("messages");
+      const shouldFollow = isMessagesPinned(box);
       const phase = String(options.phase || "prefill");
       const percentRaw = Number(options.percent);
       const percent = Number.isFinite(percentRaw)
@@ -4029,6 +6634,7 @@ CHAT_HTML = """<!doctype html>
       bubble.classList.add("processing");
       bubble.dataset.phase = phase;
       bubble.replaceChildren();
+      setMessageActionsVisible(messageView, false);
 
       const shell = document.createElement("div");
       shell.className = "message-processing-shell";
@@ -4062,27 +6668,40 @@ CHAT_HTML = """<!doctype html>
       shell.appendChild(labelEl);
       shell.appendChild(meter);
       bubble.appendChild(shell);
-
-      const box = document.getElementById("messages");
-      box.scrollTop = box.scrollHeight;
+      handleMessagesChanged(shouldFollow);
     }
 
     function updateMessage(messageView, content, options = {}) {
       const bubble = messageView?.bubble || messageView;
       if (!bubble) return;
+      const box = document.getElementById("messages");
+      const shouldFollow = isMessagesPinned(box);
       bubble.classList.remove("processing");
       delete bubble.dataset.phase;
       renderBubbleContent(bubble, content, { ...options, role: messageView?.role || options.role });
-      const box = document.getElementById("messages");
-      box.scrollTop = box.scrollHeight;
+      if (messageView && typeof messageView === "object") {
+        messageView.copyText = String(options.copyText ?? content ?? "");
+        if (messageView.role === "user") {
+          messageView.editText = String(options.editText ?? content ?? "");
+        }
+        const requestedVisibility = options.showActions;
+        const nextVisibility = requestedVisibility === undefined
+          ? messageView.role !== "assistant"
+          : Boolean(requestedVisibility);
+        setMessageActionsVisible(messageView, nextVisibility);
+      }
+      handleMessagesChanged(shouldFollow);
     }
 
     function setMessageMeta(messageView, content) {
       const meta = messageView?.meta;
       if (!meta) return;
+      const box = getMessagesBox();
+      const shouldFollow = isMessagesPinned(box);
       const text = String(content || "").trim();
       meta.hidden = text.length === 0;
       meta.textContent = text;
+      handleMessagesChanged(shouldFollow);
     }
 
     function removeMessage(messageView) {
@@ -4090,6 +6709,75 @@ CHAT_HTML = """<!doctype html>
       if (row && row.parentNode) {
         row.parentNode.removeChild(row);
       }
+    }
+
+    function waitForRequestIdle(timeoutMs = 6000) {
+      const deadline = performance.now() + Math.max(250, Number(timeoutMs) || 6000);
+      return new Promise((resolve) => {
+        const tick = () => {
+          if (!requestInFlight || performance.now() >= deadline) {
+            resolve(!requestInFlight);
+            return;
+          }
+          window.setTimeout(tick, 40);
+        };
+        tick();
+      });
+    }
+
+    function rollbackConversationFromTurn(targetTurn) {
+      if (!targetTurn) return;
+      const startIndex = conversationTurns.indexOf(targetTurn);
+      if (startIndex < 0) return;
+      chatHistory.length = Math.max(0, Number(targetTurn.baseHistoryLength) || 0);
+      for (let index = conversationTurns.length - 1; index >= startIndex; index -= 1) {
+        const turn = conversationTurns[index];
+        if (turn?.assistantView) {
+          removeMessage(turn.assistantView);
+        }
+        if (turn?.userView) {
+          removeMessage(turn.userView);
+        }
+      }
+      conversationTurns.splice(startIndex);
+    }
+
+    async function submitEditMessageModal() {
+      if (!activeEditState?.turn) {
+        closeEditMessageModal();
+        return;
+      }
+      const input = document.getElementById("editMessageInput");
+      const nextText = String(input?.value || "").trim();
+      if (!nextText) {
+        if (input) {
+          input.focus({ preventScroll: true });
+        }
+        return;
+      }
+
+      const { turn } = activeEditState;
+      setEditModalBusy(true);
+
+      if (requestInFlight && activeRequest) {
+        const current = activeRequest;
+        current.hideProcessingBubbleOnCancel = true;
+        if (current.assistantView) {
+          removeMessage(current.assistantView);
+        }
+        stopGeneration();
+        await waitForRequestIdle();
+      }
+
+      rollbackConversationFromTurn(turn);
+      closeEditMessageModal({ restoreFocus: false });
+      clearPendingImage();
+      const prompt = document.getElementById("userPrompt");
+      if (prompt) {
+        prompt.value = nextText;
+      }
+      focusPromptInput();
+      sendChat();
     }
 
     function isLocalModelConnected(statusPayload) {
@@ -4106,6 +6794,7 @@ CHAT_HTML = """<!doctype html>
     function updateLlamaIndicator(statusPayload) {
       const badge = document.getElementById("statusBadge");
       const dot = document.getElementById("statusDot");
+      const spinner = document.getElementById("statusSpinner");
       const label = document.getElementById("statusLabel");
       if (!badge || !dot || !label) return;
       const backendMode = String(
@@ -4126,6 +6815,8 @@ CHAT_HTML = """<!doctype html>
       const isFailed = backendMode === "llama" && statusState === "ERROR";
       badge.classList.remove("online", "loading", "failed", "offline");
       dot.classList.remove("online", "loading", "failed", "offline");
+      dot.hidden = false;
+      if (spinner) spinner.hidden = true;
       if (backendMode === "fake" && isReady) {
         badge.classList.add("online");
         dot.classList.add("online");
@@ -4137,6 +6828,8 @@ CHAT_HTML = """<!doctype html>
       } else if (isLoading) {
         badge.classList.add("loading");
         dot.classList.add("loading");
+        dot.hidden = true;
+        if (spinner) spinner.hidden = false;
         label.textContent = `LOADING:llama.cpp${modelSuffix}${storageSuffix}`;
       } else if (isFailed) {
         badge.classList.add("failed");
@@ -4170,12 +6863,17 @@ CHAT_HTML = """<!doctype html>
       const autoStartRemaining = Number(statusPayload.download.auto_start_remaining_seconds);
       const freeBytes = Number(statusPayload?.system?.storage_free_bytes);
       const downloadError = String(statusPayload?.download?.error || "");
+      const resumableFailedModel = findResumableFailedModel(statusPayload);
       if (
         downloadError === "insufficient_storage"
         || (Number.isFinite(freeBytes) && freeBytes < 512 * 1024 * 1024)
       ) {
         const free = formatBytes(statusPayload?.system?.storage_free_bytes);
         hint.textContent = `Not enough free storage for this model. Free space: ${free}. Delete model files and retry.`;
+      } else if (downloadError === "download_failed" && resumableFailedModel) {
+        hint.textContent =
+          `Last download failed at ${formatBytes(resumableFailedModel?.bytes_downloaded)} ` +
+          `of ${formatBytes(resumableFailedModel?.bytes_total)}. Resume when ready.`;
       } else if (!countdownEnabled) {
         hint.textContent = "Auto-download is paused. Start manually or re-enable it in settings.";
       } else if (Number.isFinite(autoStartRemaining) && autoStartRemaining > 0) {
@@ -4185,12 +6883,26 @@ CHAT_HTML = """<!doctype html>
       }
 
       if (downloadStartInFlight) {
-        startBtn.textContent = "Starting...";
+        startBtn.textContent = resumableFailedModel ? "Resuming..." : "Starting...";
         startBtn.disabled = true;
       } else {
-        startBtn.textContent = "Start download now";
+        startBtn.textContent = resumableFailedModel ? "Resume download" : "Start download now";
         startBtn.disabled = false;
       }
+    }
+
+    function renderStatusActions(statusPayload) {
+      const actions = document.getElementById("statusActions");
+      const resumeBtn = document.getElementById("statusResumeDownloadBtn");
+      if (!actions || !resumeBtn) return;
+      const hasModel = statusPayload?.model_present === true;
+      const state = String(statusPayload?.state || "").toUpperCase();
+      const downloadError = String(statusPayload?.download?.error || "");
+      const resumableFailedModel = findResumableFailedModel(statusPayload);
+      const showResume = hasModel && state === "READY" && downloadError === "download_failed" && !!resumableFailedModel;
+      actions.hidden = !showResume;
+      resumeBtn.disabled = downloadStartInFlight;
+      resumeBtn.textContent = downloadStartInFlight ? "Resuming..." : "Resume";
     }
 
     function setRuntimeDetailsExpanded(expanded) {
@@ -4205,7 +6917,7 @@ CHAT_HTML = """<!doctype html>
         compact.hidden = runtimeDetailsExpanded;
       }
       if (toggle) {
-        toggle.textContent = runtimeDetailsExpanded ? "Show compact" : "Show details";
+        toggle.textContent = runtimeDetailsExpanded ? "Hide details" : "Show details";
         toggle.setAttribute("aria-expanded", runtimeDetailsExpanded ? "true" : "false");
       }
     }
@@ -4653,10 +7365,43 @@ CHAT_HTML = """<!doctype html>
       return models.find((item) => String(item?.id || "") === String(modelId || "")) || null;
     }
 
+    function findResumableFailedModel(statusPayload) {
+      const models = Array.isArray(statusPayload?.models) ? statusPayload.models : [];
+      return models.find((item) => (
+        String(item?.source_type || "") === "url"
+        && String(item?.status || "").toLowerCase() === "failed"
+      )) || null;
+    }
+
+    function formatSidebarStatusDetail(statusPayload) {
+      const download = statusPayload?.download || {};
+      const downloaded = formatBytes(download.bytes_downloaded);
+      const total = formatBytes(download.bytes_total);
+      const state = String(statusPayload?.state || "").toUpperCase();
+      const downloadActive = download.active === true || state === "DOWNLOADING";
+      const downloadError = String(download.error || "");
+      const resumableFailedModel = findResumableFailedModel(statusPayload);
+      if (downloadActive) {
+        return `Download: ${download.percent}% (${downloaded} / ${total})`;
+      }
+      if (downloadError === "download_failed" && resumableFailedModel) {
+        return `Download failed (${downloaded} / ${total})`;
+      }
+      if (download.auto_download_paused === true) {
+        return "Auto-download paused";
+      }
+      return "No active download";
+    }
+
     function formatModelStatusLabel(rawStatus) {
       const normalized = String(rawStatus || "unknown").trim().toLowerCase();
       if (!normalized) return "unknown";
-      return normalized.replaceAll("_", " ");
+      return normalized
+        .replaceAll("_", " ")
+        .split(" ")
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
     }
 
     async function postJson(url, payload) {
@@ -4883,109 +7628,6 @@ CHAT_HTML = """<!doctype html>
       await applyLargeModelCompatibilityOverride(true);
     }
 
-    function renderModelsList(statusPayload) {
-      const container = document.getElementById("modelsList");
-      if (!container) return;
-      const models = Array.isArray(statusPayload?.models) ? statusPayload.models : [];
-      const ssdAvailable = statusPayload?.storage_targets?.ssd?.available === true;
-      container.replaceChildren();
-      if (models.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "runtime-compact";
-        empty.textContent = "No models registered yet.";
-        container.appendChild(empty);
-        return;
-      }
-
-      for (const model of models) {
-        const row = document.createElement("div");
-        row.className = "model-row";
-        row.dataset.modelId = String(model?.id || "");
-
-        const head = document.createElement("div");
-        head.className = "model-row-head";
-        const name = document.createElement("span");
-        name.className = "model-row-name";
-        name.textContent = String(model?.filename || "unknown.gguf");
-        const status = document.createElement("span");
-        status.className = "model-status-pill";
-        status.textContent = formatModelStatusLabel(model?.status);
-        head.appendChild(name);
-        head.appendChild(status);
-
-        const actions = document.createElement("div");
-        actions.className = "model-row-actions";
-        if (model?.status === "downloading") {
-          const cancelBtn = document.createElement("button");
-          cancelBtn.type = "button";
-          cancelBtn.className = "ghost-btn";
-          cancelBtn.dataset.action = "cancel-download";
-          cancelBtn.textContent = "Stop download";
-          cancelBtn.title = "Stop the active download for this model";
-          actions.appendChild(cancelBtn);
-        } else if (model?.status !== "ready" && model?.source_type === "url") {
-          const downloadBtn = document.createElement("button");
-          downloadBtn.type = "button";
-          downloadBtn.className = "ghost-btn";
-          downloadBtn.dataset.action = "download";
-          downloadBtn.textContent = "Download";
-          actions.appendChild(downloadBtn);
-        }
-        if (model?.is_active !== true && model?.status === "ready") {
-          const activeBtn = document.createElement("button");
-          activeBtn.type = "button";
-          activeBtn.className = "ghost-btn";
-          activeBtn.dataset.action = "activate";
-          activeBtn.textContent = "Set active";
-          actions.appendChild(activeBtn);
-        }
-        if (ssdAvailable && model?.status === "ready" && model?.storage?.location !== "ssd") {
-          const ssdBtn = document.createElement("button");
-          ssdBtn.type = "button";
-          ssdBtn.className = "ghost-btn";
-          ssdBtn.dataset.action = "move-to-ssd";
-          ssdBtn.textContent = "Move to SSD";
-          ssdBtn.title = "Copy this model to the attached SSD and keep using it from there";
-          actions.appendChild(ssdBtn);
-        }
-        if (String(model?.id || "").length > 0) {
-          const deleteBtn = document.createElement("button");
-          deleteBtn.type = "button";
-          deleteBtn.className = "ghost-btn danger-btn";
-          deleteBtn.dataset.action = "delete";
-          if (model?.status === "downloading") {
-            deleteBtn.textContent = "Cancel + delete";
-            deleteBtn.title = "Cancel the download and remove any partial data for this model";
-          } else {
-            deleteBtn.textContent = "Delete model";
-            deleteBtn.title = "Delete the model file (if present) and remove it from the list";
-          }
-          actions.appendChild(deleteBtn);
-        }
-        if (model?.is_active === true) {
-          const activeLabel = document.createElement("span");
-          activeLabel.className = "runtime-compact";
-          activeLabel.textContent = "Active model";
-          actions.appendChild(activeLabel);
-        }
-        if (model?.storage?.location === "ssd") {
-          const storageLabel = document.createElement("span");
-          storageLabel.className = "runtime-compact";
-          storageLabel.textContent = "On SSD";
-          actions.appendChild(storageLabel);
-        }
-        if (model?.status === "downloading") {
-          const progress = document.createElement("span");
-          progress.className = "runtime-compact";
-          progress.textContent = `Downloading ${Number(model?.percent || 0)}% (${formatBytes(model?.bytes_downloaded)} / ${formatBytes(model?.bytes_total)})`;
-          actions.appendChild(progress);
-        }
-        row.appendChild(head);
-        row.appendChild(actions);
-        container.appendChild(row);
-      }
-    }
-
     function renderUploadState(statusPayload) {
       const upload = statusPayload?.upload || {};
       const cancelBtn = document.getElementById("cancelUploadBtn");
@@ -5016,19 +7658,25 @@ CHAT_HTML = """<!doctype html>
       const input = document.getElementById("modelUrlInput");
       const sourceUrl = String(input?.value || "").trim();
       if (!sourceUrl) {
-        appendMessage("assistant", "Enter a model URL ending with .gguf.");
+        setModelUrlStatus("Enter an HTTPS model URL ending with .gguf.");
         return;
       }
       modelActionInFlight = true;
+      setModelUrlStatus("Adding model URL...");
       try {
         const { res, body } = await postJson("/internal/models/register", { source_url: sourceUrl });
         if (!res.ok) {
-          appendMessage("assistant", `Could not add model URL (${body?.reason || res.status}).`);
+          setModelUrlStatus(formatModelUrlStatus(body?.reason, res.status));
           return;
         }
+        setModelUrlStatus(
+          body?.reason === "already_exists"
+            ? "That model URL is already registered."
+            : "Model URL added."
+        );
         if (input) input.value = "";
       } catch (err) {
-        appendMessage("assistant", `Could not add model URL: ${err}`);
+        setModelUrlStatus(`Could not add model URL: ${err}`);
       } finally {
         modelActionInFlight = false;
         await pollStatus();
@@ -5242,14 +7890,25 @@ CHAT_HTML = """<!doctype html>
       downloadStartInFlight = true;
       renderDownloadPrompt(latestStatus || { download: { auto_start_remaining_seconds: 0 } });
       try {
-        const res = await fetch("/internal/start-model-download", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-        });
-        const body = await res.json().catch(() => ({}));
+        const resumableFailedModel = findResumableFailedModel(latestStatus);
+        const failedDownload = String(latestStatus?.download?.error || "") === "download_failed";
+        let res;
+        let body;
+        if (resumableFailedModel && failedDownload) {
+          ({ res, body } = await postJson("/internal/models/download", { model_id: resumableFailedModel.id }));
+        } else {
+          res = await fetch("/internal/start-model-download", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+          });
+          body = await res.json().catch(() => ({}));
+        }
         if (!res.ok) {
           const reason = body?.reason ? ` (${body.reason})` : "";
-          appendMessage("assistant", `Could not start model download${reason}.`);
+          appendMessage(
+            "assistant",
+            `${resumableFailedModel && failedDownload ? "Could not resume model download" : "Could not start model download"}${reason}.`
+          );
           return;
         }
         if (!body?.started && body?.reason === "already_running") {
@@ -5259,10 +7918,13 @@ CHAT_HTML = """<!doctype html>
         } else if (!body?.started && body?.reason === "insufficient_storage") {
           setComposerActivity("Model likely too large for free storage. Delete files and retry.");
         } else if (body?.started) {
-          setComposerActivity("Model download started.");
+          setComposerActivity(resumableFailedModel && failedDownload ? "Model download resumed." : "Model download started.");
         }
       } catch (err) {
-        appendMessage("assistant", `Could not start model download: ${err}`);
+        appendMessage(
+          "assistant",
+          `Could not ${String(latestStatus?.download?.error || "") === "download_failed" ? "resume" : "start"} model download: ${err}`
+        );
       } finally {
         downloadStartInFlight = false;
         await pollStatus();
@@ -5499,25 +8161,25 @@ CHAT_HTML = """<!doctype html>
       const piModelName = String(systemPayload?.pi_model_name || "").trim();
       const memoryTier = classifyPi5MemoryTier(systemPayload?.memory_total_bytes);
       if (piModelName && memoryTier) {
-        noteEl.textContent = `v0.2 · ${piModelName} · ${memoryTier}`;
+        noteEl.textContent = `V0.3 Pre-Alpha · ${piModelName} · ${memoryTier}`;
         return;
       }
       noteEl.textContent = piModelName
-        ? `v0.2 · ${piModelName}`
-        : "v0.2";
+        ? `V0.3 Pre-Alpha · ${piModelName}`
+        : "V0.3 Pre-Alpha";
     }
 
     function setStatus(statusPayload) {
       latestStatus = statusPayload;
-      const downloaded = formatBytes(statusPayload.download.bytes_downloaded);
-      const total = formatBytes(statusPayload.download.bytes_total);
-      const text = `State: ${statusPayload.state} | Download: ${statusPayload.download.percent}% (${downloaded} / ${total})`;
+      const downloadText = formatSidebarStatusDetail(statusPayload);
+      const text = `State: ${statusPayload.state} | ${downloadText}`;
       document.getElementById("statusText").textContent = text;
+      renderStatusActions(statusPayload);
       setSidebarNote(statusPayload?.system);
       const modelNameField = document.getElementById("modelName");
       if (modelNameField) {
         const modelName = statusPayload?.model?.filename || "Unknown model";
-        modelNameField.value = statusPayload?.model_present ? modelName : `${modelName} (not loaded)`;
+        modelNameField.textContent = statusPayload?.model_present ? modelName : `${modelName} (not loaded)`;
       }
       const countdownSelect = document.getElementById("downloadCountdownEnabled");
       if (countdownSelect) {
@@ -5528,9 +8190,8 @@ CHAT_HTML = """<!doctype html>
       renderCompatibilityWarnings(statusPayload);
       renderLlamaRuntimeStatus(statusPayload);
       renderSystemRuntime(statusPayload?.system);
-      renderModelsList(statusPayload);
+      renderSettingsWorkspace(statusPayload);
       renderUploadState(statusPayload);
-      setThinkingToggleState(getThinkingEnabledFromUi(), { statusPayload });
       setSendEnabled();
     }
 
@@ -5558,6 +8219,7 @@ CHAT_HTML = """<!doctype html>
         const statusErrText = err?.name === "AbortError" ? "request timeout" : String(err);
         if (latestStatus && typeof latestStatus === "object" && latestStatus.state && latestStatus.state !== "DOWN") {
           document.getElementById("statusText").textContent = `Status warning: ${statusErrText}`;
+          renderStatusActions({});
           return latestStatus;
         }
         latestStatus = {
@@ -5623,15 +8285,16 @@ CHAT_HTML = """<!doctype html>
           },
         };
         document.getElementById("statusText").textContent = `Status error: ${statusErrText}`;
+        renderStatusActions({});
         const modelNameField = document.getElementById("modelName");
         if (modelNameField) {
-          modelNameField.value = "Unknown model (status unavailable)";
+          modelNameField.textContent = "Unknown model (status unavailable)";
         }
         updateLlamaIndicator(latestStatus);
         renderDownloadPrompt(latestStatus);
         renderCompatibilityWarnings(latestStatus);
         renderSystemRuntime(latestStatus.system);
-        renderModelsList(latestStatus);
+        renderSettingsWorkspace(latestStatus);
         renderUploadState(latestStatus);
         setSendEnabled();
         return latestStatus;
@@ -5651,6 +8314,11 @@ CHAT_HTML = """<!doctype html>
         imageCancelRestartTimer = null;
       }
       const userPrompt = document.getElementById("userPrompt");
+      if (pendingImage && activeRuntimeVisionCapability(latestStatus) === false) {
+        clearPendingImage();
+        showTextOnlyImageBlockedState(latestStatus);
+        return;
+      }
       const content = userPrompt.value.trim();
       if (!content && !pendingImage) return;
       const hasImageRequest = Boolean(pendingImage);
@@ -5671,13 +8339,24 @@ CHAT_HTML = """<!doctype html>
       activeRequest = requestCtx;
 
       const settings = collectSettings();
-      saveSettings(settings);
 
-      appendMessage("user", userBubblePayload.text, {
+      const baseHistoryLength = chatHistory.length;
+      const userView = appendMessage("user", userBubblePayload.text, {
         imageDataUrl: userBubblePayload.imageDataUrl,
         imageName: userBubblePayload.imageName,
+        forceFollow: true,
       });
-      activeAssistantView = appendMessage("assistant", "");
+      activeAssistantView = appendMessage("assistant", "", { actionsHidden: true, forceFollow: true });
+      const turn = {
+        baseHistoryLength,
+        userText: content,
+        userView,
+        assistantView: activeAssistantView,
+      };
+      userView.turnRef = turn;
+      activeAssistantView.turnRef = turn;
+      conversationTurns.push(turn);
+      requestCtx.turn = turn;
       requestCtx.assistantView = activeAssistantView;
       userPrompt.value = "";
       clearPendingImage();
@@ -5701,11 +8380,6 @@ CHAT_HTML = """<!doctype html>
         const resolvedSeed = resolveSeedForRequest(settings);
         if (resolvedSeed !== null) {
           reqBody.seed = resolvedSeed;
-        }
-        if (thinkingToggleSupported()) {
-          reqBody.chat_template_kwargs = {
-            enable_thinking: normalizeThinkingEnabled(settings.thinking_enabled),
-          };
         }
 
         if (settings.system_prompt) {
@@ -5734,7 +8408,7 @@ CHAT_HTML = """<!doctype html>
         if (!res.ok) {
           stopPrefillProgress();
           const body = await res.json().catch(() => ({}));
-          updateMessage(activeAssistantView, `Request failed (${res.status}): ${JSON.stringify(body)}`);
+          updateMessage(activeAssistantView, formatChatFailureMessage(res.status, body, requestCtx), { showActions: true });
           return;
         }
 
@@ -5771,12 +8445,12 @@ CHAT_HTML = """<!doctype html>
                 throwIfRequestStoppedAfterPrefill(requestCtx, finishResult);
               }
               assistantText += delta;
-              updateMessage(activeAssistantView, assistantText);
+              updateMessage(activeAssistantView, assistantText, { showActions: false });
             }
             for (const reasoningDelta of parsed.reasoningDeltas) {
               assistantReasoningText += reasoningDelta;
               if (!assistantText.trim()) {
-                updateMessage(activeAssistantView, formatReasoningOnlyMessage(assistantReasoningText));
+                updateMessage(activeAssistantView, formatReasoningOnlyMessage(assistantReasoningText), { showActions: false });
               }
             }
             for (const event of parsed.events) {
@@ -5813,7 +8487,7 @@ CHAT_HTML = """<!doctype html>
             throwIfRequestStoppedAfterPrefill(requestCtx, finishResult);
           }
           const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);
-          updateMessage(activeAssistantView, finalAssistantText);
+          updateMessage(activeAssistantView, finalAssistantText, { showActions: true });
           chatHistory.push({ role: "assistant", content: finalAssistantText });
           const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
           if (requestCtx.stoppedByUser) {
@@ -5838,7 +8512,7 @@ CHAT_HTML = """<!doctype html>
         const messageContent = typeof message?.content === "string" ? message.content.trim() : "";
         const msg = messageContent || formatReasoningOnlyMessage(message?.reasoning_content) || JSON.stringify(body);
         chatHistory.push({ role: "assistant", content: msg });
-        updateMessage(activeAssistantView, msg);
+        updateMessage(activeAssistantView, msg, { showActions: true });
         const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
         setMessageMeta(activeAssistantView, formatAssistantStats(body, elapsedSeconds, requestCtx.firstTokenLatencyMs));
         recordPrefillMetric(
@@ -5854,7 +8528,7 @@ CHAT_HTML = """<!doctype html>
           if (activeAssistantView) {
             const partial = activeAssistantView.bubble.textContent.trim();
             if (!partial) {
-              updateMessage(activeAssistantView, "(stopped)");
+              updateMessage(activeAssistantView, "(stopped)", { showActions: true });
             } else {
               chatHistory.push({ role: "assistant", content: partial });
             }
@@ -5866,7 +8540,7 @@ CHAT_HTML = """<!doctype html>
           }
         } else {
           if (activeAssistantView) {
-            updateMessage(activeAssistantView, `Request error: ${err}`);
+            updateMessage(activeAssistantView, `Request error: ${err}`, { showActions: true });
           } else {
             appendMessage("assistant", `Request error: ${err}`);
           }
@@ -6015,17 +8689,22 @@ CHAT_HTML = """<!doctype html>
       const current = document.documentElement.getAttribute("data-theme") || defaultSettings.theme;
       const next = current === "dark" ? "light" : "dark";
       applyTheme(next);
-      saveSettings(collectSettings());
+      saveSettings({ theme: next });
     }
 
     bindSettings();
+    bindSettingsModal();
+    bindEditModal();
     bindMobileSidebar();
-    setRuntimeDetailsExpanded(false);
-    setInterval(pollStatus, 2000);
+    bindMessagesScroller();
+    setRuntimeDetailsExpanded(true);
+    setInterval(() => {
+      if (settingsModalOpen) return;
+      pollStatus();
+    }, 2000);
     pollStatus();
 
     document.getElementById("themeToggle").addEventListener("click", toggleTheme);
-    document.getElementById("thinkingToggleBtn").addEventListener("click", toggleThinkingMode);
     document.getElementById("sidebarToggle").addEventListener("click", () => {
       setSidebarOpen(!document.body.classList.contains("sidebar-open"));
     });
@@ -6039,10 +8718,7 @@ CHAT_HTML = """<!doctype html>
       setRuntimeDetailsExpanded(!runtimeDetailsExpanded);
     });
     document.getElementById("startDownloadBtn").addEventListener("click", startModelDownload);
-    document.getElementById("downloadCountdownEnabled").addEventListener("change", (event) => {
-      const enabled = event.target?.value !== "false";
-      updateCountdownPreference(enabled);
-    });
+    document.getElementById("statusResumeDownloadBtn").addEventListener("click", startModelDownload);
     document.getElementById("registerModelBtn").addEventListener("click", registerModelFromUrl);
     document.getElementById("uploadModelBtn").addEventListener("click", uploadLocalModel);
     document.getElementById("cancelUploadBtn").addEventListener("click", cancelLocalModelUpload);
@@ -6058,9 +8734,22 @@ CHAT_HTML = """<!doctype html>
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       const action = target.dataset?.action;
-      if (!action) return;
       const row = target.closest(".model-row");
       const modelId = row?.dataset?.modelId;
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      const selectedModelId = String(selectedModel?.id || "");
+      const targetDiffers = Boolean(modelId) && String(modelId) !== selectedModelId;
+      if (targetDiffers && selectedModelHasUnsavedChanges()) {
+        blockModelSelectionChange();
+        return;
+      }
+      if (!action) {
+        if (modelId) {
+          selectedSettingsModelId = String(modelId);
+          renderSettingsWorkspace(latestStatus);
+        }
+        return;
+      }
       if (action === "download") {
         startModelDownloadForModel(modelId);
       } else if (action === "cancel-download") {
@@ -6157,7 +8846,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 except asyncio.CancelledError:
                     pass
 
-    app = FastAPI(title="Potato Web", version="0.2", lifespan=_lifespan)
+    app = FastAPI(title="Potato Web", version="0.3-pre-alpha", lifespan=_lifespan)
     app.mount("/assets", StaticFiles(directory=str(WEB_ASSETS_DIR)), name="assets")
     app.state.runtime = runtime or RuntimeConfig.from_env()
     app.state.llama_process = None
@@ -6171,6 +8860,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.state.model_upload_state = _empty_model_upload_state()
     app.state.llama_runtime_switch_lock = asyncio.Lock()
     app.state.llama_runtime_switch_state = _empty_llama_runtime_switch_state()
+    app.state.llama_readiness_state = _empty_llama_readiness_state()
     app.state.startup_monotonic = None
     app.state.orchestrator_task = None
     app.state.chat_repository = ChatRepositoryManager(
@@ -6492,14 +9182,12 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 status_code=409,
                 content={"updated": False, "reason": "orchestrator_disabled"},
             )
-        payload = await request.json()
-        enabled = bool(payload.get("enabled", True))
-        state = set_download_countdown_enabled(runtime_cfg, enabled)
         return JSONResponse(
             status_code=200,
             content={
-                "updated": True,
-                "countdown_enabled": bool(state.get("countdown_enabled", True)),
+                "updated": False,
+                "reason": "temporarily_disabled",
+                "countdown_enabled": False,
             },
         )
 
@@ -6554,6 +9242,116 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         )
         status_code = 202 if started else 200
         return JSONResponse(status_code=status_code, content={"started": started, "reason": reason, "model_id": model_id})
+
+    @app.post("/internal/models/settings")
+    async def update_model_settings_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        payload = await request.json()
+        model_id = str(payload.get("model_id") or "").strip()
+        settings = payload.get("settings")
+        if not model_id:
+            return JSONResponse(status_code=400, content={"updated": False, "reason": "model_id_required"})
+        if not isinstance(settings, dict):
+            return JSONResponse(status_code=400, content={"updated": False, "reason": "settings_required"})
+        updated, reason, model = update_model_settings(runtime_cfg, model_id=model_id, settings=settings)
+        if not updated:
+            status_code = 404 if reason == "model_not_found" else 400
+            return JSONResponse(status_code=status_code, content={"updated": False, "reason": reason, "model_id": model_id})
+        restarted = False
+        restart_reason = "not_required"
+        state = ensure_models_state(runtime_cfg)
+        if model_id == str(state.get("active_model_id") or ""):
+            restarted, restart_reason = await restart_managed_llama_process(app)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "updated": True,
+                "reason": reason,
+                "model_id": model_id,
+                "model": model,
+                "restarted": restarted,
+                "restart_reason": restart_reason,
+            },
+        )
+
+    @app.get("/internal/settings-document")
+    async def get_settings_document(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "format": "yaml",
+                "document": export_settings_document_yaml(runtime_cfg),
+            },
+        )
+
+    @app.post("/internal/settings-document")
+    async def apply_settings_document_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        payload = await request.json()
+        document = str(payload.get("document") or "")
+        if not document.strip():
+            return JSONResponse(status_code=400, content={"updated": False, "reason": "document_required"})
+        updated, reason, settings_document = apply_settings_document_yaml(runtime_cfg, document)
+        if not updated:
+            return JSONResponse(status_code=400, content={"updated": False, "reason": reason, **settings_document})
+        restarted, restart_reason = await restart_managed_llama_process(app)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "updated": True,
+                "reason": reason,
+                "active_model_id": settings_document.get("active_model_id"),
+                "document": yaml.safe_dump(settings_document, sort_keys=False, allow_unicode=True),
+                "restarted": restarted,
+                "restart_reason": restart_reason,
+            },
+        )
+
+    @app.post("/internal/models/download-projector")
+    async def download_projector_for_model_endpoint(
+        request: Request,
+        runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    ) -> JSONResponse:
+        payload = await request.json()
+        model_id = str(payload.get("model_id") or "").strip()
+        if not model_id:
+            return JSONResponse(status_code=400, content={"downloaded": False, "reason": "model_id_required"})
+        downloaded, reason, projector_filename = await asyncio.to_thread(
+            download_default_projector_for_model,
+            runtime=runtime_cfg,
+            model_id=model_id,
+        )
+        if not downloaded:
+            return JSONResponse(
+                status_code=400 if reason != "model_not_found" else 404,
+                content={"downloaded": False, "reason": reason, "model_id": model_id},
+            )
+        state = ensure_models_state(runtime_cfg)
+        model = get_model_by_id(state, model_id)
+        if isinstance(model, dict):
+            settings = normalize_model_settings(model.get("settings"), filename=str(model.get("filename") or ""))
+            settings["vision"]["projector_filename"] = projector_filename
+            model["settings"] = settings
+            save_models_state(runtime_cfg, state)
+        restarted = False
+        restart_reason = "not_required"
+        if str(state.get("active_model_id") or "") == model_id:
+            restarted, restart_reason = await restart_managed_llama_process(app)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "downloaded": True,
+                "reason": reason,
+                "model_id": model_id,
+                "projector_filename": projector_filename,
+                "restarted": restarted,
+                "restart_reason": restart_reason,
+            },
+        )
 
     @app.post("/internal/models/cancel-download")
     async def cancel_selected_model_download(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
@@ -6960,6 +9758,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
+        payload = _merge_active_model_chat_defaults(payload, runtime=runtime_cfg)
         payload = _merge_defaults(payload)
         payload = apply_model_chat_defaults(
             payload,

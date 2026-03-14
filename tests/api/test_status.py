@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.main import build_status, create_app, get_runtime
+from app.main import build_status, create_app, get_runtime, refresh_llama_readiness
 
 
 def test_status_booting_when_model_missing(client, monkeypatch):
@@ -55,6 +55,55 @@ def test_status_ready_when_model_exists_and_llama_healthy(client, runtime, monke
     assert body["state"] == "READY"
     assert body["model_present"] is True
     assert body["llama_server"]["healthy"] is True
+
+
+def test_status_uses_cached_llama_readiness_when_orchestrated(runtime):
+    runtime.enable_orchestrator = True
+    runtime.model_path.write_bytes(b"gguf")
+    app = create_app(runtime=runtime)
+    app.state.llama_readiness_state.update(
+        {
+            "model_path": str(runtime.model_path),
+            "status": "warming",
+            "transport_healthy": True,
+            "ready": False,
+            "healthy_polls": 1,
+        }
+    )
+    body = asyncio.run(build_status(runtime, app=app))
+    assert body["state"] == "BOOTING"
+    assert body["llama_server"]["transport_healthy"] is True
+    assert body["llama_server"]["healthy"] is False
+    assert body["llama_server"]["ready"] is False
+
+
+def test_refresh_llama_readiness_marks_ready_after_strict_health_stabilizes(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    runtime.model_path.write_bytes(b"gguf")
+    app = create_app(runtime=runtime)
+
+    class _DummyProc:
+        returncode = None
+
+    app.state.llama_process = _DummyProc()
+    health_calls: list[bool] = []
+
+    async def _strict_true(_runtime, busy_is_healthy: bool = True):
+        health_calls.append(busy_is_healthy)
+        return True
+
+    monkeypatch.setattr("app.main.check_llama_health", _strict_true)
+
+    first = asyncio.run(refresh_llama_readiness(app, runtime, active_model_path=runtime.model_path))
+    second = asyncio.run(refresh_llama_readiness(app, runtime, active_model_path=runtime.model_path))
+
+    assert first["status"] == "warming"
+    assert first["ready"] is False
+    assert second["status"] == "ready"
+    assert second["ready"] is True
+    assert second["transport_healthy"] is True
+    assert health_calls == [False, False]
+    assert app.state.llama_readiness_state["last_ready_at_unix"] is not None
 
 
 def test_status_includes_large_model_warning_for_unsupported_pi(client, runtime, monkeypatch):
@@ -151,6 +200,59 @@ def test_status_includes_active_model_storage_details(client, runtime):
     body = response.json()
     assert body["model"]["storage"]["location"] == "ssd"
     assert body["model"]["storage"]["is_symlink"] is True
+
+
+def test_status_reconciles_active_model_from_runtime_path_when_state_is_missing(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+
+    default_path = runtime.model_path
+    default_path.write_bytes(b"default")
+    custom_path = runtime.base_dir / "models" / "custom-ready.gguf"
+    custom_path.write_bytes(b"custom")
+    runtime.model_path = custom_path
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": None,
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": default_path.name,
+                        "source_url": "https://example.com/default.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                    {
+                        "id": "custom-ready",
+                        "filename": custom_path.name,
+                        "source_url": "https://example.com/custom.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"]["filename"] == "custom-ready.gguf"
+    assert body["model"]["active_model_id"] == "custom-ready"
+    assert next(model for model in body["models"] if model["id"] == "custom-ready")["is_active"] is True
+    assert next(model for model in body["models"] if model["id"] == "default")["is_active"] is False
+
+    saved_state = json.loads(runtime.models_state_path.read_text(encoding="utf-8"))
+    assert saved_state["active_model_id"] == "custom-ready"
 
 
 def test_status_includes_platform_version_and_power_fields_under_system(client):
@@ -373,8 +475,10 @@ def test_status_includes_auto_start_countdown(runtime, monkeypatch):
     body = response.json()
     assert body["download"]["active"] is False
     assert body["download"]["auto_start_seconds"] == 300
-    assert body["download"]["auto_start_remaining_seconds"] == 160
+    assert body["download"]["auto_start_remaining_seconds"] == 0
     assert body["download"]["auto_download_completed_once"] is False
+    assert body["download"]["countdown_enabled"] is False
+    assert body["download"]["auto_download_paused"] is True
 
 
 def test_status_disables_auto_start_when_default_model_was_downloaded_once(runtime, monkeypatch):
@@ -416,6 +520,8 @@ def test_status_disables_auto_start_when_default_model_was_downloaded_once(runti
     body = response.json()
     assert body["download"]["auto_download_completed_once"] is True
     assert body["download"]["auto_start_remaining_seconds"] == 0
+    assert body["download"]["countdown_enabled"] is False
+    assert body["download"]["auto_download_paused"] is True
 
 
 def test_status_falls_back_download_target_model_when_missing(runtime, monkeypatch):
@@ -447,6 +553,19 @@ def test_status_falls_back_download_target_model_when_missing(runtime, monkeypat
     default_model = next(item for item in body["models"] if item["id"] == "default")
     assert default_model["status"] == "downloading"
     assert default_model["percent"] == 50
+
+
+def test_status_includes_model_settings_and_projector_metadata(client):
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    default_model = next(item for item in body["models"] if item["id"] == "default")
+    assert "settings" in default_model
+    assert default_model["settings"]["chat"]["temperature"] == 0.7
+    assert "capabilities" in default_model
+    assert default_model["capabilities"]["vision"] is True
+    assert "projector" in default_model
 
 
 def test_status_includes_system_runtime_payload(runtime, monkeypatch):

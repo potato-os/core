@@ -316,9 +316,10 @@ def test_runtime_from_env_defaults_to_llama_and_disables_fake_fallback(monkeypat
     assert runtime.allow_fake_fallback is False
 
 
-def test_compute_auto_download_remaining_seconds_counts_down(runtime):
+def test_compute_auto_download_remaining_seconds_counts_down(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     runtime.auto_download_idle_seconds = 300
+    monkeypatch.setattr("app.main.AUTO_DOWNLOAD_BOOTSTRAP_ENABLED", True)
 
     remaining = compute_auto_download_remaining_seconds(
         runtime,
@@ -362,9 +363,10 @@ def test_compute_auto_download_remaining_seconds_zero_after_first_default_downlo
     assert remaining == 0
 
 
-def test_should_auto_start_download_only_after_timeout(runtime):
+def test_should_auto_start_download_only_after_timeout(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     runtime.auto_download_idle_seconds = 300
+    monkeypatch.setattr("app.main.AUTO_DOWNLOAD_BOOTSTRAP_ENABLED", True)
 
     before_timeout = should_auto_start_download(
         runtime,

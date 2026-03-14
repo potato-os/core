@@ -73,6 +73,14 @@ All feature tickets are implemented TDD-first:
    - implementation commit,
    - docs/runbook updates commit.
 
+## Local Dev Environment Rule
+
+For all local development work on this computer, always use `uv`.
+
+- Use `uv` to create/sync/run the local development environment instead of ad hoc `.venv/bin/python ...` or direct `pip install ...` commands.
+- Keep local development and test dependencies declared in repo-managed dependency files; do not rely on one-off manual installs outside tracked files.
+- This rule is for local machine workflows only. Raspberry Pi/runtime packaging may follow different operational constraints and is not changed by this rule.
+
 ## PR Readiness Checklist
 
 Before moving `QA` -> `In Review`, PR description must include:
