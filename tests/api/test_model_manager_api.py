@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.main import create_app, ensure_models_state, get_runtime, save_models_state
+from app.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
 
 
 async def _healthy_true(_runtime):
@@ -140,6 +140,119 @@ def test_update_model_settings_persists_per_model_chat_and_vision(runtime):
     status_model = next(item for item in status.json()["models"] if item["id"] == model_id)
     assert status_model["settings"]["chat"]["system_prompt"] == "Speak plainly."
     assert status_model["settings"]["vision"]["enabled"] is True
+
+
+def test_status_prefers_model_specific_qwen35_projector_over_stale_generic_default(runtime):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    model_filename = "Qwen_Qwen3.5-2B-IQ4_NL.gguf"
+    model_path = runtime.base_dir / "models" / model_filename
+    model_path.write_bytes(b"gguf")
+    (runtime.base_dir / "models" / "mmproj-F16.gguf").write_bytes(b"generic")
+    (runtime.base_dir / "models" / "mmproj-Qwen_Qwen3.5-2B-f16.gguf").write_bytes(b"specific")
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "vision-model",
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": runtime.model_path.name,
+                        "source_url": "https://example.com/default.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                    {
+                        "id": "vision-model",
+                        "filename": model_filename,
+                        "source_url": "https://example.com/qwen35.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                        "settings": {
+                            "vision": {
+                                "enabled": True,
+                                "projector_mode": "default",
+                                "projector_filename": "mmproj-F16.gguf",
+                            }
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"]["projector"]["filename"] == "mmproj-Qwen_Qwen3.5-2B-f16.gguf"
+    assert body["model"]["projector"]["present"] is True
+    assert body["model"]["projector"]["default_candidates"][0] == "mmproj-Qwen_Qwen3.5-2B-IQ4_NL-f16.gguf"
+    assert "mmproj-Qwen_Qwen3.5-2B-f16.gguf" in body["model"]["projector"]["default_candidates"]
+
+
+def test_runtime_env_uses_resolved_qwen35_default_projector(runtime):
+    model_filename = "Qwen_Qwen3.5-2B-IQ4_NL.gguf"
+    model_path = runtime.base_dir / "models" / model_filename
+    model_path.write_bytes(b"gguf")
+    generic_mmproj = runtime.base_dir / "models" / "mmproj-F16.gguf"
+    specific_mmproj = runtime.base_dir / "models" / "mmproj-Qwen_Qwen3.5-2B-f16.gguf"
+    generic_mmproj.write_bytes(b"generic")
+    specific_mmproj.write_bytes(b"specific")
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "vision-model",
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": runtime.model_path.name,
+                        "source_url": "https://example.com/default.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                    {
+                        "id": "vision-model",
+                        "filename": model_filename,
+                        "source_url": "https://example.com/qwen35.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                        "settings": {
+                            "vision": {
+                                "enabled": True,
+                                "projector_mode": "default",
+                                "projector_filename": "mmproj-F16.gguf",
+                            }
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = _runtime_env(runtime)
+
+    assert env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] == "1"
+    assert env["POTATO_MMPROJ_PATH"] == str(specific_mmproj)
 
 
 def test_settings_document_yaml_round_trip_updates_active_model_and_model_settings(runtime):

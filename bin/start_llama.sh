@@ -240,6 +240,28 @@ resolve_mmproj_repo() {
   printf 'Qwen/Qwen3-VL-4B-Instruct-GGUF'
 }
 
+qwen35_mmproj_name_candidates() {
+  local model_stem trimmed_stem next_stem
+  model_stem="$(basename "${MODEL_PATH}")"
+  model_stem="${model_stem%.gguf}"
+  trimmed_stem="${model_stem}"
+
+  printf 'mmproj-%s-f16.gguf\n' "${model_stem}"
+  while true; do
+    next_stem="$(printf '%s\n' "${trimmed_stem}" | sed -E 's/-(I?Q[0-9]+(_[A-Za-z0-9]+)*|[0-9]+(\.[0-9]+)?bpw)$//I')"
+    if [ -z "${next_stem}" ] || [ "${next_stem}" = "${trimmed_stem}" ]; then
+      break
+    fi
+    trimmed_stem="${next_stem}"
+    printf 'mmproj-%s-f16.gguf\n' "${trimmed_stem}"
+  done
+
+  printf '%s\n' \
+    "mmproj-F16.gguf" \
+    "mmproj-BF16.gguf" \
+    "mmproj-F32.gguf"
+}
+
 mmproj_filename_candidates() {
   local model_name
   local repo
@@ -354,9 +376,19 @@ pick_mmproj() {
   fi
 
   if model_is_qwen35_vision; then
+    while read -r candidate_base; do
+      [ -n "${candidate_base}" ] || continue
+      for candidate in "${mmproj_candidates[@]}"; do
+        if [ "$(basename "${candidate}")" = "${candidate_base}" ]; then
+          MMPROJ_PATH="${candidate}"
+          return 0
+        fi
+      done
+    done < <(qwen35_mmproj_name_candidates | awk '!seen[$0]++')
+
     for candidate in "${mmproj_candidates[@]}"; do
       candidate_base="$(basename "${candidate}" | tr '[:upper:]' '[:lower:]')"
-      if [[ "${candidate_base}" == mmproj-f16.gguf || "${candidate_base}" == mmproj-bf16.gguf || "${candidate_base}" == mmproj-f32.gguf || "${candidate_base}" == *qwen*3.5*mmproj* ]]; then
+      if [[ "${candidate_base}" == mmproj-f16.gguf || "${candidate_base}" == mmproj-bf16.gguf || "${candidate_base}" == mmproj-f32.gguf || "${candidate_base}" == *qwen*3.5* ]]; then
         compatible_candidates+=("${candidate}")
       fi
     done

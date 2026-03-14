@@ -424,6 +424,291 @@ test("image upload returns typing focus to prompt and keeps it after enter-send"
   await expect(page.locator("#userPrompt")).toBeFocused();
 });
 
+test("text-only active model disables image attach and explains why", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "READY",
+        model_present: true,
+        model: {
+          filename: "text-only.gguf",
+          active_model_id: "text-only-model",
+          settings: {
+            chat: {
+              system_prompt: "",
+              stream: true,
+              generation_mode: "random",
+              seed: 42,
+              temperature: 0.7,
+              top_p: 0.8,
+              top_k: 20,
+              repetition_penalty: 1.0,
+              presence_penalty: 1.5,
+              max_tokens: 4096,
+            },
+            vision: {
+              enabled: false,
+              projector_mode: "default",
+              projector_filename: "",
+            },
+          },
+          capabilities: { vision: false },
+          projector: {
+            present: false,
+            filename: "",
+            default_candidates: [],
+          },
+        },
+        models: [
+          {
+            id: "text-only-model",
+            filename: "text-only.gguf",
+            source_url: null,
+            source_type: "local_file",
+            status: "ready",
+            is_active: true,
+            settings: {
+              chat: {
+                system_prompt: "",
+                stream: true,
+                generation_mode: "random",
+                seed: 42,
+                temperature: 0.7,
+                top_p: 0.8,
+                top_k: 20,
+                repetition_penalty: 1.0,
+                presence_penalty: 1.5,
+                max_tokens: 4096,
+              },
+              vision: {
+                enabled: false,
+                projector_mode: "default",
+                projector_filename: "",
+              },
+            },
+            capabilities: { vision: false },
+            projector: {
+              present: false,
+              filename: "",
+              default_candidates: [],
+            },
+            bytes_total: 0,
+            bytes_downloaded: 0,
+            percent: 0,
+            error: null,
+          },
+        ],
+        upload: { active: false, model_id: null, bytes_total: 0, bytes_received: 0, percent: 0, error: null },
+        download: {
+          bytes_total: 0,
+          bytes_downloaded: 0,
+          percent: 0,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: null,
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+          countdown_enabled: true,
+          current_model_id: null,
+        },
+        llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        system: { available: false, cpu_cores_percent: [] },
+      }),
+    });
+  });
+
+  await waitUntilReady(page);
+
+  await expect(page.locator("#attachImageBtn")).toBeDisabled();
+  await expect(page.locator("#composerVisionNotice")).toContainText("text-only");
+  await expect(page.locator("#composerVisionNotice")).toContainText("vision-capable");
+
+  await page.locator("#imageInput").setInputFiles("references/test-cat.jpg");
+  await expect(page.locator("#imageMeta")).toBeHidden();
+  await expect(page.locator("#imagePreviewWrap")).toBeHidden();
+  await expect(page.locator("#clearImageBtn")).toBeHidden();
+  await expect(page.locator("#userPrompt")).toBeFocused();
+});
+
+test("image-send failures show friendly guidance and leave the composer ready for text retry", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "READY",
+        model_present: true,
+        model: {
+          filename: "vision-ready.gguf",
+          active_model_id: "vision-model",
+          settings: {
+            chat: {
+              system_prompt: "",
+              stream: false,
+              generation_mode: "random",
+              seed: 42,
+              temperature: 0.7,
+              top_p: 0.8,
+              top_k: 20,
+              repetition_penalty: 1.0,
+              presence_penalty: 1.5,
+              max_tokens: 4096,
+            },
+            vision: {
+              enabled: true,
+              projector_mode: "default",
+              projector_filename: "mmproj-F16.gguf",
+            },
+          },
+          capabilities: { vision: true },
+          projector: {
+            present: true,
+            filename: "mmproj-F16.gguf",
+            default_candidates: ["mmproj-F16.gguf"],
+          },
+        },
+        models: [
+          {
+            id: "vision-model",
+            filename: "vision-ready.gguf",
+            source_url: null,
+            source_type: "local_file",
+            status: "ready",
+            is_active: true,
+            settings: {
+              chat: {
+                system_prompt: "",
+                stream: false,
+                generation_mode: "random",
+                seed: 42,
+                temperature: 0.7,
+                top_p: 0.8,
+                top_k: 20,
+                repetition_penalty: 1.0,
+                presence_penalty: 1.5,
+                max_tokens: 4096,
+              },
+              vision: {
+                enabled: true,
+                projector_mode: "default",
+                projector_filename: "mmproj-F16.gguf",
+              },
+            },
+            capabilities: { vision: true },
+            projector: {
+              present: true,
+              filename: "mmproj-F16.gguf",
+              default_candidates: ["mmproj-F16.gguf"],
+            },
+            bytes_total: 0,
+            bytes_downloaded: 0,
+            percent: 0,
+            error: null,
+          },
+        ],
+        upload: { active: false, model_id: null, bytes_total: 0, bytes_received: 0, percent: 0, error: null },
+        download: {
+          bytes_total: 0,
+          bytes_downloaded: 0,
+          percent: 0,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: null,
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+          countdown_enabled: true,
+          current_model_id: null,
+        },
+        llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        system: { available: false, cpu_cores_percent: [] },
+      }),
+    });
+  });
+
+  await page.route("**/v1/chat/completions", async (route) => {
+    const payload = JSON.parse(route.request().postData() || "{}");
+    const lastMessage = payload.messages[payload.messages.length - 1];
+    const hasImage = Array.isArray(lastMessage?.content)
+      && lastMessage.content.some((part) => part?.type === "image_url");
+    if (hasImage) {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: 500,
+            message: "image input is not supported - hint: if this is unexpected, you may need to provide the mmproj",
+            type: "server_error",
+          },
+        }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "chatcmpl-text-retry",
+        object: "chat.completion",
+        created: 1771778048,
+        model: "qwen-local",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Recovered with text only.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        timings: {
+          prompt_ms: 400,
+          predicted_ms: 220,
+          predicted_n: 4,
+          predicted_per_second: 18,
+        },
+        usage: {
+          prompt_tokens: 6,
+          completion_tokens: 4,
+          total_tokens: 10,
+        },
+      }),
+    });
+  });
+
+  await waitUntilReady(page);
+
+  await page.locator("#imageInput").setInputFiles("references/test-cat.jpg");
+  await expect(page.locator("#imageMeta")).toBeVisible();
+  await expect(page.locator("#clearImageBtn")).toBeVisible();
+  await expect(page.locator("#imagePreviewWrap")).toBeVisible();
+
+  await page.locator("#userPrompt").fill("What animal is this?");
+  await page.locator("#userPrompt").press("Enter");
+
+  await expect(page.locator(".message-row.assistant .message-bubble").last()).toContainText("can't process images");
+  await expect(page.locator(".message-row.assistant .message-bubble").last()).not.toContainText("Request failed (500)");
+  await expect(page.locator(".message-row.assistant .message-bubble").last()).not.toContainText("mmproj");
+  await expect(page.locator("#attachImageBtn")).toContainText("Attach image");
+  await expect(page.locator("#clearImageBtn")).toBeHidden();
+  await expect(page.locator("#imageMeta")).toBeHidden();
+  await expect(page.locator("#imagePreviewWrap")).toBeHidden();
+  await expect(page.locator("#composerStatusChip")).toBeHidden();
+  await expect(page.locator("#userPrompt")).toBeFocused();
+
+  await page.locator("#userPrompt").fill("Plain text follow-up.");
+  await page.locator("#userPrompt").press("Enter");
+  await expect(page.locator(".message-row.assistant .message-bubble").last()).toContainText("Recovered with text only.");
+});
+
 test("cancel image generation uses cancel endpoint and avoids restart endpoint", async ({ page }) => {
   await page.addInitScript(() => {
     window.__POTATO_CANCEL_RECOVERY_DELAY_MS__ = 250;
@@ -1474,7 +1759,11 @@ test("model-first settings save per model, yaml can be applied, and projector do
         },
       },
       capabilities: { vision: true },
-      projector: { available: false, selected_filename: "", default_filename: "mmproj-F16.gguf" },
+      projector: {
+        present: false,
+        filename: null,
+        default_candidates: ["mmproj-F16.gguf"],
+      },
       bytes_total: 0,
       bytes_downloaded: 0,
       percent: 0,
@@ -1507,7 +1796,11 @@ test("model-first settings save per model, yaml can be applied, and projector do
         },
       },
       capabilities: { vision: false },
-      projector: { available: false, selected_filename: "", default_filename: "" },
+      projector: {
+        present: false,
+        filename: null,
+        default_candidates: [],
+      },
       bytes_total: 0,
       bytes_downloaded: 0,
       percent: 0,
@@ -1595,7 +1888,11 @@ test("model-first settings save per model, yaml can be applied, and projector do
         },
       },
       capabilities: { vision: false },
-      projector: { available: false, selected_filename: "", default_filename: "" },
+      projector: {
+        present: false,
+        filename: null,
+        default_candidates: [],
+      },
       bytes_total: 0,
       bytes_downloaded: 0,
       percent: 0,
@@ -1721,9 +2018,9 @@ test("model-first settings save per model, yaml can be applied, and projector do
         ? {
             ...model,
             projector: {
-              ...model.projector,
-              available: true,
-              selected_filename: "mmproj-F16.gguf",
+              present: true,
+              filename: "mmproj-F16.gguf",
+              default_candidates: ["mmproj-F16.gguf"],
             },
             settings: {
               ...model.settings,
@@ -1851,6 +2148,375 @@ test("model-first settings save per model, yaml can be applied, and projector do
 
   await page.locator('#modelsList .model-row[data-model-id="new-url-model"] button[data-action="delete"]').click();
   await expect(page.locator('#modelsList .model-row[data-model-id="new-url-model"]')).toHaveCount(0);
+});
+
+test("model settings block cross-model actions until edits are saved or discarded", async ({ page }) => {
+  const savedPayloads = [];
+  const activateCalls = [];
+  let models = [
+    {
+      id: "default",
+      filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+      source_url: "https://example.com/default.gguf",
+      source_type: "url",
+      status: "ready",
+      is_active: true,
+      settings: {
+        chat: {
+          system_prompt: "Default prompt",
+          stream: true,
+          generation_mode: "random",
+          seed: 42,
+          temperature: 0.7,
+          top_p: 0.8,
+          top_k: 20,
+          repetition_penalty: 1.0,
+          presence_penalty: 1.5,
+          max_tokens: 16384,
+        },
+        vision: {
+          enabled: true,
+          projector_mode: "default",
+          projector_filename: "",
+        },
+      },
+      capabilities: { vision: true },
+      projector: {
+        present: false,
+        filename: null,
+        default_candidates: ["mmproj-F16.gguf"],
+      },
+      bytes_total: 0,
+      bytes_downloaded: 0,
+      percent: 0,
+      error: null,
+    },
+    {
+      id: "alt-model",
+      filename: "Alt-Funny-Model.gguf",
+      source_url: "https://example.com/alt.gguf",
+      source_type: "url",
+      status: "ready",
+      is_active: false,
+      settings: {
+        chat: {
+          system_prompt: "Alt instructions",
+          stream: false,
+          generation_mode: "deterministic",
+          seed: 99,
+          temperature: 0.2,
+          top_p: 0.5,
+          top_k: 8,
+          repetition_penalty: 1.1,
+          presence_penalty: 0.0,
+          max_tokens: 512,
+        },
+        vision: {
+          enabled: false,
+          projector_mode: "default",
+          projector_filename: "",
+        },
+      },
+      capabilities: { vision: false },
+      projector: {
+        present: false,
+        filename: null,
+        default_candidates: [],
+      },
+      bytes_total: 0,
+      bytes_downloaded: 0,
+      percent: 0,
+      error: null,
+    },
+  ];
+  let activeModelId = "default";
+
+  const statusPayload = () => ({
+    state: "READY",
+    model_present: true,
+    model: {
+      filename: models.find((m) => m.id === activeModelId)?.filename || "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+      active_model_id: activeModelId,
+      settings: models.find((m) => m.id === activeModelId)?.settings,
+      capabilities: models.find((m) => m.id === activeModelId)?.capabilities,
+      projector: models.find((m) => m.id === activeModelId)?.projector,
+    },
+    models: models.map((m) => ({ ...m, is_active: m.id === activeModelId })),
+    upload: { active: false, model_id: null, bytes_total: 0, bytes_received: 0, percent: 0, error: null },
+    download: {
+      bytes_total: 0,
+      bytes_downloaded: 0,
+      percent: 0,
+      speed_bps: 0,
+      eta_seconds: 0,
+      error: null,
+      active: false,
+      auto_start_seconds: 300,
+      auto_start_remaining_seconds: 0,
+      countdown_enabled: false,
+      auto_download_paused: true,
+      current_model_id: null,
+    },
+    llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+    backend: { mode: "llama", active: "llama", fallback_active: false },
+    system: { available: false, cpu_cores_percent: [] },
+  });
+
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(statusPayload()),
+    });
+  });
+
+  await page.route("**/internal/models/settings", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    savedPayloads.push(body);
+    models = models.map((model) => (
+      model.id === body.model_id
+        ? { ...model, settings: body.settings }
+        : model
+    ));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ updated: true, reason: "updated", model_id: body.model_id, model: models.find((m) => m.id === body.model_id) }),
+    });
+  });
+
+  await page.route("**/internal/models/activate", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    activateCalls.push(body.model_id);
+    activeModelId = body.model_id;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ switched: true, reason: "activated", restarted: true, model_id: body.model_id }),
+    });
+  });
+
+  await page.goto("/");
+  await openSettingsModal(page);
+
+  await page.locator('#modelsList .model-row[data-model-id="default"]').click();
+  await expect(page.locator("#modelName")).toHaveText(/Qwen3-VL-4B-Instruct-Q4_K_M.gguf/);
+  await page.locator("#systemPrompt").fill("Unsaved default draft");
+
+  await page.locator('#modelsList .model-row[data-model-id="alt-model"]').click();
+  await expect(page.locator("#modelName")).toHaveText(/Qwen3-VL-4B-Instruct-Q4_K_M.gguf/);
+  await expect(page.locator("#systemPrompt")).toHaveValue("Unsaved default draft");
+  await expect(page.locator("#modelSettingsStatus")).toContainText(/save or discard/i);
+
+  await page.locator('#modelsList .model-row[data-model-id="alt-model"] button[data-action="activate"]').click();
+  await expect(page.locator("#modelSettingsStatus")).toContainText(/save or discard/i);
+  expect(activateCalls).toEqual([]);
+
+  await page.locator("#discardModelSettingsBtn").click();
+  await expect(page.locator("#modelSettingsStatus")).toContainText(/discarded|reverted/i);
+
+  await page.locator('#modelsList .model-row[data-model-id="alt-model"]').click();
+  await expect(page.locator("#modelName")).toHaveText(/Alt-Funny-Model.gguf/);
+  await expect(page.locator("#systemPrompt")).toHaveValue("Alt instructions");
+
+  await page.locator("#systemPrompt").fill("Saved alt draft");
+  await saveModelSettings(page);
+  expect(savedPayloads.at(-1)?.model_id).toBe("alt-model");
+  expect(savedPayloads.at(-1)?.settings?.chat?.system_prompt).toBe("Saved alt draft");
+});
+
+test("settings show installed projector state from canonical backend payload", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "READY",
+        model_present: true,
+        model: {
+          filename: "Qwen_Qwen3.5-2B-IQ4_NL.gguf",
+          active_model_id: "vision-model",
+          settings: {
+            chat: {
+              system_prompt: "",
+              stream: true,
+              generation_mode: "random",
+              seed: 42,
+              temperature: 0.7,
+              top_p: 0.8,
+              top_k: 20,
+              repetition_penalty: 1.0,
+              presence_penalty: 1.5,
+              max_tokens: 16384,
+            },
+            vision: {
+              enabled: true,
+              projector_mode: "default",
+              projector_filename: "",
+            },
+          },
+          capabilities: { vision: true },
+          projector: {
+            present: true,
+            filename: "mmproj-F16.gguf",
+            default_candidates: ["mmproj-F16.gguf", "mmproj-BF16.gguf"],
+          },
+        },
+        models: [
+          {
+            id: "vision-model",
+            filename: "Qwen_Qwen3.5-2B-IQ4_NL.gguf",
+            source_url: "https://example.com/qwen35.gguf",
+            source_type: "url",
+            status: "ready",
+            is_active: true,
+            settings: {
+              chat: {
+                system_prompt: "",
+                stream: true,
+                generation_mode: "random",
+                seed: 42,
+                temperature: 0.7,
+                top_p: 0.8,
+                top_k: 20,
+                repetition_penalty: 1.0,
+                presence_penalty: 1.5,
+                max_tokens: 16384,
+              },
+              vision: {
+                enabled: true,
+                projector_mode: "default",
+                projector_filename: "",
+              },
+            },
+            capabilities: { vision: true },
+            projector: {
+              present: true,
+              filename: "mmproj-F16.gguf",
+              default_candidates: ["mmproj-F16.gguf", "mmproj-BF16.gguf"],
+            },
+            bytes_total: 0,
+            bytes_downloaded: 0,
+            percent: 0,
+            error: null,
+          },
+        ],
+        upload: { active: false, model_id: null, bytes_total: 0, bytes_received: 0, percent: 0, error: null },
+        download: {
+          bytes_total: 0,
+          bytes_downloaded: 0,
+          percent: 0,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: null,
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+          countdown_enabled: false,
+          auto_download_paused: true,
+          current_model_id: null,
+        },
+        llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        system: { available: false, cpu_cores_percent: [] },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await openSettingsModal(page);
+
+  await expect(page.locator("#projectorStatusText")).toContainText("mmproj-F16.gguf");
+  await expect(page.locator("#downloadProjectorBtn")).toHaveText("Re-download vision encoder");
+});
+
+test("add model by URL shows inline validation feedback", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "READY",
+        model_present: true,
+        model: { filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf", active_model_id: "default" },
+        models: [],
+        upload: { active: false, model_id: null, bytes_total: 0, bytes_received: 0, percent: 0, error: null },
+        download: {
+          bytes_total: 0,
+          bytes_downloaded: 0,
+          percent: 0,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: null,
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+          countdown_enabled: false,
+          auto_download_paused: true,
+          current_model_id: null,
+        },
+        llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        system: { available: false, cpu_cores_percent: [] },
+      }),
+    });
+  });
+
+  await page.route("**/internal/models/register", async (route) => {
+    await route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: false, reason: "https_required" }),
+    });
+  });
+
+  await page.goto("/");
+  await openSettingsModal(page);
+
+  await page.locator("#modelUrlInput").fill("http://example.com/bad-model.gguf");
+  await page.locator("#registerModelBtn").click();
+
+  await expect(page.locator("#modelUrlStatus")).toContainText(/https/i);
+  await expect(page.locator("#modelUrlInput")).toHaveValue("http://example.com/bad-model.gguf");
+});
+
+test("sidebar status avoids stale completed download text when downloads are idle", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: "READY",
+        model_present: true,
+        model: { filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf", active_model_id: "default" },
+        models: [],
+        upload: { active: false, model_id: null, bytes_total: 0, bytes_received: 0, percent: 0, error: null },
+        download: {
+          bytes_total: 12_400_000_000,
+          bytes_downloaded: 12_400_000_000,
+          percent: 100,
+          speed_bps: 0,
+          eta_seconds: 0,
+          error: null,
+          active: false,
+          auto_start_seconds: 300,
+          auto_start_remaining_seconds: 0,
+          countdown_enabled: false,
+          auto_download_paused: true,
+          current_model_id: null,
+        },
+        llama_server: { healthy: true, running: true, url: "http://127.0.0.1:8080" },
+        backend: { mode: "llama", active: "llama", fallback_active: false },
+        system: { available: false, cpu_cores_percent: [] },
+      }),
+    });
+  });
+
+  await page.goto("/");
+
+  await expect(page.locator("#statusText")).toContainText("Auto-download paused");
+  await expect(page.locator("#statusText")).not.toContainText("Download: 100%");
+  await expect(page.locator("#statusResumeDownloadBtn")).toBeHidden();
 });
 
 test("model upload sends file with filename header", async ({ page }) => {

@@ -471,12 +471,30 @@ def default_projector_candidates_for_model(filename: str | None) -> list[str]:
             ]
     if "qwen" in model_name and "3.5" in model_name:
         stem = Path(str(filename or "")).stem
-        return [
-            f"mmproj-{stem}-f16.gguf",
-            "mmproj-F16.gguf",
-            "mmproj-BF16.gguf",
-            "mmproj-F32.gguf",
-        ]
+        stem_candidates = [stem]
+        trimmed_stem = stem
+        while True:
+            next_stem = re.sub(
+                r"-(?:\d+(?:\.\d+)?bpw|I?Q\d+(?:_[A-Za-z0-9]+)*)$",
+                "",
+                trimmed_stem,
+                flags=re.IGNORECASE,
+            )
+            if next_stem == trimmed_stem or not next_stem:
+                break
+            trimmed_stem = next_stem
+            if trimmed_stem not in stem_candidates:
+                stem_candidates.append(trimmed_stem)
+
+        candidates: list[str] = []
+        for candidate_stem in stem_candidates:
+            candidate_name = f"mmproj-{candidate_stem}-f16.gguf"
+            if candidate_name not in candidates:
+                candidates.append(candidate_name)
+        for fallback in ("mmproj-F16.gguf", "mmproj-BF16.gguf", "mmproj-F32.gguf"):
+            if fallback not in candidates:
+                candidates.append(fallback)
+        return candidates
     return []
 
 
@@ -484,13 +502,19 @@ def build_model_projector_status(runtime: RuntimeConfig, model: dict[str, Any]) 
     filename = str(model.get("filename") or "")
     settings = normalize_model_settings(model.get("settings"), filename=filename)
     vision = settings.get("vision", {})
+    projector_mode = str(vision.get("projector_mode") or "default").strip().lower()
     configured_filename = str(vision.get("projector_filename") or "").strip() or None
+    default_candidates = default_projector_candidates_for_model(filename)
     search_names: list[str] = []
-    if configured_filename:
-        search_names.append(configured_filename)
-    for candidate in default_projector_candidates_for_model(filename):
-        if candidate not in search_names:
-            search_names.append(candidate)
+    if projector_mode == "custom":
+        if configured_filename:
+            search_names.append(configured_filename)
+    else:
+        for candidate in default_candidates:
+            if candidate not in search_names:
+                search_names.append(candidate)
+        if configured_filename and configured_filename not in search_names:
+            search_names.append(configured_filename)
 
     resolved_name = configured_filename
     present = False
@@ -508,7 +532,7 @@ def build_model_projector_status(runtime: RuntimeConfig, model: dict[str, Any]) 
         "filename": resolved_name,
         "present": present,
         "path": str(resolved_path) if resolved_path is not None else None,
-        "default_candidates": search_names,
+        "default_candidates": default_candidates,
     }
 
 
@@ -742,9 +766,14 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
         if model_supports_vision_filename(active_filename) and bool(vision_settings.get("enabled", False)):
             if "qwen" in active_filename.lower() and "3.5" in active_filename.lower():
                 env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
-            projector_filename = str(vision_settings.get("projector_filename") or "").strip()
-            if projector_filename:
-                env["POTATO_MMPROJ_PATH"] = str(runtime.base_dir / "models" / projector_filename)
+            projector_status = build_model_projector_status(runtime, active_model)
+            if projector_status.get("present") and projector_status.get("path"):
+                env["POTATO_MMPROJ_PATH"] = str(projector_status["path"])
+            else:
+                projector_mode = str(vision_settings.get("projector_mode") or "default").strip().lower()
+                projector_filename = str(vision_settings.get("projector_filename") or "").strip()
+                if projector_mode == "custom" and projector_filename:
+                    env["POTATO_MMPROJ_PATH"] = str(runtime.base_dir / "models" / projector_filename)
     env.setdefault("POTATO_MODEL_URL", MODEL_URL)
     return env
 
@@ -2378,6 +2407,13 @@ CHAT_HTML = """<!doctype html>
       transform: translateY(-1px);
     }
 
+    .attach-btn:disabled,
+    .ghost-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+    }
+
     .image-meta {
       font-size: 12px;
       color: var(--text-muted);
@@ -2385,6 +2421,17 @@ CHAT_HTML = """<!doctype html>
       border-radius: 999px;
       padding: 5px 10px;
       background: var(--panel-muted);
+    }
+
+    .composer-vision-notice {
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-muted);
+    }
+
+    .composer-vision-notice[hidden] {
+      display: none !important;
     }
 
     .image-preview-wrap {
@@ -3091,6 +3138,14 @@ CHAT_HTML = """<!doctype html>
       gap: 8px;
       min-width: 0;
       flex: 1;
+    }
+
+    .selected-model-header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px;
+      align-items: center;
     }
 
     #modelName {
@@ -3833,6 +3888,7 @@ CHAT_HTML = """<!doctype html>
             <button id="sendBtn" class="send-btn" type="submit">Send</button>
           </div>
         </div>
+        <div id="composerVisionNotice" class="composer-vision-notice" hidden></div>
         <div id="imagePreviewWrap" class="image-preview-wrap" hidden>
           <img id="imagePreview" alt="Selected upload preview">
         </div>
@@ -3874,6 +3930,7 @@ CHAT_HTML = """<!doctype html>
               <div class="settings-action-row full">
                 <button id="registerModelBtn" class="ghost-btn" type="button">Add URL model</button>
               </div>
+              <div id="modelUrlStatus" class="runtime-compact full">Add an HTTPS .gguf URL to register another model.</div>
               <label class="full">Upload local GGUF to Pi
                 <input id="modelUploadInput" type="file" accept=".gguf,application/octet-stream">
               </label>
@@ -3902,7 +3959,10 @@ CHAT_HTML = """<!doctype html>
                 <div id="modelIdentityMeta" class="selected-model-meta" aria-live="polite"></div>
                 <div id="modelSettingsStatus" class="runtime-compact">Select a model to edit its chat and vision settings.</div>
               </div>
-              <button id="saveModelSettingsBtn" class="ghost-btn settings-save-btn" type="button">Save model settings</button>
+              <div class="selected-model-header-actions">
+                <button id="discardModelSettingsBtn" class="ghost-btn" type="button" hidden>Discard changes</button>
+                <button id="saveModelSettingsBtn" class="ghost-btn settings-save-btn" type="button">Save model settings</button>
+              </div>
             </div>
             <div id="modelCapabilitiesChips" class="settings-chip-row" aria-live="polite"></div>
             <div id="modelCapabilitiesText" class="settings-section-note">Capabilities unknown.</div>
@@ -4459,6 +4519,109 @@ CHAT_HTML = """<!doctype html>
       };
     }
 
+    function normalizeProjectorStatus(rawProjector, visionSettings = {}) {
+      const projector = rawProjector && typeof rawProjector === "object" ? rawProjector : {};
+      const defaultCandidates = Array.isArray(projector.default_candidates)
+        ? projector.default_candidates.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const legacyDefaultFilename = String(projector.default_filename || "").trim();
+      if (legacyDefaultFilename && !defaultCandidates.includes(legacyDefaultFilename)) {
+        defaultCandidates.unshift(legacyDefaultFilename);
+      }
+      const resolvedFilename = String(
+        projector.filename
+        || projector.selected_filename
+        || visionSettings.projector_filename
+        || ""
+      ).trim();
+      return {
+        present: projector.present === true || projector.available === true,
+        filename: resolvedFilename,
+        defaultFilename: defaultCandidates[0] || "",
+        defaultCandidates,
+      };
+    }
+
+    function resolveActiveRuntimeModel(statusPayload = latestStatus) {
+      const topModel = statusPayload?.model && typeof statusPayload.model === "object"
+        ? statusPayload.model
+        : null;
+      if (typeof topModel?.capabilities?.vision === "boolean") {
+        return topModel;
+      }
+      const models = getSettingsModels(statusPayload);
+      const activeModelId = String(topModel?.active_model_id || "");
+      if (activeModelId) {
+        const exact = models.find((item) => String(item?.id || "") === activeModelId);
+        if (exact) return exact;
+      }
+      const activeFilename = String(topModel?.filename || "").trim();
+      if (activeFilename) {
+        const exactFilename = models.find((item) => String(item?.filename || "").trim() === activeFilename);
+        if (exactFilename) return exactFilename;
+      }
+      const active = models.find((item) => item?.is_active === true);
+      return active || topModel || null;
+    }
+
+    function activeRuntimeVisionCapability(statusPayload = latestStatus) {
+      const activeModel = resolveActiveRuntimeModel(statusPayload);
+      const supportsVision = activeModel?.capabilities?.vision;
+      return typeof supportsVision === "boolean" ? supportsVision : null;
+    }
+
+    function formatTextOnlyImageNotice(statusPayload = latestStatus) {
+      const activeModel = resolveActiveRuntimeModel(statusPayload);
+      const modelName = String(activeModel?.filename || "The current model").trim();
+      return `${modelName} is text-only. Switch to a vision-capable model in Settings to send images.`;
+    }
+
+    function formatImageRejectedNotice(statusPayload = latestStatus) {
+      if (activeRuntimeVisionCapability(statusPayload) === false) {
+        return formatTextOnlyImageNotice(statusPayload);
+      }
+      return "This model can't process images right now. Switch to a vision-capable model or configure its vision encoder in Settings.";
+    }
+
+    function setComposerVisionNotice(message) {
+      const notice = document.getElementById("composerVisionNotice");
+      if (!notice) return;
+      const text = String(message || "").trim();
+      notice.textContent = text;
+      notice.hidden = text.length === 0;
+    }
+
+    function showTextOnlyImageBlockedState(statusPayload = latestStatus) {
+      const notice = formatTextOnlyImageNotice(statusPayload);
+      setComposerVisionNotice(notice);
+      setComposerActivity(notice);
+      setComposerStatusChip("Current model is text-only.", { phase: "image" });
+      hideComposerStatusChip();
+      setCancelEnabled(false);
+      focusPromptInput();
+    }
+
+    function renderComposerCapabilities(statusPayload = latestStatus) {
+      const attachBtn = document.getElementById("attachImageBtn");
+      const clearBtn = document.getElementById("clearImageBtn");
+      if (!attachBtn) return;
+      const visionCapability = activeRuntimeVisionCapability(statusPayload);
+      const explicitTextOnly = visionCapability === false;
+      const blockedMessage = explicitTextOnly ? formatTextOnlyImageNotice(statusPayload) : "";
+      setComposerVisionNotice(blockedMessage);
+      attachBtn.disabled = requestInFlight || explicitTextOnly;
+      attachBtn.setAttribute("aria-disabled", attachBtn.disabled ? "true" : "false");
+      attachBtn.setAttribute("title", explicitTextOnly ? blockedMessage : "Attach image");
+      attachBtn.setAttribute("aria-label", explicitTextOnly ? blockedMessage : "Attach image");
+      if (clearBtn) {
+        clearBtn.disabled = requestInFlight;
+      }
+      if (explicitTextOnly && pendingImage) {
+        clearPendingImage();
+        setComposerActivity("Image removed.");
+      }
+    }
+
     function getSettingsModels(statusPayload = latestStatus) {
       return Array.isArray(statusPayload?.models) ? statusPayload.models : [];
     }
@@ -4518,14 +4681,48 @@ CHAT_HTML = """<!doctype html>
       modelSettingsDraftDirty = true;
       modelSettingsDraftModelId = String(selectedModel?.id || "");
       const statusEl = document.getElementById("modelSettingsStatus");
+      const discardBtn = document.getElementById("discardModelSettingsBtn");
       if (statusEl) {
         statusEl.textContent = "Unsaved changes.";
+      }
+      if (discardBtn) {
+        discardBtn.hidden = false;
+        discardBtn.disabled = modelSettingsSaveInFlight;
       }
     }
 
     function clearModelSettingsDraftState() {
       modelSettingsDraftDirty = false;
       modelSettingsDraftModelId = "";
+      const discardBtn = document.getElementById("discardModelSettingsBtn");
+      if (discardBtn) {
+        discardBtn.hidden = true;
+        discardBtn.disabled = true;
+      }
+    }
+
+    function setModelUrlStatus(message) {
+      const statusEl = document.getElementById("modelUrlStatus");
+      if (statusEl) {
+        statusEl.textContent = String(message || "");
+      }
+    }
+
+    function formatModelUrlStatus(reason, fallbackStatus) {
+      const normalized = String(reason || "").trim().toLowerCase();
+      if (normalized === "https_required") {
+        return "Use an HTTPS model URL that ends with .gguf.";
+      }
+      if (normalized === "gguf_required") {
+        return "Model URL must point to a .gguf file.";
+      }
+      if (normalized === "filename_missing") {
+        return "Model URL must include a model filename.";
+      }
+      if (normalized === "already_exists") {
+        return "That model URL is already registered.";
+      }
+      return `Could not add model URL (${reason || fallbackStatus}).`;
     }
 
     function isEditingModelSettingsField() {
@@ -4582,6 +4779,41 @@ CHAT_HTML = """<!doctype html>
         || String(maxTokensEl.value || "") !== String(chat.max_tokens)
         || (visionEnabledEl ? Boolean(visionEnabledEl.checked) !== Boolean(vision.enabled) : false)
       );
+    }
+
+    function selectedModelHasUnsavedChanges(statusPayload = latestStatus) {
+      const selectedModel = resolveSelectedSettingsModel(statusPayload);
+      const selectedModelId = String(selectedModel?.id || "");
+      if (!selectedModelId) return false;
+      const chat = normalizeChatSettings(selectedModel?.settings?.chat);
+      const vision = normalizeVisionSettings(selectedModel?.settings?.vision);
+      return (
+        (modelSettingsDraftDirty && modelSettingsDraftModelId === selectedModelId)
+        || (
+          displayedSettingsModelId === selectedModelId
+          && modelSettingsFormHasUnsavedValues(chat, vision)
+        )
+      );
+    }
+
+    function blockModelSelectionChange() {
+      const statusEl = document.getElementById("modelSettingsStatus");
+      if (statusEl) {
+        statusEl.textContent = "Save or discard changes before switching models.";
+      }
+    }
+
+    function discardSelectedModelSettings() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      if (!selectedModel) return;
+      clearModelSettingsDraftState();
+      displayedSettingsModelId = "";
+      modelSettingsStatusModelId = "";
+      renderSelectedModelSettings(latestStatus);
+      const statusEl = document.getElementById("modelSettingsStatus");
+      if (statusEl) {
+        statusEl.textContent = "Changes discarded.";
+      }
     }
 
     function collectSettings() {
@@ -4651,6 +4883,11 @@ CHAT_HTML = """<!doctype html>
         hideComposerStatusChip();
         setCancelEnabled(false);
         focusPromptInput();
+        return;
+      }
+      if (activeRuntimeVisionCapability(latestStatus) === false) {
+        clearPendingImage();
+        showTextOnlyImageBlockedState(latestStatus);
         return;
       }
       if (!String(file.type || "").startsWith("image/")) {
@@ -4809,8 +5046,37 @@ CHAT_HTML = """<!doctype html>
       };
     }
 
+    function extractApiErrorMessage(body) {
+      if (!body || typeof body !== "object") return "";
+      const candidate = body?.error?.message || body?.detail || body?.message || "";
+      return typeof candidate === "string" ? candidate.trim() : "";
+    }
+
+    function formatChatFailureMessage(statusCode, body, requestCtx = {}) {
+      const apiMessage = extractApiErrorMessage(body);
+      const normalized = apiMessage.toLowerCase();
+      if (
+        requestCtx?.hasImageRequest
+        && (
+          normalized.includes("image input is not supported")
+          || normalized.includes("mmproj")
+        )
+      ) {
+        return formatImageRejectedNotice(latestStatus);
+      }
+      if (apiMessage) {
+        return `Request failed (${statusCode}): ${apiMessage}`;
+      }
+      return `Request failed (${statusCode}).`;
+    }
+
     function openImagePicker() {
       if (requestInFlight) return;
+      if (activeRuntimeVisionCapability(latestStatus) === false) {
+        clearPendingImage();
+        showTextOnlyImageBlockedState(latestStatus);
+        return;
+      }
       const input = document.getElementById("imageInput");
       if (!input) return;
       input.value = "";
@@ -4950,6 +5216,7 @@ CHAT_HTML = """<!doctype html>
       const capabilitiesText = document.getElementById("modelCapabilitiesText");
       const statusEl = document.getElementById("modelSettingsStatus");
       const saveBtn = document.getElementById("saveModelSettingsBtn");
+      const discardBtn = document.getElementById("discardModelSettingsBtn");
       const projectorBtn = document.getElementById("downloadProjectorBtn");
       const projectorStatus = document.getElementById("projectorStatusText");
       const visionSection = document.getElementById("settingsVisionSection");
@@ -4963,6 +5230,10 @@ CHAT_HTML = """<!doctype html>
         if (capabilitiesChips) capabilitiesChips.replaceChildren();
         if (statusEl) statusEl.textContent = "No models registered yet.";
         if (saveBtn) saveBtn.disabled = true;
+        if (discardBtn) {
+          discardBtn.hidden = true;
+          discardBtn.disabled = true;
+        }
         if (projectorBtn) projectorBtn.disabled = true;
         if (visionSection) visionSection.hidden = true;
         return;
@@ -4971,7 +5242,7 @@ CHAT_HTML = """<!doctype html>
       const chat = normalizeChatSettings(selectedModel?.settings?.chat);
       const vision = normalizeVisionSettings(selectedModel?.settings?.vision);
       const supportsVision = Boolean(selectedModel?.capabilities?.vision);
-      const projector = selectedModel?.projector || {};
+      const projector = normalizeProjectorStatus(selectedModel?.projector, vision);
       const preserveDraft = (
         (modelSettingsDraftDirty && modelSettingsDraftModelId === selectedModelId)
         || (
@@ -5076,10 +5347,10 @@ CHAT_HTML = """<!doctype html>
       if (projectorStatus) {
         if (!supportsVision) {
           projectorStatus.textContent = "This model does not use a vision encoder.";
-        } else if (projector?.available) {
-          projectorStatus.textContent = `Vision encoder ready: ${projector?.selected_filename || projector?.default_filename || "available"}`;
+        } else if (projector.present) {
+          projectorStatus.textContent = `Vision encoder ready: ${projector.filename || projector.defaultFilename || "available"}`;
         } else {
-          projectorStatus.textContent = `No encoder installed. Default: ${projector?.default_filename || "unknown"}`;
+          projectorStatus.textContent = `No encoder installed. Default: ${projector.defaultFilename || "unknown"}`;
         }
       }
       if (projectorBtn) {
@@ -5087,12 +5358,17 @@ CHAT_HTML = """<!doctype html>
         projectorBtn.disabled = !supportsVision || projectorDownloadInFlight;
         projectorBtn.dataset.modelId = String(selectedModel?.id || "");
         projectorBtn.dataset.projectorFilename = supportsVision
-          ? String(projector?.selected_filename || vision.projector_filename || "")
+          ? String(projector.filename || vision.projector_filename || "")
           : "";
-        projectorBtn.textContent = projector?.available ? "Re-download vision encoder" : "Download vision encoder";
+        projectorBtn.textContent = projector.present ? "Re-download vision encoder" : "Download vision encoder";
       }
       if (saveBtn) {
         saveBtn.disabled = modelSettingsSaveInFlight;
+      }
+      if (discardBtn) {
+        const hasUnsavedChanges = selectedModelHasUnsavedChanges(statusPayload);
+        discardBtn.hidden = !hasUnsavedChanges;
+        discardBtn.disabled = modelSettingsSaveInFlight || !hasUnsavedChanges;
       }
     }
 
@@ -5262,6 +5538,11 @@ CHAT_HTML = """<!doctype html>
           return;
         }
         clearModelSettingsDraftState();
+        displayedSettingsModelId = "";
+        modelSettingsStatusModelId = "";
+        if (body?.active_model_id) {
+          selectedSettingsModelId = String(body.active_model_id);
+        }
         if (statusEl) statusEl.textContent = "YAML applied.";
         settingsYamlLoaded = true;
         await pollStatus();
@@ -5278,7 +5559,9 @@ CHAT_HTML = """<!doctype html>
       modelSettingsSaveInFlight = true;
       const statusEl = document.getElementById("modelSettingsStatus");
       const saveBtn = document.getElementById("saveModelSettingsBtn");
+      const discardBtn = document.getElementById("discardModelSettingsBtn");
       if (saveBtn) saveBtn.disabled = true;
+      if (discardBtn) discardBtn.disabled = true;
       if (statusEl) statusEl.textContent = "Saving model settings...";
       try {
         const settings = collectSelectedModelSettings();
@@ -5291,6 +5574,7 @@ CHAT_HTML = """<!doctype html>
           return;
         }
         clearModelSettingsDraftState();
+        displayedSettingsModelId = "";
         modelSettingsStatusModelId = String(selectedModel?.id || "");
         if (statusEl) statusEl.textContent = "Model settings updated.";
         await pollStatus();
@@ -5299,6 +5583,7 @@ CHAT_HTML = """<!doctype html>
       } finally {
         modelSettingsSaveInFlight = false;
         if (saveBtn) saveBtn.disabled = false;
+        if (discardBtn) discardBtn.disabled = false;
       }
     }
 
@@ -5679,6 +5964,7 @@ CHAT_HTML = """<!doctype html>
         showSettingsWorkspaceTab("yaml");
       });
       document.getElementById("saveModelSettingsBtn").addEventListener("click", saveSelectedModelSettings);
+      document.getElementById("discardModelSettingsBtn").addEventListener("click", discardSelectedModelSettings);
       document.getElementById("downloadProjectorBtn").addEventListener("click", downloadProjectorForSelectedModel);
       document.getElementById("settingsYamlReloadBtn").addEventListener("click", loadSettingsDocument);
       document.getElementById("settingsYamlApplyBtn").addEventListener("click", applySettingsDocument);
@@ -5741,11 +6027,13 @@ CHAT_HTML = """<!doctype html>
         sendBtn.disabled = false;
         sendBtn.textContent = "Stop";
         sendBtn.classList.add("stop-mode");
+        renderComposerCapabilities(latestStatus);
         return;
       }
       sendBtn.textContent = "Send";
       sendBtn.classList.remove("stop-mode");
       sendBtn.disabled = !ready;
+      renderComposerCapabilities(latestStatus);
     }
 
     function setComposerActivity(message) {
@@ -6910,6 +7198,26 @@ CHAT_HTML = """<!doctype html>
       )) || null;
     }
 
+    function formatSidebarStatusDetail(statusPayload) {
+      const download = statusPayload?.download || {};
+      const downloaded = formatBytes(download.bytes_downloaded);
+      const total = formatBytes(download.bytes_total);
+      const state = String(statusPayload?.state || "").toUpperCase();
+      const downloadActive = download.active === true || state === "DOWNLOADING";
+      const downloadError = String(download.error || "");
+      const resumableFailedModel = findResumableFailedModel(statusPayload);
+      if (downloadActive) {
+        return `Download: ${download.percent}% (${downloaded} / ${total})`;
+      }
+      if (downloadError === "download_failed" && resumableFailedModel) {
+        return `Download failed (${downloaded} / ${total})`;
+      }
+      if (download.auto_download_paused === true) {
+        return "Auto-download paused";
+      }
+      return "No active download";
+    }
+
     function formatModelStatusLabel(rawStatus) {
       const normalized = String(rawStatus || "unknown").trim().toLowerCase();
       if (!normalized) return "unknown";
@@ -7175,19 +7483,25 @@ CHAT_HTML = """<!doctype html>
       const input = document.getElementById("modelUrlInput");
       const sourceUrl = String(input?.value || "").trim();
       if (!sourceUrl) {
-        appendMessage("assistant", "Enter a model URL ending with .gguf.");
+        setModelUrlStatus("Enter an HTTPS model URL ending with .gguf.");
         return;
       }
       modelActionInFlight = true;
+      setModelUrlStatus("Adding model URL...");
       try {
         const { res, body } = await postJson("/internal/models/register", { source_url: sourceUrl });
         if (!res.ok) {
-          appendMessage("assistant", `Could not add model URL (${body?.reason || res.status}).`);
+          setModelUrlStatus(formatModelUrlStatus(body?.reason, res.status));
           return;
         }
+        setModelUrlStatus(
+          body?.reason === "already_exists"
+            ? "That model URL is already registered."
+            : "Model URL added."
+        );
         if (input) input.value = "";
       } catch (err) {
-        appendMessage("assistant", `Could not add model URL: ${err}`);
+        setModelUrlStatus(`Could not add model URL: ${err}`);
       } finally {
         modelActionInFlight = false;
         await pollStatus();
@@ -7682,12 +7996,7 @@ CHAT_HTML = """<!doctype html>
 
     function setStatus(statusPayload) {
       latestStatus = statusPayload;
-      const downloaded = formatBytes(statusPayload.download.bytes_downloaded);
-      const total = formatBytes(statusPayload.download.bytes_total);
-      const downloadError = String(statusPayload?.download?.error || "");
-      const downloadText = downloadError === "download_failed"
-        ? `Download failed (${downloaded} / ${total})`
-        : `Download: ${statusPayload.download.percent}% (${downloaded} / ${total})`;
+      const downloadText = formatSidebarStatusDetail(statusPayload);
       const text = `State: ${statusPayload.state} | ${downloadText}`;
       document.getElementById("statusText").textContent = text;
       renderStatusActions(statusPayload);
@@ -7830,6 +8139,11 @@ CHAT_HTML = """<!doctype html>
         imageCancelRestartTimer = null;
       }
       const userPrompt = document.getElementById("userPrompt");
+      if (pendingImage && activeRuntimeVisionCapability(latestStatus) === false) {
+        clearPendingImage();
+        showTextOnlyImageBlockedState(latestStatus);
+        return;
+      }
       const content = userPrompt.value.trim();
       if (!content && !pendingImage) return;
       const hasImageRequest = Boolean(pendingImage);
@@ -7919,7 +8233,7 @@ CHAT_HTML = """<!doctype html>
         if (!res.ok) {
           stopPrefillProgress();
           const body = await res.json().catch(() => ({}));
-          updateMessage(activeAssistantView, `Request failed (${res.status}): ${JSON.stringify(body)}`);
+          updateMessage(activeAssistantView, formatChatFailureMessage(res.status, body, requestCtx), { showActions: true });
           return;
         }
 
@@ -8247,9 +8561,15 @@ CHAT_HTML = """<!doctype html>
       const action = target.dataset?.action;
       const row = target.closest(".model-row");
       const modelId = row?.dataset?.modelId;
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      const selectedModelId = String(selectedModel?.id || "");
+      const targetDiffers = Boolean(modelId) && String(modelId) !== selectedModelId;
+      if (targetDiffers && selectedModelHasUnsavedChanges()) {
+        blockModelSelectionChange();
+        return;
+      }
       if (!action) {
         if (modelId) {
-          clearModelSettingsDraftState();
           selectedSettingsModelId = String(modelId);
           renderSettingsWorkspace(latestStatus);
         }

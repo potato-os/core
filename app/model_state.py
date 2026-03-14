@@ -359,9 +359,18 @@ def _normalize_models_state(runtime: RuntimeConfig, raw: dict[str, Any] | None =
         seen_ids.add(local_id)
         seen_filenames.add(local_filename)
 
-    active_model_id = str(payload.get("active_model_id") or "default")
+    runtime_model_name = _sanitize_filename(getattr(runtime.model_path, "name", ""))
+    active_model_id = str(payload.get("active_model_id") or "").strip()
     if active_model_id not in seen_ids:
-        active_model_id = models[0]["id"]
+        runtime_match = next(
+            (
+                str(item.get("id") or "")
+                for item in models
+                if isinstance(item, dict) and _sanitize_filename(str(item.get("filename") or "")) == runtime_model_name
+            ),
+            "",
+        )
+        active_model_id = runtime_match or models[0]["id"]
 
     default_model_id = str(payload.get("default_model_id") or "default")
     if default_model_id not in seen_ids:

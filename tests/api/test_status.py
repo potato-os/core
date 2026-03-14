@@ -153,6 +153,59 @@ def test_status_includes_active_model_storage_details(client, runtime):
     assert body["model"]["storage"]["is_symlink"] is True
 
 
+def test_status_reconciles_active_model_from_runtime_path_when_state_is_missing(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+
+    default_path = runtime.model_path
+    default_path.write_bytes(b"default")
+    custom_path = runtime.base_dir / "models" / "custom-ready.gguf"
+    custom_path.write_bytes(b"custom")
+    runtime.model_path = custom_path
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": None,
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": default_path.name,
+                        "source_url": "https://example.com/default.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                    {
+                        "id": "custom-ready",
+                        "filename": custom_path.name,
+                        "source_url": "https://example.com/custom.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"]["filename"] == "custom-ready.gguf"
+    assert body["model"]["active_model_id"] == "custom-ready"
+    assert next(model for model in body["models"] if model["id"] == "custom-ready")["is_active"] is True
+    assert next(model for model in body["models"] if model["id"] == "default")["is_active"] is False
+
+    saved_state = json.loads(runtime.models_state_path.read_text(encoding="utf-8"))
+    assert saved_state["active_model_id"] == "custom-ready"
+
+
 def test_status_includes_platform_version_and_power_fields_under_system(client):
     response = client.get("/status")
     assert response.status_code == 200
