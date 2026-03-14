@@ -1517,6 +1517,7 @@ test("model-first settings save per model, yaml can be applied, and projector do
   let activeModelId = "default";
   let lastProjectorDownloadModelId = "";
   let lastSettingsDocument = "";
+  let statusHits = 0;
 
   const statusPayload = () => ({
     state: "READY",
@@ -1557,6 +1558,7 @@ test("model-first settings save per model, yaml can be applied, and projector do
   });
 
   await page.route("**/status", async (route) => {
+    statusHits += 1;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1756,10 +1758,12 @@ test("model-first settings save per model, yaml can be applied, and projector do
   await expect(page.locator("#settingsModelWorkspace")).toBeVisible();
   await expect(page.locator("#settingsWorkspaceTabYaml")).toBeVisible();
   await expect(page.locator("#settingsAdvancedBtn")).toBeVisible();
+  await expect(page.locator("#settingsAdvancedBtn")).toBeEnabled();
   await expect(page.locator("#settingsModal #downloadCountdownEnabled")).toHaveCount(0);
+  await expect(page.locator("#purgeModelsBtn")).toBeHidden();
 
   await page.locator('#modelsList .model-row[data-model-id="default"]').click();
-  await expect(page.locator("#modelName")).toHaveValue(/Qwen3-VL-4B-Instruct-Q4_K_M.gguf/);
+  await expect(page.locator("#modelName")).toHaveText(/Qwen3-VL-4B-Instruct-Q4_K_M.gguf/);
   await expect(page.locator("#modelCapabilitiesChips .settings-chip")).toHaveCount(3);
   await expect(page.locator("#modelCapabilitiesChips")).toContainText("Active");
   await expect(page.locator("#modelCapabilitiesChips")).toContainText("Ready");
@@ -1791,12 +1795,19 @@ test("model-first settings save per model, yaml can be applied, and projector do
   await expect(page.locator("#modelCapabilitiesChips")).toContainText("Text only");
   await expect(page.locator("#stream")).toHaveValue("false");
   await expect(page.locator("#generationMode")).toHaveValue("deterministic");
-  await page.locator("#systemPrompt").fill("Saved per-model");
+  await page.locator("#systemPrompt").evaluate((node) => {
+    node.value = "Saved per-model";
+    node.dispatchEvent(new Event("input", { bubbles: true }));
+    node.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const statusHitsBeforeWait = statusHits;
+  await page.waitForTimeout(2600);
+  expect(statusHits - statusHitsBeforeWait).toBeLessThanOrEqual(1);
   await page.locator("#temperature").fill("0.4");
   await saveModelSettings(page);
 
   await page.locator('#modelsList .model-row[data-model-id="alt-model"] button[data-action="activate"]').click();
-  await expect(page.locator("#modelName")).toHaveValue(/Alt-Funny-Model.gguf/);
+  await expect(page.locator("#modelName")).toHaveText(/Alt-Funny-Model.gguf/);
 
   await page.locator("#settingsWorkspaceTabYaml").click();
   await expect(page.locator("#settingsYamlPanel")).toBeVisible();

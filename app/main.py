@@ -2916,11 +2916,12 @@ CHAT_HTML = """<!doctype html>
     }
 
     .settings-advanced-btn {
-      min-width: 44px;
+      min-width: 0;
       justify-content: center;
-      font-size: 18px;
+      font-size: 13px;
+      font-weight: 700;
       line-height: 1;
-      padding-inline: 12px;
+      padding-inline: 14px;
     }
 
     body.legacy-settings-modal-open {
@@ -2999,6 +3000,11 @@ CHAT_HTML = """<!doctype html>
       gap: 14px;
     }
 
+    .settings-panel-heading-copy {
+      display: grid;
+      gap: 4px;
+    }
+
     .settings-utility-card {
       display: grid;
       gap: 12px;
@@ -3014,6 +3020,51 @@ CHAT_HTML = """<!doctype html>
       padding-top: 8px;
     }
 
+    .settings-danger-zone {
+      margin-top: 4px;
+      border-top: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+      padding-top: 10px;
+    }
+
+    .settings-danger-zone summary {
+      list-style: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      user-select: none;
+    }
+
+    .settings-danger-zone summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .settings-danger-zone summary::before {
+      content: "▸";
+      display: inline-block;
+      margin-right: 8px;
+      transition: transform 140ms ease;
+    }
+
+    .settings-danger-zone[open] summary::before {
+      transform: rotate(90deg);
+    }
+
+    .settings-danger-zone-body {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+      padding-top: 4px;
+    }
+
+    .settings-danger-note {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-muted);
+      margin: 0;
+    }
+
     .settings-model-list {
       display: grid;
       gap: 12px;
@@ -3027,12 +3078,12 @@ CHAT_HTML = """<!doctype html>
       justify-content: space-between;
       align-items: flex-start;
       gap: 18px;
-      padding: 18px;
+      padding: 20px;
       border-radius: 22px;
       background:
-        linear-gradient(135deg, color-mix(in srgb, #f59e0b 12%, var(--panel)) 0%, color-mix(in srgb, var(--panel-muted) 90%, transparent) 48%, color-mix(in srgb, #2f7cf6 6%, var(--panel)) 100%);
-      border: 1px solid color-mix(in srgb, #f59e0b 22%, var(--border));
-      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+        linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, white 4%), color-mix(in srgb, var(--panel-muted) 32%, var(--panel)));
+      border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+      box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
     }
 
     .selected-model-header-copy {
@@ -3043,22 +3094,46 @@ CHAT_HTML = """<!doctype html>
     }
 
     #modelName {
-      border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-      border-radius: 16px;
-      background: color-mix(in srgb, var(--panel) 86%, white 14%);
-      padding: 12px 14px;
-      font-size: 16px;
-      font-weight: 750;
-      letter-spacing: -0.02em;
+      margin: 0;
+      font-size: clamp(19px, 2vw, 24px);
+      font-weight: 760;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
       color: var(--text);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      overflow-wrap: anywhere;
+    }
+
+    .selected-model-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      align-items: center;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.45;
+      min-height: 18px;
+    }
+
+    .selected-model-meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .selected-model-meta-item::before {
+      content: "";
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+      flex: 0 0 auto;
     }
 
     .settings-save-btn {
       white-space: nowrap;
       font-weight: 700;
-      border-color: color-mix(in srgb, #f59e0b 30%, var(--border));
-      background: color-mix(in srgb, #f59e0b 11%, var(--panel));
+      border-color: color-mix(in srgb, #347ae3 22%, var(--border));
+      background: color-mix(in srgb, #347ae3 10%, var(--panel));
     }
 
     .settings-chip-row {
@@ -3772,12 +3847,10 @@ CHAT_HTML = """<!doctype html>
       <div class="settings-modal-header">
         <div>
           <h2 id="settingsModalTitle" class="settings-modal-title">Settings</h2>
-          <p class="settings-modal-note">Model-first controls for chat, downloads, vision, and configuration documents.</p>
+          <p class="settings-modal-note">Model profiles, downloads, vision encoders, and YAML in one place.</p>
         </div>
         <div class="settings-modal-header-actions">
-          <button id="settingsAdvancedBtn" class="ghost-btn settings-advanced-btn" type="button" aria-label="Open advanced settings" title="Advanced settings">
-            <span aria-hidden="true">⋯</span>
-          </button>
+          <button id="settingsAdvancedBtn" class="ghost-btn settings-advanced-btn" type="button" aria-label="Open advanced settings" title="Advanced settings">Advanced</button>
           <button id="settingsCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close settings">Close</button>
         </div>
       </div>
@@ -3789,7 +3862,7 @@ CHAT_HTML = """<!doctype html>
         <div class="settings-workspace-grid">
           <section class="settings-section settings-models-column">
             <div class="settings-panel-heading">
-              <div>
+              <div class="settings-panel-heading-copy">
                 <h3 class="settings-section-title">Models</h3>
                 <div class="settings-section-note">Auto-download bootstrap is paused for now. Use explicit downloads only.</div>
               </div>
@@ -3807,9 +3880,15 @@ CHAT_HTML = """<!doctype html>
               <div class="settings-action-row full">
                 <button id="uploadModelBtn" class="ghost-btn" type="button">Upload model</button>
                 <button id="cancelUploadBtn" class="ghost-btn" type="button" hidden>Cancel upload</button>
-                <button id="purgeModelsBtn" class="ghost-btn danger-btn" type="button">Delete all models</button>
               </div>
               <div id="modelUploadStatus" class="runtime-compact full">No upload in progress.</div>
+              <details class="settings-danger-zone full">
+                <summary>Danger zone</summary>
+                <div class="settings-danger-zone-body">
+                  <p class="settings-danger-note">Bulk deletion is tucked away so the main workspace can stay focused on setup and diagnostics.</p>
+                  <button id="purgeModelsBtn" class="ghost-btn danger-btn" type="button">Delete all models</button>
+                </div>
+              </details>
             </div>
             <div class="full settings-model-list-wrap">
               <div id="modelsList" class="runtime-details settings-model-list"></div>
@@ -3819,7 +3898,8 @@ CHAT_HTML = """<!doctype html>
             <div class="selected-model-header">
               <div class="selected-model-header-copy">
                 <h3 class="settings-section-title">Selected model</h3>
-                <input id="modelName" type="text" value="Checking..." readonly>
+                <div id="modelName">Checking...</div>
+                <div id="modelIdentityMeta" class="selected-model-meta" aria-live="polite"></div>
                 <div id="modelSettingsStatus" class="runtime-compact">Select a model to edit its chat and vision settings.</div>
               </div>
               <button id="saveModelSettingsBtn" class="ghost-btn settings-save-btn" type="button">Save model settings</button>
@@ -4071,6 +4151,9 @@ CHAT_HTML = """<!doctype html>
     let settingsYamlRequestInFlight = false;
     let modelSettingsSaveInFlight = false;
     let modelSettingsStatusModelId = "";
+    let modelSettingsDraftDirty = false;
+    let modelSettingsDraftModelId = "";
+    let displayedSettingsModelId = "";
     let projectorDownloadInFlight = false;
     let messagesPinnedToBottom = true;
     let messagePointerSelectionActive = false;
@@ -4430,6 +4513,77 @@ CHAT_HTML = """<!doctype html>
       };
     }
 
+    function markModelSettingsDraftDirty() {
+      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      modelSettingsDraftDirty = true;
+      modelSettingsDraftModelId = String(selectedModel?.id || "");
+      const statusEl = document.getElementById("modelSettingsStatus");
+      if (statusEl) {
+        statusEl.textContent = "Unsaved changes.";
+      }
+    }
+
+    function clearModelSettingsDraftState() {
+      modelSettingsDraftDirty = false;
+      modelSettingsDraftModelId = "";
+    }
+
+    function isEditingModelSettingsField() {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return false;
+      if (!active.id) return false;
+      return [
+        "systemPrompt",
+        "seed",
+        "temperature",
+        "top_p",
+        "top_k",
+        "repetition_penalty",
+        "presence_penalty",
+        "max_tokens",
+        "visionEnabled",
+      ].includes(String(active.id));
+    }
+
+    function shouldPauseSelectedModelSettingsRender() {
+      return settingsModalOpen
+        && settingsWorkspaceTab === "model"
+        && (modelSettingsDraftDirty || isEditingModelSettingsField());
+    }
+
+    function modelSettingsFormHasUnsavedValues(chat, vision) {
+      const systemPromptEl = document.getElementById("systemPrompt");
+      const streamEl = document.getElementById("stream");
+      const generationModeEl = document.getElementById("generationMode");
+      const seedEl = document.getElementById("seed");
+      const temperatureEl = document.getElementById("temperature");
+      const topPEl = document.getElementById("top_p");
+      const topKEl = document.getElementById("top_k");
+      const repetitionPenaltyEl = document.getElementById("repetition_penalty");
+      const presencePenaltyEl = document.getElementById("presence_penalty");
+      const maxTokensEl = document.getElementById("max_tokens");
+      const visionEnabledEl = document.getElementById("visionEnabled");
+      if (
+        !systemPromptEl || !streamEl || !generationModeEl || !seedEl || !temperatureEl
+        || !topPEl || !topKEl || !repetitionPenaltyEl || !presencePenaltyEl || !maxTokensEl
+      ) {
+        return false;
+      }
+      return (
+        String(systemPromptEl.value || "") !== String(chat.system_prompt || "")
+        || String(streamEl.value || "") !== String(chat.stream)
+        || String(generationModeEl.value || "") !== String(chat.generation_mode)
+        || String(seedEl.value || "") !== String(chat.seed)
+        || String(temperatureEl.value || "") !== String(chat.temperature)
+        || String(topPEl.value || "") !== String(chat.top_p)
+        || String(topKEl.value || "") !== String(chat.top_k)
+        || String(repetitionPenaltyEl.value || "") !== String(chat.repetition_penalty)
+        || String(presencePenaltyEl.value || "") !== String(chat.presence_penalty)
+        || String(maxTokensEl.value || "") !== String(chat.max_tokens)
+        || (visionEnabledEl ? Boolean(visionEnabledEl.checked) !== Boolean(vision.enabled) : false)
+      );
+    }
+
     function collectSettings() {
       return {
         ...getActiveChatSettings(),
@@ -4708,15 +4862,6 @@ CHAT_HTML = """<!doctype html>
       }
       if (settingsModalOpen) {
         settingsModalOpenedAtMs = performance.now();
-        const advancedBtn = document.getElementById("settingsAdvancedBtn");
-        if (advancedBtn) {
-          advancedBtn.disabled = true;
-          window.setTimeout(() => {
-            if (advancedBtn.isConnected) {
-              advancedBtn.disabled = false;
-            }
-          }, 350);
-        }
         setSidebarOpen(false);
       } else {
         closeLegacySettingsModal();
@@ -4772,7 +4917,6 @@ CHAT_HTML = """<!doctype html>
     }
 
     function openLegacySettingsModal() {
-      if ((performance.now() - settingsModalOpenedAtMs) < 250) return;
       setLegacySettingsModalOpen(true);
     }
 
@@ -4799,7 +4943,9 @@ CHAT_HTML = """<!doctype html>
 
     function renderSelectedModelSettings(statusPayload) {
       const selectedModel = resolveSelectedSettingsModel(statusPayload);
+      const selectedModelId = String(selectedModel?.id || "");
       const modelNameField = document.getElementById("modelName");
+      const modelIdentityMeta = document.getElementById("modelIdentityMeta");
       const capabilitiesChips = document.getElementById("modelCapabilitiesChips");
       const capabilitiesText = document.getElementById("modelCapabilitiesText");
       const statusEl = document.getElementById("modelSettingsStatus");
@@ -4809,7 +4955,10 @@ CHAT_HTML = """<!doctype html>
       const visionSection = document.getElementById("settingsVisionSection");
       const visionEnabled = document.getElementById("visionEnabled");
       if (!selectedModel) {
-        if (modelNameField) modelNameField.value = "No model selected";
+        clearModelSettingsDraftState();
+        displayedSettingsModelId = "";
+        if (modelNameField) modelNameField.textContent = "No model selected";
+        if (modelIdentityMeta) modelIdentityMeta.replaceChildren();
         if (capabilitiesText) capabilitiesText.textContent = "Register or upload a model to configure it.";
         if (capabilitiesChips) capabilitiesChips.replaceChildren();
         if (statusEl) statusEl.textContent = "No models registered yet.";
@@ -4823,9 +4972,34 @@ CHAT_HTML = """<!doctype html>
       const vision = normalizeVisionSettings(selectedModel?.settings?.vision);
       const supportsVision = Boolean(selectedModel?.capabilities?.vision);
       const projector = selectedModel?.projector || {};
+      const preserveDraft = (
+        (modelSettingsDraftDirty && modelSettingsDraftModelId === selectedModelId)
+        || (
+          displayedSettingsModelId === selectedModelId
+          && modelSettingsFormHasUnsavedValues(chat, vision)
+        )
+        || isEditingModelSettingsField()
+      );
 
       if (modelNameField) {
-        modelNameField.value = String(selectedModel?.filename || "");
+        modelNameField.textContent = String(selectedModel?.filename || "");
+      }
+      if (modelIdentityMeta) {
+        modelIdentityMeta.replaceChildren();
+        const metaBits = [];
+        if (selectedModel?.storage?.location === "ssd") metaBits.push("Stored on SSD");
+        else if (selectedModel?.storage?.location) metaBits.push(`Stored on ${String(selectedModel.storage.location).toUpperCase()}`);
+        if (selectedModel?.source_type === "url") metaBits.push("Added from URL");
+        else if (selectedModel?.source_type === "upload") metaBits.push("Uploaded locally");
+        if (selectedModel?.status === "failed" && selectedModel?.error) {
+          metaBits.push(String(selectedModel.error));
+        }
+        for (const bit of metaBits) {
+          const item = document.createElement("span");
+          item.className = "selected-model-meta-item";
+          item.textContent = String(bit);
+          modelIdentityMeta.appendChild(item);
+        }
       }
       if (capabilitiesText) {
         const bits = [
@@ -4859,31 +5033,38 @@ CHAT_HTML = """<!doctype html>
         }));
       }
       if (statusEl) {
-        const currentText = String(statusEl.textContent || "");
-        const keepRecentSuccess = (
-          modelSettingsStatusModelId === String(selectedModel?.id || "")
-          && /updated|saved/i.test(currentText)
-        );
-        if (!keepRecentSuccess) {
-          statusEl.textContent = selectedModel?.status === "failed"
-            ? `Model state: ${String(selectedModel?.error || "failed")}`
-            : "Update the selected model profile and save to persist it.";
+        if (preserveDraft) {
+          statusEl.textContent = "Unsaved changes.";
+        } else {
+          const currentText = String(statusEl.textContent || "");
+          const keepRecentSuccess = (
+            modelSettingsStatusModelId === selectedModelId
+            && /updated|saved/i.test(currentText)
+          );
+          if (!keepRecentSuccess) {
+            statusEl.textContent = selectedModel?.status === "failed"
+              ? `Model state: ${String(selectedModel?.error || "failed")}`
+              : "Update the selected model profile and save to persist it.";
+          }
         }
       }
 
-      document.getElementById("systemPrompt").value = chat.system_prompt;
-      document.getElementById("stream").value = String(chat.stream);
-      document.getElementById("generationMode").value = chat.generation_mode;
-      document.getElementById("seed").value = String(chat.seed);
-      document.getElementById("temperature").value = String(chat.temperature);
-      document.getElementById("top_p").value = String(chat.top_p);
-      document.getElementById("top_k").value = String(chat.top_k);
-      document.getElementById("repetition_penalty").value = String(chat.repetition_penalty);
-      document.getElementById("presence_penalty").value = String(chat.presence_penalty);
-      document.getElementById("max_tokens").value = String(chat.max_tokens);
-      syncSegmentedControl("stream");
-      syncSegmentedControl("generationMode");
-      updateSeedFieldState(chat.generation_mode);
+      if (!preserveDraft) {
+        document.getElementById("systemPrompt").value = chat.system_prompt;
+        document.getElementById("stream").value = String(chat.stream);
+        document.getElementById("generationMode").value = chat.generation_mode;
+        document.getElementById("seed").value = String(chat.seed);
+        document.getElementById("temperature").value = String(chat.temperature);
+        document.getElementById("top_p").value = String(chat.top_p);
+        document.getElementById("top_k").value = String(chat.top_k);
+        document.getElementById("repetition_penalty").value = String(chat.repetition_penalty);
+        document.getElementById("presence_penalty").value = String(chat.presence_penalty);
+        document.getElementById("max_tokens").value = String(chat.max_tokens);
+        syncSegmentedControl("stream");
+        syncSegmentedControl("generationMode");
+        updateSeedFieldState(chat.generation_mode);
+        displayedSettingsModelId = selectedModelId;
+      }
 
       if (visionSection) {
         visionSection.hidden = !supportsVision;
@@ -5040,7 +5221,9 @@ CHAT_HTML = """<!doctype html>
 
     function renderSettingsWorkspace(statusPayload) {
       renderModelsList(statusPayload);
-      renderSelectedModelSettings(statusPayload);
+      if (!shouldPauseSelectedModelSettingsRender()) {
+        renderSelectedModelSettings(statusPayload);
+      }
       showSettingsWorkspaceTab(settingsWorkspaceTab);
     }
 
@@ -5078,6 +5261,7 @@ CHAT_HTML = """<!doctype html>
           if (statusEl) statusEl.textContent = `Could not apply YAML (${body?.reason || res.status}).`;
           return;
         }
+        clearModelSettingsDraftState();
         if (statusEl) statusEl.textContent = "YAML applied.";
         settingsYamlLoaded = true;
         await pollStatus();
@@ -5106,6 +5290,7 @@ CHAT_HTML = """<!doctype html>
           if (statusEl) statusEl.textContent = `Could not save model settings (${body?.reason || res.status}).`;
           return;
         }
+        clearModelSettingsDraftState();
         modelSettingsStatusModelId = String(selectedModel?.id || "");
         if (statusEl) statusEl.textContent = "Model settings updated.";
         await pollStatus();
@@ -5459,6 +5644,33 @@ CHAT_HTML = """<!doctype html>
           closeSettingsModal();
         }
       });
+      document.getElementById("settingsModal").addEventListener("input", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (
+          target.closest("#systemPrompt, #seed, #temperature, #top_p, #top_k, #repetition_penalty, #presence_penalty, #max_tokens, #visionEnabled")
+        ) {
+          markModelSettingsDraftDirty();
+        }
+      });
+      document.getElementById("settingsModal").addEventListener("change", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (
+          target.closest("#systemPrompt, #seed, #temperature, #top_p, #top_k, #repetition_penalty, #presence_penalty, #max_tokens, #visionEnabled")
+        ) {
+          markModelSettingsDraftDirty();
+        }
+      });
+      document.getElementById("settingsModal").addEventListener("keydown", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (
+          target.closest("#systemPrompt, #seed, #temperature, #top_p, #top_k, #repetition_penalty, #presence_penalty, #max_tokens")
+        ) {
+          markModelSettingsDraftDirty();
+        }
+      });
       document.getElementById("settingsAdvancedBtn").addEventListener("click", openLegacySettingsModal);
       document.getElementById("settingsWorkspaceTabModel").addEventListener("click", () => {
         showSettingsWorkspaceTab("model");
@@ -5472,6 +5684,7 @@ CHAT_HTML = """<!doctype html>
       document.getElementById("settingsYamlApplyBtn").addEventListener("click", applySettingsDocument);
       document.querySelectorAll(".settings-segment-btn").forEach((button) => {
         button.addEventListener("click", () => {
+          markModelSettingsDraftDirty();
           setSegmentedControlValue(String(button.dataset.target || ""), String(button.dataset.value || ""));
         });
       });
@@ -7482,7 +7695,7 @@ CHAT_HTML = """<!doctype html>
       const modelNameField = document.getElementById("modelName");
       if (modelNameField) {
         const modelName = statusPayload?.model?.filename || "Unknown model";
-        modelNameField.value = statusPayload?.model_present ? modelName : `${modelName} (not loaded)`;
+        modelNameField.textContent = statusPayload?.model_present ? modelName : `${modelName} (not loaded)`;
       }
       const countdownSelect = document.getElementById("downloadCountdownEnabled");
       if (countdownSelect) {
@@ -7591,7 +7804,7 @@ CHAT_HTML = """<!doctype html>
         renderStatusActions({});
         const modelNameField = document.getElementById("modelName");
         if (modelNameField) {
-          modelNameField.value = "Unknown model (status unavailable)";
+          modelNameField.textContent = "Unknown model (status unavailable)";
         }
         updateLlamaIndicator(latestStatus);
         renderDownloadPrompt(latestStatus);
@@ -7996,7 +8209,10 @@ CHAT_HTML = """<!doctype html>
     bindMobileSidebar();
     bindMessagesScroller();
     setRuntimeDetailsExpanded(true);
-    setInterval(pollStatus, 2000);
+    setInterval(() => {
+      if (settingsModalOpen) return;
+      pollStatus();
+    }, 2000);
     pollStatus();
 
     document.getElementById("themeToggle").addEventListener("click", toggleTheme);
@@ -8033,6 +8249,7 @@ CHAT_HTML = """<!doctype html>
       const modelId = row?.dataset?.modelId;
       if (!action) {
         if (modelId) {
+          clearModelSettingsDraftState();
           selectedSettingsModelId = String(modelId);
           renderSettingsWorkspace(latestStatus);
         }
