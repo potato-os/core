@@ -390,7 +390,9 @@ def get_chat_repository(request: Request) -> ChatRepositoryManager:
     return request.app.state.chat_repository
 
 
-async def _terminate_process(proc, *, timeout=LLAMA_SHUTDOWN_TIMEOUT_SECONDS):
+async def _terminate_process(proc, *, timeout=None):
+    if timeout is None:
+        timeout = LLAMA_SHUTDOWN_TIMEOUT_SECONDS
     proc.terminate()
     try:
         await asyncio.wait_for(proc.wait(), timeout=timeout)
