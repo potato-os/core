@@ -12,6 +12,8 @@ Environment=POTATO_BASE_DIR=/opt/potato
 ExecStart=/opt/potato/bin/run.sh
 Restart=always
 RestartSec=2
+TimeoutStopSec=10
+KillMode=mixed
 StandardOutput=journal
 StandardError=journal
 

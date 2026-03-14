@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import warnings
 from typing import Any
 
@@ -30,15 +31,28 @@ class _FakeTask:
 
 
 class _FakeProcess:
-    def __init__(self) -> None:
+    def __init__(self, *, hang_on_terminate: bool = False) -> None:
         self.returncode = None
         self.terminated = False
         self.waited = False
+        self.killed = False
+        self._hang_on_terminate = hang_on_terminate
+        self._killed_event: asyncio.Event | None = None
+        if hang_on_terminate:
+            self._killed_event = asyncio.Event()
 
     def terminate(self) -> None:
         self.terminated = True
 
+    def kill(self) -> None:
+        self.killed = True
+        if self._killed_event is not None:
+            self._killed_event.set()
+
     async def wait(self) -> int:
+        if self._hang_on_terminate and not self.killed:
+            assert self._killed_event is not None
+            await self._killed_event.wait()
         self.waited = True
         self.returncode = 0
         return 0
@@ -115,3 +129,20 @@ def test_app_lifespan_runs_startup_and_shutdown_hooks(
     assert download_task.awaited is True
     assert llama_process.terminated is True
     assert llama_process.waited is True
+
+
+def test_lifespan_shutdown_escalates_to_kill_on_timeout(monkeypatch) -> None:
+    proc = _FakeProcess(hang_on_terminate=True)
+    monkeypatch.setattr(main, "LLAMA_SHUTDOWN_TIMEOUT_SECONDS", 0.1)
+    asyncio.run(main._terminate_process(proc))
+    assert proc.terminated is True
+    assert proc.killed is True
+    assert proc.waited is True
+
+
+def test_lifespan_shutdown_clean_exit_does_not_kill() -> None:
+    proc = _FakeProcess()
+    asyncio.run(main._terminate_process(proc))
+    assert proc.terminated is True
+    assert proc.killed is False
+    assert proc.waited is True

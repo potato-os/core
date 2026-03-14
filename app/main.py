@@ -251,6 +251,7 @@ MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
 # settings flow is in place. Manual downloads remain supported.
 AUTO_DOWNLOAD_BOOTSTRAP_ENABLED = False
 LLAMA_READY_HEALTH_POLLS_REQUIRED = 2
+LLAMA_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
 DEFAULT_CHAT_SETTINGS = {
     **DEFAULT_MODEL_CHAT_SETTINGS,
@@ -389,6 +390,18 @@ def get_chat_repository(request: Request) -> ChatRepositoryManager:
     return request.app.state.chat_repository
 
 
+async def _terminate_process(proc, *, timeout=None):
+    if timeout is None:
+        timeout = LLAMA_SHUTDOWN_TIMEOUT_SECONDS
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("pid=%s did not exit after SIGTERM, sending SIGKILL", getattr(proc, "pid", "?"))
+        proc.kill()
+        await asyncio.wait_for(proc.wait(), timeout=3.0)
+
+
 async def restart_managed_llama_process(app: FastAPI) -> tuple[bool, str]:
     try:
         current_model_path = getattr(app.state.runtime, "model_path", None)
@@ -399,12 +412,7 @@ async def restart_managed_llama_process(app: FastAPI) -> tuple[bool, str]:
     terminated_running = False
 
     if proc is not None and proc.returncode is None:
-        proc.terminate()
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await asyncio.wait_for(proc.wait(), timeout=3.0)
+        await _terminate_process(proc, timeout=3.0)
         terminated_running = True
 
     terminated_stale = await terminate_stray_llama_processes(app.state.runtime)
@@ -8816,8 +8824,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
 
             proc = app.state.llama_process
             if proc is not None and proc.returncode is None:
-                proc.terminate()
-                await proc.wait()
+                await _terminate_process(proc)
 
             download_task = app.state.model_download_task
             if is_download_task_active(download_task):
