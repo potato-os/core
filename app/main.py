@@ -238,6 +238,7 @@ MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
 # Temporarily pause implicit bootstrap model downloads until the new model-first
 # settings flow is in place. Manual downloads remain supported.
 AUTO_DOWNLOAD_BOOTSTRAP_ENABLED = False
+LLAMA_READY_HEALTH_POLLS_REQUIRED = 2
 
 DEFAULT_CHAT_SETTINGS = {
     **DEFAULT_MODEL_CHAT_SETTINGS,
@@ -267,6 +268,106 @@ def _empty_llama_runtime_switch_state() -> dict[str, Any]:
         "last_bundle_path": None,
     }
 
+
+def _empty_llama_readiness_state() -> dict[str, Any]:
+    return {
+        "generation": 0,
+        "model_path": None,
+        "status": "idle",
+        "transport_healthy": False,
+        "ready": False,
+        "healthy_polls": 0,
+        "last_error": None,
+        "last_ready_at_unix": None,
+    }
+
+
+def reset_llama_readiness_state(
+    app: FastAPI,
+    *,
+    model_path: Path | str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    previous = getattr(app.state, "llama_readiness_state", None)
+    generation = 1
+    if isinstance(previous, dict):
+        generation = max(0, int(previous.get("generation") or 0)) + 1
+    next_state = _empty_llama_readiness_state()
+    next_state["generation"] = generation
+    next_state["model_path"] = str(model_path) if model_path else None
+    next_state["status"] = "loading" if model_path else "idle"
+    next_state["last_error"] = reason
+    app.state.llama_readiness_state = next_state
+    return dict(next_state)
+
+
+def get_llama_readiness_state(app: FastAPI, *, active_model_path: Path | None = None) -> dict[str, Any]:
+    state = getattr(app.state, "llama_readiness_state", None)
+    if not isinstance(state, dict):
+        state = _empty_llama_readiness_state()
+        app.state.llama_readiness_state = state
+    target_path = str(active_model_path) if active_model_path is not None else None
+    if target_path and state.get("model_path") != target_path:
+        return reset_llama_readiness_state(app, model_path=active_model_path, reason="model_changed")
+    if target_path is None and state.get("model_path") is not None:
+        return reset_llama_readiness_state(app, reason="no_model")
+    return dict(state)
+
+
+async def refresh_llama_readiness(
+    app: FastAPI,
+    runtime: RuntimeConfig,
+    *,
+    active_model_path: Path | None,
+) -> dict[str, Any]:
+    state = get_llama_readiness_state(app, active_model_path=active_model_path)
+    target_path = str(active_model_path) if active_model_path is not None else None
+    next_state = app.state.llama_readiness_state
+
+    if target_path is None:
+        return dict(next_state)
+
+    proc = getattr(app.state, "llama_process", None)
+    running = proc is not None and proc.returncode is None
+    if not running:
+        next_state.update(
+            {
+                "status": "loading",
+                "transport_healthy": False,
+                "ready": False,
+                "healthy_polls": 0,
+            }
+        )
+        return dict(next_state)
+
+    transport_healthy = await check_llama_health(runtime, busy_is_healthy=False)
+    next_state["transport_healthy"] = transport_healthy
+    if not transport_healthy:
+        next_state.update(
+            {
+                "status": "loading",
+                "ready": False,
+                "healthy_polls": 0,
+            }
+        )
+        return dict(next_state)
+
+    next_state["healthy_polls"] = min(
+        LLAMA_READY_HEALTH_POLLS_REQUIRED,
+        max(0, int(next_state.get("healthy_polls") or 0)) + 1,
+    )
+    if int(next_state["healthy_polls"]) >= LLAMA_READY_HEALTH_POLLS_REQUIRED:
+        if not next_state.get("ready"):
+            next_state["last_ready_at_unix"] = time.time()
+        next_state["ready"] = True
+        next_state["status"] = "ready"
+        next_state["last_error"] = None
+    else:
+        next_state["ready"] = False
+        next_state["status"] = "warming"
+    return dict(next_state)
+
+
 def get_runtime(request: Request) -> RuntimeConfig:
     return request.app.state.runtime
 
@@ -276,6 +377,11 @@ def get_chat_repository(request: Request) -> ChatRepositoryManager:
 
 
 async def restart_managed_llama_process(app: FastAPI) -> tuple[bool, str]:
+    try:
+        current_model_path = getattr(app.state.runtime, "model_path", None)
+    except Exception:
+        current_model_path = None
+    reset_llama_readiness_state(app, model_path=current_model_path, reason="restart_requested")
     proc = app.state.llama_process
     terminated_running = False
 
@@ -548,15 +654,28 @@ async def build_status(
     active_model, active_model_path = resolve_active_model(models_state, runtime)
     has_model = model_file_present(runtime, str(active_model["filename"]))
     download = read_download_progress(runtime)
-    llama_healthy = False
+    llama_running = False
+    llama_transport_healthy = False
+    llama_ready = False
     storage_targets = build_model_storage_target_status(runtime)
     ssd_models_dir_raw = storage_targets.get("ssd", {}).get("models_dir")
     ssd_models_dir = Path(str(ssd_models_dir_raw)) if ssd_models_dir_raw else None
 
     if has_model:
-        llama_healthy = await check_llama_health(runtime)
+        readiness_state: dict[str, Any] | None = None
+        if app is not None and runtime.enable_orchestrator:
+            readiness_state = get_llama_readiness_state(app, active_model_path=active_model_path)
+            proc = getattr(app.state, "llama_process", None)
+            llama_running = proc is not None and proc.returncode is None
+        if readiness_state is not None:
+            llama_transport_healthy = bool(readiness_state.get("transport_healthy", False))
+            llama_ready = bool(readiness_state.get("ready", False))
+        else:
+            llama_ready = await check_llama_health(runtime)
+            llama_transport_healthy = llama_ready
+            llama_running = llama_ready
 
-    active_backend, fallback_active = _resolve_backend_active(runtime, has_model, llama_healthy)
+    active_backend, fallback_active = _resolve_backend_active(runtime, has_model, llama_ready)
     effective_mode = runtime.chat_backend_mode
     if effective_mode not in {"auto", "llama", "fake"}:
         effective_mode = "llama"
@@ -565,7 +684,7 @@ async def build_status(
 
     if active_backend == "fake":
         state = "READY"
-    elif has_model and llama_healthy:
+    elif has_model and llama_ready:
         state = "READY"
     elif download.get("error"):
         state = "ERROR"
@@ -689,8 +808,10 @@ async def build_status(
         "download": download_payload,
         "upload": upload_snapshot,
         "llama_server": {
-            "running": llama_healthy,
-            "healthy": llama_healthy,
+            "running": llama_running or llama_transport_healthy,
+            "healthy": llama_ready,
+            "ready": llama_ready,
+            "transport_healthy": llama_transport_healthy,
             "url": runtime.llama_base_url,
         },
         "backend": {
@@ -1272,6 +1393,10 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                         logger.info("Started llama-server process")
                     else:
                         logger.warning("start_llama script missing: %s", runtime.start_llama_script)
+
+                await refresh_llama_readiness(app, runtime, active_model_path=active_model_path)
+            else:
+                reset_llama_readiness_state(app, reason="model_missing")
 
             await asyncio.sleep(2)
         except asyncio.CancelledError:
@@ -8685,6 +8810,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.state.model_upload_state = _empty_model_upload_state()
     app.state.llama_runtime_switch_lock = asyncio.Lock()
     app.state.llama_runtime_switch_state = _empty_llama_runtime_switch_state()
+    app.state.llama_readiness_state = _empty_llama_readiness_state()
     app.state.startup_monotonic = None
     app.state.orchestrator_task = None
     app.state.chat_repository = ChatRepositoryManager(

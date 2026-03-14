@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.main import build_status, create_app, get_runtime
+from app.main import build_status, create_app, get_runtime, refresh_llama_readiness
 
 
 def test_status_booting_when_model_missing(client, monkeypatch):
@@ -55,6 +55,55 @@ def test_status_ready_when_model_exists_and_llama_healthy(client, runtime, monke
     assert body["state"] == "READY"
     assert body["model_present"] is True
     assert body["llama_server"]["healthy"] is True
+
+
+def test_status_uses_cached_llama_readiness_when_orchestrated(runtime):
+    runtime.enable_orchestrator = True
+    runtime.model_path.write_bytes(b"gguf")
+    app = create_app(runtime=runtime)
+    app.state.llama_readiness_state.update(
+        {
+            "model_path": str(runtime.model_path),
+            "status": "warming",
+            "transport_healthy": True,
+            "ready": False,
+            "healthy_polls": 1,
+        }
+    )
+    body = asyncio.run(build_status(runtime, app=app))
+    assert body["state"] == "BOOTING"
+    assert body["llama_server"]["transport_healthy"] is True
+    assert body["llama_server"]["healthy"] is False
+    assert body["llama_server"]["ready"] is False
+
+
+def test_refresh_llama_readiness_marks_ready_after_strict_health_stabilizes(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    runtime.model_path.write_bytes(b"gguf")
+    app = create_app(runtime=runtime)
+
+    class _DummyProc:
+        returncode = None
+
+    app.state.llama_process = _DummyProc()
+    health_calls: list[bool] = []
+
+    async def _strict_true(_runtime, busy_is_healthy: bool = True):
+        health_calls.append(busy_is_healthy)
+        return True
+
+    monkeypatch.setattr("app.main.check_llama_health", _strict_true)
+
+    first = asyncio.run(refresh_llama_readiness(app, runtime, active_model_path=runtime.model_path))
+    second = asyncio.run(refresh_llama_readiness(app, runtime, active_model_path=runtime.model_path))
+
+    assert first["status"] == "warming"
+    assert first["ready"] is False
+    assert second["status"] == "ready"
+    assert second["ready"] is True
+    assert second["transport_healthy"] is True
+    assert health_calls == [False, False]
+    assert app.state.llama_readiness_state["last_ready_at_unix"] is not None
 
 
 def test_status_includes_large_model_warning_for_unsupported_pi(client, runtime, monkeypatch):
