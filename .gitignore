@@ -10,6 +10,7 @@ node_modules/
 playwright-report/
 test-results/
 models/
+projectors/
 output/
 .cache/potato-image-build/
 .cache/potato-image-cache/
