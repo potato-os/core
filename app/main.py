@@ -33,11 +33,17 @@ except ModuleNotFoundError:
     )
 
 try:
+    from app.constants import (
+        is_qwen35_filename,
+        is_qwen3_vl_filename,
+        projector_repo_for_model,
+    )
     from app.model_state import (
         DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
         MODELS_STATE_VERSION,
         MODEL_URL,
+        ModelSettingsValidationError,
         _default_model_record,
         apply_model_chat_defaults,
         build_model_capabilities,
@@ -131,11 +137,17 @@ try:
         _run_vcgencmd,
     )
 except ModuleNotFoundError:
+    from constants import (  # type: ignore[no-redef]
+        is_qwen35_filename,
+        is_qwen3_vl_filename,
+        projector_repo_for_model,
+    )
     from model_state import (  # type: ignore[no-redef]
         DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
         MODELS_STATE_VERSION,
         MODEL_URL,
+        ModelSettingsValidationError,
         _default_model_record,
         apply_model_chat_defaults,
         build_model_capabilities,
@@ -873,6 +885,7 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env["POTATO_LLAMA_PORT"] = str(runtime.llama_port)
     env["POTATO_LLAMA_NO_MMAP"] = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
     env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_VL"] = "0"
     env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "0"
     env.pop("POTATO_MMPROJ_PATH", None)
     try:
@@ -885,7 +898,9 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
         active_settings = normalize_model_settings(active_model.get("settings"), filename=active_filename)
         vision_settings = active_settings.get("vision", {})
         if model_supports_vision_filename(active_filename) and bool(vision_settings.get("enabled", False)):
-            if "qwen" in active_filename.lower() and "3.5" in active_filename.lower():
+            if is_qwen3_vl_filename(active_filename):
+                env["POTATO_VISION_MODEL_NAME_PATTERN_VL"] = "1"
+            if is_qwen35_filename(active_filename):
                 env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
             projector_status = build_model_projector_status(runtime, active_model)
             if projector_status.get("present") and projector_status.get("path"):
@@ -1459,6 +1474,41 @@ def _merge_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _merge_active_model_chat_defaults(payload: dict[str, Any], *, runtime: RuntimeConfig) -> dict[str, Any]:
+    merged = dict(payload)
+    chat_settings = get_active_model_settings(runtime).get("chat", {})
+    if not isinstance(chat_settings, dict):
+        chat_settings = {}
+
+    for key in (
+        "temperature",
+        "top_p",
+        "top_k",
+        "repetition_penalty",
+        "presence_penalty",
+        "max_tokens",
+        "stream",
+        "generation_mode",
+    ):
+        if key not in merged and key in chat_settings:
+            merged[key] = chat_settings[key]
+
+    if "seed" not in merged and str(chat_settings.get("generation_mode") or "").strip().lower() == "deterministic":
+        merged["seed"] = chat_settings.get("seed")
+
+    system_prompt = str(chat_settings.get("system_prompt") or "").strip()
+    messages = merged.get("messages")
+    if system_prompt and isinstance(messages, list):
+        has_system_message = any(
+            isinstance(message, dict) and str(message.get("role") or "").strip().lower() == "system"
+            for message in messages
+        )
+        if not has_system_message:
+            merged["messages"] = [{"role": "system", "content": system_prompt}, *messages]
+
+    return merged
+
+
 def get_active_model_settings(runtime: RuntimeConfig) -> dict[str, Any]:
     state = ensure_models_state(runtime)
     active_model = get_model_by_id(state, str(state.get("active_model_id") or ""))
@@ -1525,7 +1575,10 @@ def apply_settings_document_yaml(runtime: RuntimeConfig, document: str) -> tuple
             if model is None:
                 return False, "model_not_found", {"model_id": model_id}
             filename = str(model.get("filename") or "")
-            model["settings"] = normalize_model_settings(item.get("settings"), filename=filename)
+            try:
+                model["settings"] = normalize_model_settings(item.get("settings"), filename=filename)
+            except ModelSettingsValidationError as exc:
+                return False, "invalid_settings", {"field": exc.field, "model_id": model_id}
 
     if active_model_id:
         if get_model_by_id(next_models_state, active_model_id) is None:
@@ -1556,18 +1609,7 @@ def apply_settings_document_yaml(runtime: RuntimeConfig, document: str) -> tuple
 
 
 def curated_projector_repo_for_model(filename: str) -> str | None:
-    model_name = filename.lower()
-    if "qwen" in model_name and "3.5" in model_name and "35b" in model_name and "hauhaucs" in model_name:
-        return "HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive"
-    if "qwen" in model_name and "3.5" in model_name and "35b" in model_name and "a3b" in model_name:
-        return "AesSedai/Qwen3.5-35B-A3B-GGUF"
-    if "qwen" in model_name and "3.5" in model_name and "4b" in model_name and "hauhaucs" in model_name:
-        return "HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive"
-    if "qwen" in model_name and "3.5" in model_name and "4b" in model_name:
-        return "unsloth/Qwen3.5-4B-GGUF"
-    if "qwen" in model_name and "3.5" in model_name and "2b" in model_name:
-        return "unsloth/Qwen3.5-2B-GGUF"
-    return None
+    return projector_repo_for_model(filename)
 
 
 def download_default_projector_for_model(*, runtime: RuntimeConfig, model_id: str) -> tuple[bool, str, str | None]:
@@ -9215,7 +9257,8 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
             return JSONResponse(status_code=400, content={"updated": False, "reason": "settings_required"})
         updated, reason, model = update_model_settings(runtime_cfg, model_id=model_id, settings=settings)
         if not updated:
-            return JSONResponse(status_code=404, content={"updated": False, "reason": reason, "model_id": model_id})
+            status_code = 404 if reason == "model_not_found" else 400
+            return JSONResponse(status_code=status_code, content={"updated": False, "reason": reason, "model_id": model_id})
         restarted = False
         restart_reason = "not_required"
         state = ensure_models_state(runtime_cfg)
@@ -9715,6 +9758,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
+        payload = _merge_active_model_chat_defaults(payload, runtime=runtime_cfg)
         payload = _merge_defaults(payload)
         payload = apply_model_chat_defaults(
             payload,

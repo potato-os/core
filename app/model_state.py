@@ -43,6 +43,12 @@ DEFAULT_MODEL_VISION_SETTINGS = {
 }
 
 
+class ModelSettingsValidationError(ValueError):
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
+        self.field = field
+
+
 def _model_file_path(runtime: RuntimeConfig, filename: str) -> Path:
     return runtime.base_dir / "models" / filename
 
@@ -75,22 +81,66 @@ def model_supports_vision_filename(filename: str | None) -> bool:
     return False
 
 
+def _coerce_float_setting(raw_value: Any, *, field: str, default: float) -> float:
+    value = default if raw_value is None else raw_value
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ModelSettingsValidationError(field) from exc
+
+
+def _coerce_int_setting(raw_value: Any, *, field: str, default: int) -> int:
+    value = default if raw_value is None else raw_value
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ModelSettingsValidationError(field) from exc
+
+
 def _normalize_chat_settings(raw_value: Any) -> dict[str, Any]:
     raw = raw_value if isinstance(raw_value, dict) else {}
     return {
-        "temperature": float(raw.get("temperature", DEFAULT_MODEL_CHAT_SETTINGS["temperature"])),
-        "top_p": float(raw.get("top_p", DEFAULT_MODEL_CHAT_SETTINGS["top_p"])),
-        "top_k": int(raw.get("top_k", DEFAULT_MODEL_CHAT_SETTINGS["top_k"])),
-        "repetition_penalty": float(raw.get("repetition_penalty", DEFAULT_MODEL_CHAT_SETTINGS["repetition_penalty"])),
-        "presence_penalty": float(raw.get("presence_penalty", DEFAULT_MODEL_CHAT_SETTINGS["presence_penalty"])),
-        "max_tokens": int(raw.get("max_tokens", DEFAULT_MODEL_CHAT_SETTINGS["max_tokens"])),
+        "temperature": _coerce_float_setting(
+            raw.get("temperature"),
+            field="chat.temperature",
+            default=DEFAULT_MODEL_CHAT_SETTINGS["temperature"],
+        ),
+        "top_p": _coerce_float_setting(
+            raw.get("top_p"),
+            field="chat.top_p",
+            default=DEFAULT_MODEL_CHAT_SETTINGS["top_p"],
+        ),
+        "top_k": _coerce_int_setting(
+            raw.get("top_k"),
+            field="chat.top_k",
+            default=DEFAULT_MODEL_CHAT_SETTINGS["top_k"],
+        ),
+        "repetition_penalty": _coerce_float_setting(
+            raw.get("repetition_penalty"),
+            field="chat.repetition_penalty",
+            default=DEFAULT_MODEL_CHAT_SETTINGS["repetition_penalty"],
+        ),
+        "presence_penalty": _coerce_float_setting(
+            raw.get("presence_penalty"),
+            field="chat.presence_penalty",
+            default=DEFAULT_MODEL_CHAT_SETTINGS["presence_penalty"],
+        ),
+        "max_tokens": _coerce_int_setting(
+            raw.get("max_tokens"),
+            field="chat.max_tokens",
+            default=DEFAULT_MODEL_CHAT_SETTINGS["max_tokens"],
+        ),
         "stream": bool(raw.get("stream", DEFAULT_MODEL_CHAT_SETTINGS["stream"])),
         "generation_mode": (
             "deterministic"
             if str(raw.get("generation_mode", DEFAULT_MODEL_CHAT_SETTINGS["generation_mode"])).strip().lower() == "deterministic"
             else "random"
         ),
-        "seed": int(raw.get("seed", DEFAULT_MODEL_CHAT_SETTINGS["seed"])),
+        "seed": _coerce_int_setting(
+            raw.get("seed"),
+            field="chat.seed",
+            default=DEFAULT_MODEL_CHAT_SETTINGS["seed"],
+        ),
         "system_prompt": str(raw.get("system_prompt", DEFAULT_MODEL_CHAT_SETTINGS["system_prompt"]) or ""),
     }
 
@@ -436,7 +486,10 @@ def update_model_settings(
     if model is None:
         return False, "model_not_found", None
     filename = str(model.get("filename") or "")
-    model["settings"] = normalize_model_settings(settings, filename=filename)
+    try:
+        model["settings"] = normalize_model_settings(settings, filename=filename)
+    except ModelSettingsValidationError:
+        return False, "invalid_settings", None
     saved = save_models_state(runtime, state)
     updated = get_model_by_id(saved, model_id)
     return True, "updated", updated
