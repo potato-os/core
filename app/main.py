@@ -399,7 +399,10 @@ async def _terminate_process(proc, *, timeout=None):
     except asyncio.TimeoutError:
         logger.warning("pid=%s did not exit after SIGTERM, sending SIGKILL", getattr(proc, "pid", "?"))
         proc.kill()
-        await asyncio.wait_for(proc.wait(), timeout=3.0)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.critical("pid=%s did not exit after SIGKILL, giving up", getattr(proc, "pid", "?"))
 
 
 async def restart_managed_llama_process(app: FastAPI) -> tuple[bool, str]:
