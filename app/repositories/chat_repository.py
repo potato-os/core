@@ -26,7 +26,6 @@ FAKE_PARODY_REPLIES: tuple[str, ...] = (
 DEFAULT_FAKE_PREFILL_DELAY_MS = 0
 DEFAULT_FAKE_STREAM_CHUNK_DELAY_MS = 210
 TEST_FAKE_STREAM_CHUNK_DELAY_MS = 10
-CHAT_PROXY_READ_TIMEOUT_SECONDS = 300.0
 
 
 class BackendProxyError(RuntimeError):
@@ -111,9 +110,9 @@ class LlamaCppRepository:
                 stream=_forward_stream(),
             )
 
-        non_stream_timeout = httpx.Timeout(connect=5.0, read=CHAT_PROXY_READ_TIMEOUT_SECONDS, write=60.0, pool=60.0)
+        timeout = httpx.Timeout(connect=5.0, read=None, write=60.0, pool=60.0)
         try:
-            async with httpx.AsyncClient(timeout=non_stream_timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 upstream = await client.post(target_url, json=payload, headers=forward_headers)
         except httpx.HTTPError as exc:
             raise BackendProxyError(str(exc)) from exc
