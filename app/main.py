@@ -352,7 +352,8 @@ async def refresh_llama_readiness(
         )
         return dict(next_state)
 
-    transport_healthy = await check_llama_health(runtime, busy_is_healthy=False)
+    busy_is_healthy = bool(next_state.get("ready"))
+    transport_healthy = await check_llama_health(runtime, busy_is_healthy=busy_is_healthy)
     next_state["transport_healthy"] = transport_healthy
     if not transport_healthy:
         next_state.update(

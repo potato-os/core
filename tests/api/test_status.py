@@ -106,6 +106,41 @@ def test_refresh_llama_readiness_marks_ready_after_strict_health_stabilizes(runt
     assert app.state.llama_readiness_state["last_ready_at_unix"] is not None
 
 
+def test_refresh_llama_readiness_stays_ready_when_busy_after_prior_readiness(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    runtime.model_path.write_bytes(b"gguf")
+    app = create_app(runtime=runtime)
+
+    class _DummyProc:
+        returncode = None
+
+    app.state.llama_process = _DummyProc()
+    app.state.llama_readiness_state.update(
+        {
+            "model_path": str(runtime.model_path),
+            "status": "ready",
+            "transport_healthy": True,
+            "ready": True,
+            "healthy_polls": 2,
+            "last_ready_at_unix": 123.0,
+        }
+    )
+    health_calls: list[bool] = []
+
+    async def _busy_after_ready(_runtime, busy_is_healthy: bool = True):
+        health_calls.append(busy_is_healthy)
+        return busy_is_healthy
+
+    monkeypatch.setattr("app.main.check_llama_health", _busy_after_ready)
+
+    result = asyncio.run(refresh_llama_readiness(app, runtime, active_model_path=runtime.model_path))
+
+    assert result["status"] == "ready"
+    assert result["ready"] is True
+    assert result["transport_healthy"] is True
+    assert health_calls == [True]
+
+
 def test_status_includes_large_model_warning_for_unsupported_pi(client, runtime, monkeypatch):
     monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
     monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
