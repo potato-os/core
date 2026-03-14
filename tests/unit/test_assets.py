@@ -381,7 +381,7 @@ def test_chat_ui_streaming_parses_sse_and_ignores_done_marker():
     assert "function consumeSseDeltas" in CHAT_HTML
     assert 'dataPayload === "[DONE]"' in CHAT_HTML
     assert "event?.choices?.[0]?.delta?.content" in CHAT_HTML
-    assert "updateMessage(activeAssistantView, assistantText)" in CHAT_HTML
+    assert "updateMessage(activeAssistantView, assistantText" in CHAT_HTML
     assert 'renderMessage("assistant", output.trim())' not in CHAT_HTML
 
 
@@ -408,8 +408,9 @@ def test_chat_ui_supports_theme_system_prompt_setting_and_enter_to_send():
 
 def test_chat_ui_seed_mode_settings_contract():
     assert 'id="generationMode"' in CHAT_HTML
-    assert '<option value="random">Random</option>' in CHAT_HTML
-    assert '<option value="deterministic">Deterministic</option>' in CHAT_HTML
+    assert 'class="settings-segmented" data-target="generationMode"' in CHAT_HTML
+    assert 'data-target="generationMode" data-value="random">Random</button>' in CHAT_HTML
+    assert 'data-target="generationMode" data-value="deterministic">Deterministic</button>' in CHAT_HTML
     assert 'id="seed"' in CHAT_HTML
     assert "generation_mode: \"random\"" in CHAT_HTML
     assert "seed: 42" in CHAT_HTML
@@ -433,11 +434,11 @@ def test_chat_ui_keeps_theme_toggle_clear_of_status_badge():
 
 def test_chat_ui_copy_and_stats_footnote_contract():
     assert 'id="sidebarNote"' in CHAT_HTML
-    assert ">v0.2<" in CHAT_HTML
+    assert "Pre-Alpha" in CHAT_HTML
     assert "function classifyPi5MemoryTier(" in CHAT_HTML
     assert "function setSidebarNote(" in CHAT_HTML
     assert "statusPayload?.system" in CHAT_HTML
-    assert "v0.2 · ${piModelName} · ${memoryTier}" in CHAT_HTML
+    assert "Pre-Alpha · ${piModelName} · ${memoryTier}" in CHAT_HTML
     assert "Potato OS is online. Ask anything to get started." not in CHAT_HTML
     assert "Local-first chat frontend on your Pi." not in CHAT_HTML
     assert "Local-first chat front end on your Pi." not in CHAT_HTML
@@ -459,7 +460,7 @@ def test_chat_ui_runtime_details_hide_compact_and_apply_metric_threshold_classes
     assert "statusPayload?.compatibility?.override_enabled" in CHAT_HTML
     assert 'id="runtimeCompact"' in CHAT_HTML
     assert "compact.hidden = runtimeDetailsExpanded;" in CHAT_HTML
-    assert 'toggle.textContent = runtimeDetailsExpanded ? "Show compact" : "Show details";' in CHAT_HTML
+    assert 'toggle.textContent = runtimeDetailsExpanded ? "Hide details" : "Show details";' in CHAT_HTML
     assert "function runtimeMetricSeverityClass(" in CHAT_HTML
     assert "runtime-metric-normal" in CHAT_HTML
     assert "runtime-metric-warn" in CHAT_HTML
@@ -509,14 +510,11 @@ def test_chat_ui_exposes_large_model_compatibility_override_controls():
 def test_chat_ui_has_potato_chat_brand_and_thinking_toggle():
     assert "🥔 Potato Chat" in CHAT_HTML
     assert "Smart Search" not in CHAT_HTML
-    assert 'id="thinkingToggleBtn"' in CHAT_HTML
-    assert "Deep thinking" in CHAT_HTML
-    assert "thinking_enabled: false" in CHAT_HTML
-    assert "function normalizeThinkingEnabled(" in CHAT_HTML
-    assert "function setThinkingToggleState(" in CHAT_HTML
-    assert "function toggleThinkingMode(" in CHAT_HTML
-    assert "chat_template_kwargs" in CHAT_HTML
-    assert "enable_thinking" in CHAT_HTML
+    assert 'id="thinkingToggleBtn"' not in CHAT_HTML
+    assert "Deep thinking" not in CHAT_HTML
+    assert "function normalizeThinkingEnabled(" not in CHAT_HTML
+    assert "function setThinkingToggleState(" not in CHAT_HTML
+    assert "function toggleThinkingMode(" not in CHAT_HTML
 
 
 def test_chat_ui_supports_stop_generation_button_and_abort_controller():
@@ -545,8 +543,10 @@ def test_chat_ui_shows_llama_connection_indicator():
     assert 'id="llamaIndicator"' not in CHAT_HTML
     assert 'id="llamaIndicatorLabel"' not in CHAT_HTML
     assert 'id="statusDot"' in CHAT_HTML
+    assert 'id="statusSpinner"' in CHAT_HTML
     assert 'id="statusLabel"' in CHAT_HTML
     assert "indicator-dot" in CHAT_HTML
+    assert "chip-spinner" in CHAT_HTML
     assert "function updateLlamaIndicator(" in CHAT_HTML
     assert "statusPayload?.llama_server?.healthy" in CHAT_HTML
     assert "const modelSuffix = modelFilename ? `:${modelFilename}` : \"\";" in CHAT_HTML
@@ -560,6 +560,8 @@ def test_chat_ui_shows_llama_connection_indicator():
     assert 'dot.classList.add("loading")' in CHAT_HTML
     assert 'dot.classList.add("failed")' in CHAT_HTML
     assert 'dot.classList.add("offline")' in CHAT_HTML
+    assert "dot.hidden = true;" in CHAT_HTML
+    assert "spinner.hidden = false;" in CHAT_HTML
     assert '.indicator-dot.loading {' in CHAT_HTML
     assert '.indicator-dot.failed {' in CHAT_HTML
     assert '.badge.loading {' in CHAT_HTML
@@ -586,8 +588,9 @@ def test_chat_ui_mobile_layout_prioritizes_chat_area_before_sidebar():
     assert 'document.getElementById("sidebarToggle").addEventListener("click"' in CHAT_HTML
     assert 'document.getElementById("sidebarCloseBtn").addEventListener("click"' in CHAT_HTML
     assert 'document.getElementById("sidebarBackdrop").addEventListener("click"' in CHAT_HTML
-    assert '<details class="settings" open>' not in CHAT_HTML
-    assert '<details class="settings">' in CHAT_HTML
+    assert 'id="settingsOpenBtn"' in CHAT_HTML
+    assert 'id="settingsModal"' in CHAT_HTML
+    assert 'id="settingsWorkspaceTabModel"' in CHAT_HTML
 
 
 def test_chat_ui_mobile_composer_keeps_actions_together():
@@ -617,14 +620,14 @@ def test_chat_ui_uses_continuous_chat_history_in_openai_messages_format():
 
 def test_chat_ui_formats_download_sizes_and_shows_model_filename_in_settings():
     assert 'id="modelName"' in CHAT_HTML
-    assert "Loaded Model" in CHAT_HTML
-    assert "readonly" in CHAT_HTML
+    assert "Selected model" in CHAT_HTML
+    assert 'id="modelIdentityMeta"' in CHAT_HTML
     assert "function formatBytes(" in CHAT_HTML
     assert "units = [\"B\", \"KB\", \"MB\", \"GB\", \"TB\"]" in CHAT_HTML
-    assert "formatBytes(statusPayload.download.bytes_downloaded)" in CHAT_HTML
-    assert "formatBytes(statusPayload.download.bytes_total)" in CHAT_HTML
+    assert "formatBytes(download.bytes_downloaded)" in CHAT_HTML
+    assert "formatBytes(download.bytes_total)" in CHAT_HTML
     assert "statusPayload?.model?.filename" in CHAT_HTML
-    assert "modelNameField.value" in CHAT_HTML
+    assert 'document.getElementById("modelName")' in CHAT_HTML
 
 
 def test_chat_ui_supports_manual_or_idle_model_download_prompt():
@@ -696,10 +699,10 @@ def test_chat_ui_shows_pi_runtime_compact_with_details_toggle_above_settings():
     assert "Power note:" not in CHAT_HTML
     assert CHAT_HTML.index('id="runtimeDetailPower"') < CHAT_HTML.index('id="runtimeDetailCpuValue"')
     assert "renderSystemRuntime(statusPayload?.system)" in CHAT_HTML
-    assert CHAT_HTML.index('id="systemRuntimeCard"') < CHAT_HTML.index('<details class="settings"')
-    assert 'id="settingsRuntimeSection"' in CHAT_HTML
-    assert 'id="settingsModelSection"' in CHAT_HTML
-    assert 'id="settingsAdvancedSection"' in CHAT_HTML
+    assert CHAT_HTML.index('id="systemRuntimeCard"') < CHAT_HTML.index('id="settingsModal"')
+    assert 'id="settingsModelWorkspace"' in CHAT_HTML
+    assert 'id="settingsYamlPanel"' in CHAT_HTML
+    assert 'id="legacySettingsRuntimeSection"' in CHAT_HTML
     assert 'id="settingsPowerCalibration"' in CHAT_HTML
     assert 'id="powerCalibrationWallWatts"' in CHAT_HTML
     assert 'id="capturePowerCalibrationSampleBtn"' in CHAT_HTML

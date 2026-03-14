@@ -1453,6 +1453,8 @@ def shutil_which(cmd: str) -> str | None:
 def _merge_defaults(payload: dict[str, Any]) -> dict[str, Any]:
     merged = dict(payload)
     for key, value in DEFAULT_CHAT_SETTINGS.items():
+        if key == "seed" and "seed" not in merged:
+            continue
         merged.setdefault(key, value)
     return merged
 
@@ -3979,6 +3981,7 @@ CHAT_HTML = """<!doctype html>
         <div class="header-actions">
           <span id="statusBadge" class="badge offline">
             <span id="statusDot" class="indicator-dot offline" aria-hidden="true"></span>
+            <span id="statusSpinner" class="chip-spinner" aria-hidden="true" hidden></span>
             <span id="statusLabel">DISCONNECTED:llama.cpp</span>
           </span>
           <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch theme">
@@ -6749,6 +6752,7 @@ CHAT_HTML = """<!doctype html>
     function updateLlamaIndicator(statusPayload) {
       const badge = document.getElementById("statusBadge");
       const dot = document.getElementById("statusDot");
+      const spinner = document.getElementById("statusSpinner");
       const label = document.getElementById("statusLabel");
       if (!badge || !dot || !label) return;
       const backendMode = String(
@@ -6769,6 +6773,8 @@ CHAT_HTML = """<!doctype html>
       const isFailed = backendMode === "llama" && statusState === "ERROR";
       badge.classList.remove("online", "loading", "failed", "offline");
       dot.classList.remove("online", "loading", "failed", "offline");
+      dot.hidden = false;
+      if (spinner) spinner.hidden = true;
       if (backendMode === "fake" && isReady) {
         badge.classList.add("online");
         dot.classList.add("online");
@@ -6780,6 +6786,8 @@ CHAT_HTML = """<!doctype html>
       } else if (isLoading) {
         badge.classList.add("loading");
         dot.classList.add("loading");
+        dot.hidden = true;
+        if (spinner) spinner.hidden = false;
         label.textContent = `LOADING:llama.cpp${modelSuffix}${storageSuffix}`;
       } else if (isFailed) {
         badge.classList.add("failed");
