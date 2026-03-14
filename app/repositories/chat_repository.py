@@ -64,10 +64,10 @@ class LlamaCppRepository:
         forward_headers: dict[str, str],
     ) -> BackendResponse:
         target_url = f"{self.base_url}/v1/chat/completions"
-        timeout = httpx.Timeout(connect=5.0, read=CHAT_PROXY_READ_TIMEOUT_SECONDS, write=60.0, pool=60.0)
 
         if bool(payload.get("stream")):
-            client = httpx.AsyncClient(timeout=timeout)
+            stream_timeout = httpx.Timeout(connect=5.0, read=None, write=60.0, pool=60.0)
+            client = httpx.AsyncClient(timeout=stream_timeout)
             try:
                 upstream_request = client.build_request(
                     method="POST",
@@ -111,8 +111,9 @@ class LlamaCppRepository:
                 stream=_forward_stream(),
             )
 
+        non_stream_timeout = httpx.Timeout(connect=5.0, read=CHAT_PROXY_READ_TIMEOUT_SECONDS, write=60.0, pool=60.0)
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=non_stream_timeout) as client:
                 upstream = await client.post(target_url, json=payload, headers=forward_headers)
         except httpx.HTTPError as exc:
             raise BackendProxyError(str(exc)) from exc
