@@ -1497,7 +1497,7 @@
     .sidebar-chat-list-section {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
       flex: 1;
       min-height: 0;
     }
@@ -1506,49 +1506,77 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 2px;
+      padding: 0 4px;
     }
 
     .sidebar-chat-list-header h3 {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.6px;
+      letter-spacing: 0.8px;
       color: var(--text-muted);
       margin: 0;
+      opacity: 0.7;
     }
 
     .new-chat-btn {
-      font-size: 12px;
-      padding: 4px 10px;
+      font-size: 11.5px;
+      padding: 4px 11px;
+      border-color: color-mix(in srgb, var(--focus) 30%, var(--border));
+      background: color-mix(in srgb, var(--focus) 6%, var(--panel-muted));
+      color: var(--focus);
+      font-weight: 650;
+      letter-spacing: 0.2px;
+    }
+
+    .new-chat-btn:hover {
+      background: color-mix(in srgb, var(--focus) 12%, var(--panel-muted));
+      border-color: color-mix(in srgb, var(--focus) 50%, var(--border));
     }
 
     .chat-session-list {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 1px;
       overflow-y: auto;
       max-height: 260px;
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(in srgb, var(--border) 60%, transparent) transparent;
+    }
+
+    .chat-session-list:empty::after {
+      content: "No conversations yet";
+      display: block;
+      padding: 12px 10px;
+      font-size: 12px;
+      color: var(--text-muted);
+      opacity: 0.6;
+      text-align: center;
+      font-style: italic;
     }
 
     .chat-session-item {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 10px;
+      gap: 6px;
+      padding: 9px 10px;
       border-radius: 10px;
       cursor: pointer;
-      transition: background 0.12s ease;
+      transition: background 0.14s ease, box-shadow 0.14s ease;
       position: relative;
     }
 
     .chat-session-item:hover {
-      background: color-mix(in srgb, var(--focus) 8%, transparent);
+      background: color-mix(in srgb, var(--focus) 7%, transparent);
     }
 
     .chat-session-item.active {
-      background: color-mix(in srgb, var(--focus) 12%, transparent);
-      font-weight: 600;
+      background: color-mix(in srgb, var(--focus) 10%, transparent);
+      box-shadow: inset 2px 0 0 var(--focus);
+    }
+
+    .chat-session-item.active:hover {
+      background: color-mix(in srgb, var(--focus) 14%, transparent);
     }
 
     .chat-session-title {
@@ -1558,7 +1586,11 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      line-height: 1.3;
+      line-height: 1.35;
+    }
+
+    .chat-session-item.active .chat-session-title {
+      font-weight: 600;
     }
 
     .chat-session-delete {
@@ -1568,22 +1600,23 @@
       border: none;
       background: none;
       color: var(--text-muted);
-      font-size: 15px;
+      font-size: 14px;
       cursor: pointer;
       border-radius: 6px;
       display: flex;
       align-items: center;
       justify-content: center;
       opacity: 0;
-      transition: opacity 0.12s ease, background 0.12s ease;
+      transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
     }
 
     .chat-session-item:hover .chat-session-delete {
-      opacity: 1;
+      opacity: 0.7;
     }
 
     .chat-session-delete:hover {
-      background: color-mix(in srgb, var(--metric-critical) 16%, transparent);
+      opacity: 1;
+      background: color-mix(in srgb, var(--metric-critical) 14%, transparent);
       color: var(--metric-critical);
     }
 
