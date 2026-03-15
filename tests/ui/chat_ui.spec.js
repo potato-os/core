@@ -1,57 +1,15 @@
 const { test, expect } = require("@playwright/test");
-
-async function waitUntilReady(page) {
-  await page.goto("/");
-  await expect(page.locator("#statusText")).toContainText("State: READY");
-}
-
-async function openSettingsModal(page) {
-  await page.locator("#settingsOpenBtn").click();
-  await expect(page.locator("#settingsModal")).toBeVisible();
-}
-
-async function closeSettingsModal(page) {
-  await page.locator("#settingsCloseBtn").click();
-  await expect(page.locator("#settingsModal")).toBeHidden();
-}
-
-async function openAdvancedSettingsModal(page) {
-  await page.locator("#settingsAdvancedBtn").click();
-  await expect(page.locator("#legacySettingsModal")).toBeVisible();
-}
-
-async function closeAdvancedSettingsModal(page) {
-  await page.locator("#legacySettingsCloseBtn").click();
-  await expect(page.locator("#legacySettingsModal")).toBeHidden();
-}
-
-async function saveModelSettings(page) {
-  await page.locator("#saveModelSettingsBtn").click();
-  await expect(page.locator("#modelSettingsStatus")).toContainText(/saved|updated/i);
-}
-
-async function chooseModelSegment(page, fieldId, value) {
-  await page.locator(`.settings-segmented[data-target="${fieldId}"] .settings-segment-btn[data-value="${value}"]`).click();
-  await expect(page.locator(`#${fieldId}`)).toHaveValue(String(value));
-}
-
-async function fulfillStreamingChat(route, { content = "", timings = null, finishReason = "stop" } = {}) {
-  const events = [];
-  if (content) {
-    events.push({
-      choices: [{ delta: { content } }],
-    });
-  }
-  events.push({
-    choices: [{ delta: {}, finish_reason: finishReason }],
-    ...(timings ? { timings } : {}),
-  });
-  await route.fulfill({
-    status: 200,
-    contentType: "text/event-stream",
-    body: `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  });
-}
+const {
+  waitUntilReady,
+  openSettingsModal,
+  closeSettingsModal,
+  openAdvancedSettingsModal,
+  closeAdvancedSettingsModal,
+  saveModelSettings,
+  chooseModelSegment,
+  fulfillStreamingChat,
+  makeStatusPayload,
+} = require("./helpers");
 
 test("seed mode defaults to random, toggles deterministic, persists, and controls request payload", async ({ page }) => {
   await waitUntilReady(page);
@@ -2548,4 +2506,19 @@ test("model manager shows move-to-ssd action when SSD is available and posts the
 
   await expect.poll(() => movedModelId).toBe("local-model");
   await expect(page.locator('#modelsList .model-row[data-model-id="local-model"]')).toContainText("On SSD");
+});
+
+test("chat request sends stream true and messages array to the backend", async ({ page }) => {
+  await waitUntilReady(page);
+
+  const requestPromise = page.waitForRequest("**/v1/chat/completions");
+  await page.locator("#userPrompt").fill("Verify chat payload.");
+  await page.locator("#userPrompt").press("Enter");
+  const request = await requestPromise;
+  const payload = JSON.parse(request.postData() || "{}");
+
+  expect(payload.stream).toBe(true);
+  expect(payload.messages).toBeDefined();
+  expect(payload.messages.length).toBeGreaterThan(0);
+  expect(payload.messages[payload.messages.length - 1].content).toContain("Verify chat payload.");
 });
