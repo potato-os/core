@@ -8,8 +8,8 @@ This is the single source of truth for how we plan, execute, and close work.
 - Default status flow:
   - `Todo`
   - `In Progress`
-  - `QA`
   - `In Review`
+  - `QA`
   - `Done`
 
 ## Labels
@@ -37,12 +37,11 @@ Before starting new implementation work, first check whether a relevant issue al
    - `fix/issue-<id>-<short-slug>` for bugs
 6. Move issue to `In Progress` once branch is created.
 7. Open PR linked to the issue.
-8. Move to `QA` when implementation is complete and ready for Pi validation.
-9. Move to `In Review` only after:
+8. Move to `In Review` when implementation is complete:
    - the PR is open,
-   - required QA is complete,
    - required checks are green or expected to run.
-10. Merge PR (squash preferred) only after checks are green and review is complete.
+9. After review is approved, move to `QA` for Pi validation (if Pi-impacting).
+10. Merge PR (squash preferred) only after review and QA are both complete.
 11. Let GitHub close the issue via the PR when possible, then set the project item to `Done`.
 12. Delete branch locally/remotely and return local checkout to `main`.
 
@@ -62,8 +61,8 @@ Before starting new implementation work, first check whether a relevant issue al
 - If one PR fully resolves multiple issues, include multiple `Closes #<id>` lines.
 - Do not manually close an issue while its closing PR is still open unless the issue is being abandoned or replaced; if that happens, leave a comment explaining why.
 - Do not move a project item to `Done` while its PR is still open.
-- Keep the issue open and the board item at `QA` or `In Review` until the PR is actually merged.
-- If an issue is closed outside the normal PR merge flow, update the board item immediately so closed issues never remain in `Todo`, `QA`, or `In Review`.
+- Keep the issue open and the board item at `In Review` or `QA` until the PR is actually merged.
+- If an issue is closed outside the normal PR merge flow, update the board item immediately so closed issues never remain in `Todo`, `In Review`, or `QA`.
 
 ## Ticket Quality Standard (Required)
 
@@ -98,7 +97,7 @@ For all local development work on this computer, always use `uv`.
 
 ## PR Readiness Checklist
 
-Before moving `QA` -> `In Review`, PR description must include:
+Before moving to `In Review`, PR description must include:
 - `Closes #<issue-id>` (or equivalent linked issue statement)
 - `Refs #<issue-id>` for any related issues that are not meant to auto-close
 - status/risk notes and rollback guidance
@@ -115,7 +114,7 @@ PRs must also satisfy these GitHub process rules before `In Review`:
 
 If a ticket changes runtime behavior on device (API behavior, model orchestration, install scripts, nginx/systemd, or UI behavior tied to live backend), PRs must include QA on a real Pi.
 
-- QA is the gate: do not move to `In Review` until QA is completed, unless explicitly labeled `blocked`.
+- QA is the gate: do not merge until QA is completed, unless explicitly labeled `blocked`.
 - PR description must include:
   - who performed QA,
   - device/host used (prefer `potato.local`; avoid personal IPs in docs/PR text),
@@ -129,7 +128,7 @@ If a ticket changes runtime behavior on device (API behavior, model orchestratio
 - verify the PR is actually `MERGED`
 - verify the project item moved to `Done`
 - verify the issue is closed by merge, or close it manually with a note if the PR used `Refs` instead of `Closes`
-- verify closed issues are not still sitting in `Todo`, `QA`, or `In Review`
+- verify closed issues are not still sitting in `Todo`, `In Review`, or `QA`
 - verify the remote branch is deleted
 - verify local repo is back on `main` and synced with `origin/main`
 - capture any process improvements in `WORKFLOW.md` in the same change set (when applicable)
