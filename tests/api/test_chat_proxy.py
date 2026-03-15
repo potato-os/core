@@ -406,6 +406,65 @@ def _stream_response(status_code: int, payload: bytes):
     )
 
 
+def test_chat_sets_cache_prompt_false_by_default(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    request_payload = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-cp1",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                },
+            )
+        )
+
+        response = client.post("/v1/chat/completions", json=request_payload)
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert forwarded["cache_prompt"] is False
+
+
+def test_chat_preserves_explicit_cache_prompt_override(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    request_payload = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "hello"}],
+        "cache_prompt": True,
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-cp2",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                },
+            )
+        )
+
+        response = client.post("/v1/chat/completions", json=request_payload)
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert forwarded["cache_prompt"] is True
+
+
 def _set_active_model_ready(runtime, model_id: str, filename: str) -> None:
     save_models_state(
         runtime,
