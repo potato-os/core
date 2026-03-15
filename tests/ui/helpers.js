@@ -149,6 +149,52 @@ function makeStatusPayload(overrides = {}) {
   return { ...base, ...overrides };
 }
 
+function makeMultiModelStatusPayload({ activeId = "default", extraModels = [] } = {}) {
+  const defaultModel = {
+    id: "default",
+    filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+    source_url: null,
+    source_type: "local_file",
+    status: "ready",
+    is_active: activeId === "default",
+    settings: {
+      chat: { system_prompt: "", stream: true, generation_mode: "random", seed: 42, temperature: 0.7, top_p: 0.8, top_k: 20, repetition_penalty: 1.0, presence_penalty: 1.5, max_tokens: 16384, cache_prompt: true },
+      vision: { enabled: true, projector_mode: "default", projector_filename: "" },
+    },
+    capabilities: { vision: true },
+    projector: { present: false, filename: null, default_candidates: ["mmproj-F16.gguf"] },
+    bytes_total: 0, bytes_downloaded: 0, percent: 0, error: null,
+  };
+  const secondModel = {
+    id: "second-model",
+    filename: "Qwen3-Coder-30B-Q3_K_M.gguf",
+    source_url: null,
+    source_type: "local_file",
+    status: "ready",
+    is_active: activeId === "second-model",
+    settings: {
+      chat: { system_prompt: "", stream: true, generation_mode: "random", seed: 42, temperature: 0.7, top_p: 0.8, top_k: 20, repetition_penalty: 1.0, presence_penalty: 1.5, max_tokens: 16384, cache_prompt: true },
+      vision: { enabled: false, projector_mode: "default", projector_filename: "" },
+    },
+    capabilities: { vision: false },
+    projector: { present: false, filename: null, default_candidates: [] },
+    bytes_total: 0, bytes_downloaded: 0, percent: 0, error: null,
+  };
+  const models = [defaultModel, secondModel, ...extraModels];
+  models.forEach((m) => { m.is_active = m.id === activeId; });
+  const activeModel = models.find((m) => m.id === activeId) || defaultModel;
+  return makeStatusPayload({
+    model: {
+      filename: activeModel.filename,
+      active_model_id: activeId,
+      settings: activeModel.settings,
+      capabilities: activeModel.capabilities,
+      projector: activeModel.projector,
+    },
+    models,
+  });
+}
+
 module.exports = {
   waitUntilReady,
   openSettingsModal,
@@ -159,4 +205,5 @@ module.exports = {
   chooseModelSegment,
   fulfillStreamingChat,
   makeStatusPayload,
+  makeMultiModelStatusPayload,
 };
