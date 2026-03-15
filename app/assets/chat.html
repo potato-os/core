@@ -88,11 +88,16 @@
           <h1 aria-label="🥔 Potato Chat">Potato Chat</h1>
         </div>
         <div class="header-actions">
-          <span id="statusBadge" class="badge offline">
-            <span id="statusDot" class="indicator-dot offline" aria-hidden="true"></span>
-            <span id="statusSpinner" class="chip-spinner" aria-hidden="true" hidden></span>
-            <span id="statusLabel">DISCONNECTED:llama.cpp</span>
-          </span>
+          <div class="model-switcher-anchor">
+            <span id="statusBadge" class="badge offline" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false">
+              <span id="statusDot" class="indicator-dot offline" aria-hidden="true"></span>
+              <span id="statusSpinner" class="chip-spinner" aria-hidden="true" hidden></span>
+              <span id="statusLabel">DISCONNECTED:llama.cpp</span>
+            </span>
+            <div id="modelSwitcher" class="model-switcher" role="listbox" aria-label="Switch model" tabindex="-1" hidden>
+              <ul id="modelSwitcherList" class="model-switcher-list"></ul>
+            </div>
+          </div>
           <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch theme">
             <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"></path>
