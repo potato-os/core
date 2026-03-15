@@ -24,7 +24,7 @@ module.exports = defineConfig({
       "POTATO_TEST_MODE=1",
       "POTATO_FAKE_PREFILL_DELAY_MS=1800",
       "POTATO_FAKE_STREAM_CHUNK_DELAY_MS=35",
-      ".venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 1983"
+      `${process.env.CI ? "python" : ".venv/bin/python"} -m uvicorn app.main:app --host 127.0.0.1 --port 1983`
     ].join(" "),
     url: "http://127.0.0.1:1983/",
     timeout: 120_000,
