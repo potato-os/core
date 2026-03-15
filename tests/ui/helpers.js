@@ -195,6 +195,12 @@ function makeMultiModelStatusPayload({ activeId = "default", extraModels = [] } 
   });
 }
 
+async function sendAndWaitForReply(page, text) {
+  await page.locator("#userPrompt").fill(text);
+  await page.locator("#userPrompt").press("Enter");
+  await expect(page.locator("#sendBtn")).toHaveText("Send", { timeout: 5000 });
+}
+
 module.exports = {
   waitUntilReady,
   openSettingsModal,
@@ -206,4 +212,5 @@ module.exports = {
   fulfillStreamingChat,
   makeStatusPayload,
   makeMultiModelStatusPayload,
+  sendAndWaitForReply,
 };
