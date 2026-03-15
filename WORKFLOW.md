@@ -137,6 +137,48 @@ This ticket must be developed **TDD-first**.
 
 Keep ticket text general and readable. Capture the outcome and boundaries clearly, but avoid turning the issue body into a temporary debugging log or implementation transcript.
 
+## Building ik_llama.cpp on Raspberry Pi 5
+
+When the bundled `llama-server` needs updating (new ik_llama features, bug fixes), rebuild on the Pi:
+
+1. **Update ik_llama source** on your dev machine:
+   ```bash
+   cd references/ik_llama.cpp
+   git fetch origin main && git checkout <target-commit>
+   ```
+
+2. **Sync source to Pi** (exclude .git to save bandwidth):
+   ```bash
+   sshpass -e rsync -az --delete --exclude '.git' \
+     references/ik_llama.cpp/ pi@potato.local:/tmp/ik_llama_cpp/
+   ```
+
+3. **Build on Pi** with the known-working cmake flags:
+   ```bash
+   ssh pi@potato.local "sudo bash -c '
+   rm -rf /tmp/potato-llama-build-manual &&
+   mkdir -p /tmp/potato-llama-build-manual &&
+   cmake -S /tmp/ik_llama_cpp -B /tmp/potato-llama-build-manual \
+     -DCMAKE_BUILD_TYPE=Release \
+     -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS \
+     -DGGML_OPENMP=ON -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TOOLS=ON \
+     -DGGML_VULKAN=OFF -DGGML_NATIVE=ON -DGGML_CPU_KLEIDIAI=OFF \
+     -DGGML_LTO=ON -DGGML_IQK_FA_ALL_QUANTS=ON \
+     -DCMAKE_C_FLAGS=\"-fno-strict-aliasing -mcpu=native\" \
+     -DCMAKE_CXX_FLAGS=\"-fno-strict-aliasing -mcpu=native\" &&
+   cmake --build /tmp/potato-llama-build-manual --config Release -j4
+   '"
+   ```
+
+   Build takes ~15 minutes on Pi 5. Key flags:
+   - `GGML_CPU_KLEIDIAI=OFF` — required for GCC 14 on Pi
+   - `GGML_IQK_FA_ALL_QUANTS=ON` — enables all IQK flash-attention quant types
+   - `-fno-strict-aliasing` — prevents aliasing-related miscompilation
+
+4. **Package as bundle** using `bin/build_llama_bundle_pi5.sh` or manually copy `bin/llama-server`, `bin/llama-bench`, and `lib/*.so` into a `llama_server_bundle_<timestamp>_<profile>/` directory under `references/old_reference_design/llama_cpp_binary/`.
+
+5. **Deploy** via `install_dev.sh` with `POTATO_LLAMA_BUNDLE_SRC=<bundle-path>`.
+
 ## Helpful CLI snippets
 
 ```bash
