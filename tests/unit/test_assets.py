@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.main import CHAT_HTML
+from app.main import CHAT_HTML, WEB_ASSETS_DIR
+
+CHAT_CSS = (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8")
+CHAT_JS = (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8")
+CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS
 
 
 def test_start_llama_contains_required_flags():
@@ -211,16 +215,16 @@ def test_clean_image_build_artifacts_script_cleans_outputs_and_optional_caches()
 def test_chat_html_loads_local_markdown_assets_and_renders_assistant_markdown():
     assert '<script src="/assets/vendor/marked.umd.js"></script>' in CHAT_HTML
     assert '<script src="/assets/vendor/purify.min.js"></script>' in CHAT_HTML
-    assert "function renderAssistantMarkdownToHtml(text)" in CHAT_HTML
-    assert "window.marked?.parse" in CHAT_HTML
-    assert "window.DOMPurify?.sanitize" in CHAT_HTML
-    assert "ALLOWED_TAGS" in CHAT_HTML
-    assert "ALLOWED_ATTR" in CHAT_HTML
-    assert '"img",' not in CHAT_HTML
-    assert "'img'," not in CHAT_HTML
-    assert "USE_PROFILES: { html: true }" not in CHAT_HTML
-    assert "bubble.innerHTML = sanitizedHtml;" in CHAT_HTML
-    assert "renderBubbleContent(bubble, content, { ...options, role });" in CHAT_HTML
+    assert "function renderAssistantMarkdownToHtml(text)" in CHAT_JS
+    assert "window.marked?.parse" in CHAT_JS
+    assert "window.DOMPurify?.sanitize" in CHAT_JS
+    assert "ALLOWED_TAGS" in CHAT_JS
+    assert "ALLOWED_ATTR" in CHAT_JS
+    assert '"img",' not in CHAT_JS
+    assert "'img'," not in CHAT_JS
+    assert "USE_PROFILES: { html: true }" not in CHAT_JS
+    assert "bubble.innerHTML = sanitizedHtml;" in CHAT_JS
+    assert "renderBubbleContent(bubble, content, { ...options, role });" in CHAT_JS
 
 
 def test_imager_manifest_generator_is_pi5_only():
@@ -378,450 +382,469 @@ def test_gitignore_excludes_large_artifacts_and_model_downloads():
 
 
 def test_chat_ui_streaming_parses_sse_and_ignores_done_marker():
-    assert "function consumeSseDeltas" in CHAT_HTML
-    assert 'dataPayload === "[DONE]"' in CHAT_HTML
-    assert "event?.choices?.[0]?.delta?.content" in CHAT_HTML
-    assert "updateMessage(activeAssistantView, assistantText" in CHAT_HTML
-    assert 'renderMessage("assistant", output.trim())' not in CHAT_HTML
+    assert "function consumeSseDeltas" in CHAT_UI
+    assert 'dataPayload === "[DONE]"' in CHAT_UI
+    assert "event?.choices?.[0]?.delta?.content" in CHAT_UI
+    assert "updateMessage(activeAssistantView, assistantText" in CHAT_UI
+    assert 'renderMessage("assistant", output.trim())' not in CHAT_UI
 
 
 def test_chat_ui_supports_theme_system_prompt_setting_and_enter_to_send():
-    assert 'class="theme-toggle"' in CHAT_HTML
-    assert 'id="themeToggle"' in CHAT_HTML
-    assert "theme-icon--moon" in CHAT_HTML
-    assert "theme-icon--sun" in CHAT_HTML
-    assert "Switch to light theme" in CHAT_HTML
-    assert 'theme: "light"' in CHAT_HTML
-    assert "function detectSystemTheme(" in CHAT_HTML
-    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in CHAT_HTML
-    assert 'return "dark";' in CHAT_HTML
-    assert 'return "light";' in CHAT_HTML
-    assert "theme: detectSystemTheme()" in CHAT_HTML
-    assert 'id="theme"' not in CHAT_HTML
-    assert "applyTheme(" in CHAT_HTML
-    assert 'id="systemPrompt"' in CHAT_HTML
-    assert "System Prompt (optional)" in CHAT_HTML
-    assert 'userPrompt.addEventListener("keydown"' in CHAT_HTML
-    assert 'event.key === "Enter"' in CHAT_HTML
-    assert "!event.shiftKey" in CHAT_HTML
+    assert 'class="theme-toggle"' in CHAT_UI
+    assert 'id="themeToggle"' in CHAT_UI
+    assert "theme-icon--moon" in CHAT_UI
+    assert "theme-icon--sun" in CHAT_UI
+    assert "Switch to light theme" in CHAT_UI
+    assert 'theme: "light"' in CHAT_UI
+    assert "function detectSystemTheme(" in CHAT_UI
+    assert 'window.matchMedia("(prefers-color-scheme: dark)")' in CHAT_UI
+    assert 'return "dark";' in CHAT_UI
+    assert 'return "light";' in CHAT_UI
+    assert "theme: detectSystemTheme()" in CHAT_UI
+    assert 'id="theme"' not in CHAT_UI
+    assert "applyTheme(" in CHAT_UI
+    assert 'id="systemPrompt"' in CHAT_UI
+    assert "System Prompt (optional)" in CHAT_UI
+    assert 'userPrompt.addEventListener("keydown"' in CHAT_UI
+    assert 'event.key === "Enter"' in CHAT_UI
+    assert "!event.shiftKey" in CHAT_UI
 
 
 def test_chat_ui_seed_mode_settings_contract():
-    assert 'id="generationMode"' in CHAT_HTML
-    assert 'class="settings-segmented" data-target="generationMode"' in CHAT_HTML
-    assert 'data-target="generationMode" data-value="random">Random</button>' in CHAT_HTML
-    assert 'data-target="generationMode" data-value="deterministic">Deterministic</button>' in CHAT_HTML
-    assert 'id="seed"' in CHAT_HTML
-    assert "generation_mode: \"random\"" in CHAT_HTML
-    assert "seed: 42" in CHAT_HTML
-    assert "function normalizeGenerationMode(" in CHAT_HTML
-    assert "function normalizeSeedValue(" in CHAT_HTML
-    assert "function updateSeedFieldState(" in CHAT_HTML
-    assert "function resolveSeedForRequest(" in CHAT_HTML
-    assert "seedField.disabled = generationMode !== \"deterministic\";" in CHAT_HTML
-    assert "#seed:disabled" in CHAT_HTML
-    assert "cursor: not-allowed;" in CHAT_HTML
-    assert "reqBody.seed = resolvedSeed;" in CHAT_HTML
+    assert 'id="generationMode"' in CHAT_UI
+    assert 'class="settings-segmented" data-target="generationMode"' in CHAT_UI
+    assert 'data-target="generationMode" data-value="random">Random</button>' in CHAT_UI
+    assert 'data-target="generationMode" data-value="deterministic">Deterministic</button>' in CHAT_UI
+    assert 'id="seed"' in CHAT_UI
+    assert "generation_mode: \"random\"" in CHAT_UI
+    assert "seed: 42" in CHAT_UI
+    assert "function normalizeGenerationMode(" in CHAT_UI
+    assert "function normalizeSeedValue(" in CHAT_UI
+    assert "function updateSeedFieldState(" in CHAT_UI
+    assert "function resolveSeedForRequest(" in CHAT_UI
+    assert "seedField.disabled = generationMode !== \"deterministic\";" in CHAT_UI
+    assert "#seed:disabled" in CHAT_UI
+    assert "cursor: not-allowed;" in CHAT_UI
+    assert "reqBody.seed = resolvedSeed;" in CHAT_UI
 
 
 def test_chat_ui_keeps_theme_toggle_clear_of_status_badge():
-    assert ".chat-header {" in CHAT_HTML
-    assert "padding: 2px 6px;" in CHAT_HTML
-    assert ".header-actions {" in CHAT_HTML
-    assert ".theme-toggle {" in CHAT_HTML
-    assert "position: static;" in CHAT_HTML
+    assert ".chat-header {" in CHAT_UI
+    assert "padding: 2px 6px;" in CHAT_UI
+    assert ".header-actions {" in CHAT_UI
+    assert ".theme-toggle {" in CHAT_UI
+    assert "position: static;" in CHAT_UI
 
 
 def test_chat_ui_copy_and_stats_footnote_contract():
-    assert 'id="sidebarNote"' in CHAT_HTML
-    assert "Pre-Alpha" in CHAT_HTML
-    assert "function classifyPi5MemoryTier(" in CHAT_HTML
-    assert "function setSidebarNote(" in CHAT_HTML
-    assert "statusPayload?.system" in CHAT_HTML
-    assert "Pre-Alpha · ${piModelName} · ${memoryTier}" in CHAT_HTML
-    assert "Potato OS is online. Ask anything to get started." not in CHAT_HTML
-    assert "Local-first chat frontend on your Pi." not in CHAT_HTML
-    assert "Local-first chat front end on your Pi." not in CHAT_HTML
-    assert "Press Enter to send. Shift+Enter adds a new line." not in CHAT_HTML
-    assert 'meta.className = "message-meta"' in CHAT_HTML
-    assert "function formatStopReason(" in CHAT_HTML
-    assert "function formatAssistantStats(" in CHAT_HTML
-    assert "tok/sec" in CHAT_HTML
-    assert "Stop reason:" in CHAT_HTML
-    assert "EOS Token found" in CHAT_HTML
+    assert 'id="sidebarNote"' in CHAT_UI
+    assert "Pre-Alpha" in CHAT_UI
+    assert "function classifyPi5MemoryTier(" in CHAT_UI
+    assert "function setSidebarNote(" in CHAT_UI
+    assert "statusPayload?.system" in CHAT_UI
+    assert "Pre-Alpha · ${piModelName} · ${memoryTier}" in CHAT_UI
+    assert "Potato OS is online. Ask anything to get started." not in CHAT_UI
+    assert "Local-first chat frontend on your Pi." not in CHAT_UI
+    assert "Local-first chat front end on your Pi." not in CHAT_UI
+    assert "Press Enter to send. Shift+Enter adds a new line." not in CHAT_UI
+    assert 'meta.className = "message-meta"' in CHAT_UI
+    assert "function formatStopReason(" in CHAT_UI
+    assert "function formatAssistantStats(" in CHAT_UI
+    assert "tok/sec" in CHAT_UI
+    assert "Stop reason:" in CHAT_UI
+    assert "EOS Token found" in CHAT_UI
 
 
 def test_chat_ui_runtime_details_hide_compact_and_apply_metric_threshold_classes():
-    assert 'id="compatibilityWarnings"' in CHAT_HTML
-    assert 'id="compatibilityWarningsText"' in CHAT_HTML
-    assert 'id="compatibilityOverrideBtn"' in CHAT_HTML
-    assert "function renderCompatibilityWarnings(" in CHAT_HTML
-    assert "statusPayload?.compatibility?.warnings" in CHAT_HTML
-    assert "statusPayload?.compatibility?.override_enabled" in CHAT_HTML
-    assert 'id="runtimeCompact"' in CHAT_HTML
-    assert "compact.hidden = runtimeDetailsExpanded;" in CHAT_HTML
-    assert 'toggle.textContent = runtimeDetailsExpanded ? "Hide details" : "Show details";' in CHAT_HTML
-    assert "function runtimeMetricSeverityClass(" in CHAT_HTML
-    assert "runtime-metric-normal" in CHAT_HTML
-    assert "runtime-metric-warn" in CHAT_HTML
-    assert "runtime-metric-high" in CHAT_HTML
-    assert "runtime-metric-critical" in CHAT_HTML
-    assert "CPU_CLOCK_MAX_HZ_PI5" in CHAT_HTML
-    assert "GPU_CLOCK_MAX_HZ_PI5" in CHAT_HTML
-    assert "applyRuntimeMetricSeverity(memoryDetail, systemPayload?.memory_percent);" in CHAT_HTML
-    assert "applyRuntimeMetricSeverity(swapDetail, systemPayload?.swap_percent);" in CHAT_HTML
-    assert "applyRuntimeMetricSeverity(tempDetail, tempValue);" in CHAT_HTML
-    assert 'case "tool_calls"' in CHAT_HTML
-    assert "content_filter" not in CHAT_HTML
-    assert "function_call" not in CHAT_HTML
+    assert 'id="compatibilityWarnings"' in CHAT_UI
+    assert 'id="compatibilityWarningsText"' in CHAT_UI
+    assert 'id="compatibilityOverrideBtn"' in CHAT_UI
+    assert "function renderCompatibilityWarnings(" in CHAT_UI
+    assert "statusPayload?.compatibility?.warnings" in CHAT_UI
+    assert "statusPayload?.compatibility?.override_enabled" in CHAT_UI
+    assert 'id="runtimeCompact"' in CHAT_UI
+    assert "compact.hidden = runtimeDetailsExpanded;" in CHAT_UI
+    assert 'toggle.textContent = runtimeDetailsExpanded ? "Hide details" : "Show details";' in CHAT_UI
+    assert "function runtimeMetricSeverityClass(" in CHAT_UI
+    assert "runtime-metric-normal" in CHAT_UI
+    assert "runtime-metric-warn" in CHAT_UI
+    assert "runtime-metric-high" in CHAT_UI
+    assert "runtime-metric-critical" in CHAT_UI
+    assert "CPU_CLOCK_MAX_HZ_PI5" in CHAT_UI
+    assert "GPU_CLOCK_MAX_HZ_PI5" in CHAT_UI
+    assert "applyRuntimeMetricSeverity(memoryDetail, systemPayload?.memory_percent);" in CHAT_UI
+    assert "applyRuntimeMetricSeverity(swapDetail, systemPayload?.swap_percent);" in CHAT_UI
+    assert "applyRuntimeMetricSeverity(tempDetail, tempValue);" in CHAT_UI
+    assert 'case "tool_calls"' in CHAT_UI
+    assert "content_filter" not in CHAT_UI
+    assert "function_call" not in CHAT_UI
 
 
 def test_chat_ui_exposes_llama_runtime_bundle_switch_controls():
-    assert "Llama Runtime Bundle" in CHAT_HTML
-    assert 'id="llamaRuntimeBundleSelect"' in CHAT_HTML
-    assert 'id="switchLlamaRuntimeBtn"' in CHAT_HTML
-    assert 'id="llamaRuntimeCurrent"' in CHAT_HTML
-    assert 'id="llamaRuntimeSwitchStatus"' in CHAT_HTML
-    assert "function renderLlamaRuntimeStatus(" in CHAT_HTML
-    assert "function switchLlamaRuntimeBundle(" in CHAT_HTML
-    assert "/internal/llama-runtime/switch" in CHAT_HTML
-    assert "statusPayload?.llama_runtime" in CHAT_HTML
+    assert "Llama Runtime Bundle" in CHAT_UI
+    assert 'id="llamaRuntimeBundleSelect"' in CHAT_UI
+    assert 'id="switchLlamaRuntimeBtn"' in CHAT_UI
+    assert 'id="llamaRuntimeCurrent"' in CHAT_UI
+    assert 'id="llamaRuntimeSwitchStatus"' in CHAT_UI
+    assert "function renderLlamaRuntimeStatus(" in CHAT_UI
+    assert "function switchLlamaRuntimeBundle(" in CHAT_UI
+    assert "/internal/llama-runtime/switch" in CHAT_UI
+    assert "statusPayload?.llama_runtime" in CHAT_UI
 
 
 def test_chat_ui_exposes_llama_memory_loading_controls():
-    assert "GGUF loading mode (requires runtime restart)" in CHAT_HTML
-    assert 'id="llamaMemoryLoadingMode"' in CHAT_HTML
-    assert 'id="applyLlamaMemoryLoadingBtn"' in CHAT_HTML
-    assert 'id="llamaMemoryLoadingStatus"' in CHAT_HTML
-    assert "function applyLlamaMemoryLoadingMode(" in CHAT_HTML
+    assert "GGUF loading mode (requires runtime restart)" in CHAT_UI
+    assert 'id="llamaMemoryLoadingMode"' in CHAT_UI
+    assert 'id="applyLlamaMemoryLoadingBtn"' in CHAT_UI
+    assert 'id="llamaMemoryLoadingStatus"' in CHAT_UI
+    assert "function applyLlamaMemoryLoadingMode(" in CHAT_UI
 
 
 def test_chat_ui_exposes_large_model_compatibility_override_controls():
-    assert "Allow unsupported large models (try anyway)" in CHAT_HTML
-    assert 'id="largeModelOverrideEnabled"' in CHAT_HTML
-    assert 'id="applyLargeModelOverrideBtn"' in CHAT_HTML
-    assert 'id="largeModelOverrideStatus"' in CHAT_HTML
-    assert "function applyLargeModelCompatibilityOverride(" in CHAT_HTML
-    assert "/internal/compatibility/large-model-override" in CHAT_HTML
-    assert "/internal/llama-runtime/memory-loading" in CHAT_HTML
-    assert "memory_loading" in CHAT_HTML
+    assert "Allow unsupported large models (try anyway)" in CHAT_UI
+    assert 'id="largeModelOverrideEnabled"' in CHAT_UI
+    assert 'id="applyLargeModelOverrideBtn"' in CHAT_UI
+    assert 'id="largeModelOverrideStatus"' in CHAT_UI
+    assert "function applyLargeModelCompatibilityOverride(" in CHAT_UI
+    assert "/internal/compatibility/large-model-override" in CHAT_UI
+    assert "/internal/llama-runtime/memory-loading" in CHAT_UI
+    assert "memory_loading" in CHAT_UI
 
 
 def test_chat_ui_has_potato_chat_brand_and_thinking_toggle():
-    assert "🥔 Potato Chat" in CHAT_HTML
-    assert "Smart Search" not in CHAT_HTML
-    assert 'id="thinkingToggleBtn"' not in CHAT_HTML
-    assert "Deep thinking" not in CHAT_HTML
-    assert "function normalizeThinkingEnabled(" not in CHAT_HTML
-    assert "function setThinkingToggleState(" not in CHAT_HTML
-    assert "function toggleThinkingMode(" not in CHAT_HTML
+    assert "🥔 Potato Chat" in CHAT_UI
+    assert "Smart Search" not in CHAT_UI
+    assert 'id="thinkingToggleBtn"' not in CHAT_UI
+    assert "Deep thinking" not in CHAT_UI
+    assert "function normalizeThinkingEnabled(" not in CHAT_UI
+    assert "function setThinkingToggleState(" not in CHAT_UI
+    assert "function toggleThinkingMode(" not in CHAT_UI
 
 
 def test_chat_ui_supports_stop_generation_button_and_abort_controller():
-    assert "let activeRequest = null;" in CHAT_HTML
-    assert "function stopGeneration()" in CHAT_HTML
-    assert "function requestLlamaCancelRecovery(" in CHAT_HTML
-    assert "function requestLlamaRestart(" in CHAT_HTML
-    assert "function scheduleImageCancelRestartFallback(" in CHAT_HTML
-    assert "IMAGE_CANCEL_RESTART_DELAY_MS" in CHAT_HTML
-    assert "function queueImageCancelRecovery(" in CHAT_HTML
-    assert 'sendBtn.textContent = "Stop"' in CHAT_HTML
-    assert 'sendBtn.classList.add("stop-mode")' in CHAT_HTML
-    assert "controller: new AbortController()" in CHAT_HTML
-    assert "signal: requestCtx.controller.signal" in CHAT_HTML
-    assert 'if (requestInFlight) {' in CHAT_HTML
-    assert "stopGeneration();" in CHAT_HTML
-    assert "queueImageCancelRecovery(current);" in CHAT_HTML
-    assert "if (!requestCtx?.hasImageRequest)" in CHAT_HTML
-    assert "/internal/llama-healthz" in CHAT_HTML
-    assert "/internal/cancel-llama" in CHAT_HTML
-    assert "/internal/restart-llama" in CHAT_HTML
-    assert 'case "cancelled"' in CHAT_HTML
+    assert "let activeRequest = null;" in CHAT_UI
+    assert "function stopGeneration()" in CHAT_UI
+    assert "function requestLlamaCancelRecovery(" in CHAT_UI
+    assert "function requestLlamaRestart(" in CHAT_UI
+    assert "function scheduleImageCancelRestartFallback(" in CHAT_UI
+    assert "IMAGE_CANCEL_RESTART_DELAY_MS" in CHAT_UI
+    assert "function queueImageCancelRecovery(" in CHAT_UI
+    assert 'sendBtn.textContent = "Stop"' in CHAT_UI
+    assert 'sendBtn.classList.add("stop-mode")' in CHAT_UI
+    assert "controller: new AbortController()" in CHAT_UI
+    assert "signal: requestCtx.controller.signal" in CHAT_UI
+    assert 'if (requestInFlight) {' in CHAT_UI
+    assert "stopGeneration();" in CHAT_UI
+    assert "queueImageCancelRecovery(current);" in CHAT_UI
+    assert "if (!requestCtx?.hasImageRequest)" in CHAT_UI
+    assert "/internal/llama-healthz" in CHAT_UI
+    assert "/internal/cancel-llama" in CHAT_UI
+    assert "/internal/restart-llama" in CHAT_UI
+    assert 'case "cancelled"' in CHAT_UI
 
 
 def test_chat_ui_shows_llama_connection_indicator():
-    assert 'id="llamaIndicator"' not in CHAT_HTML
-    assert 'id="llamaIndicatorLabel"' not in CHAT_HTML
-    assert 'id="statusDot"' in CHAT_HTML
-    assert 'id="statusSpinner"' in CHAT_HTML
-    assert 'id="statusLabel"' in CHAT_HTML
-    assert "indicator-dot" in CHAT_HTML
-    assert "chip-spinner" in CHAT_HTML
-    assert "function updateLlamaIndicator(" in CHAT_HTML
-    assert "statusPayload?.llama_server?.healthy" in CHAT_HTML
-    assert "const modelSuffix = modelFilename ? `:${modelFilename}` : \"\";" in CHAT_HTML
-    assert "const storageSuffix = activeModelStorage === \"ssd\" ? \":SSD\" : \"\";" in CHAT_HTML
-    assert "label.textContent = `CONNECTED:llama.cpp${modelSuffix}${storageSuffix}`" in CHAT_HTML
-    assert "label.textContent = `LOADING:llama.cpp${modelSuffix}${storageSuffix}`" in CHAT_HTML
-    assert "label.textContent = `FAILED:llama.cpp${modelSuffix}${storageSuffix}`" in CHAT_HTML
-    assert 'label.textContent = "DISCONNECTED:llama.cpp"' in CHAT_HTML
-    assert 'label.textContent = "CONNECTED:Fake Backend"' in CHAT_HTML
-    assert 'dot.classList.add("online")' in CHAT_HTML
-    assert 'dot.classList.add("loading")' in CHAT_HTML
-    assert 'dot.classList.add("failed")' in CHAT_HTML
-    assert 'dot.classList.add("offline")' in CHAT_HTML
-    assert "dot.hidden = true;" in CHAT_HTML
-    assert "spinner.hidden = false;" in CHAT_HTML
-    assert '.indicator-dot.loading {' in CHAT_HTML
-    assert '.indicator-dot.failed {' in CHAT_HTML
-    assert '.badge.loading {' in CHAT_HTML
-    assert '.badge.failed {' in CHAT_HTML
-    assert "statusPayload?.backend?.active" in CHAT_HTML
-    assert "backendMode === \"fake\"" in CHAT_HTML
-    assert "Llama server: connected" not in CHAT_HTML
+    assert 'id="llamaIndicator"' not in CHAT_UI
+    assert 'id="llamaIndicatorLabel"' not in CHAT_UI
+    assert 'id="statusDot"' in CHAT_UI
+    assert 'id="statusSpinner"' in CHAT_UI
+    assert 'id="statusLabel"' in CHAT_UI
+    assert "indicator-dot" in CHAT_UI
+    assert "chip-spinner" in CHAT_UI
+    assert "function updateLlamaIndicator(" in CHAT_UI
+    assert "statusPayload?.llama_server?.healthy" in CHAT_UI
+    assert "const modelSuffix = modelFilename ? `:${modelFilename}` : \"\";" in CHAT_UI
+    assert "const storageSuffix = activeModelStorage === \"ssd\" ? \":SSD\" : \"\";" in CHAT_UI
+    assert "label.textContent = `CONNECTED:llama.cpp${modelSuffix}${storageSuffix}`" in CHAT_UI
+    assert "label.textContent = `LOADING:llama.cpp${modelSuffix}${storageSuffix}`" in CHAT_UI
+    assert "label.textContent = `FAILED:llama.cpp${modelSuffix}${storageSuffix}`" in CHAT_UI
+    assert 'label.textContent = "DISCONNECTED:llama.cpp"' in CHAT_UI
+    assert 'label.textContent = "CONNECTED:Fake Backend"' in CHAT_UI
+    assert 'dot.classList.add("online")' in CHAT_UI
+    assert 'dot.classList.add("loading")' in CHAT_UI
+    assert 'dot.classList.add("failed")' in CHAT_UI
+    assert 'dot.classList.add("offline")' in CHAT_UI
+    assert "dot.hidden = true;" in CHAT_UI
+    assert "spinner.hidden = false;" in CHAT_UI
+    assert '.indicator-dot.loading {' in CHAT_UI
+    assert '.indicator-dot.failed {' in CHAT_UI
+    assert '.badge.loading {' in CHAT_UI
+    assert '.badge.failed {' in CHAT_UI
+    assert "statusPayload?.backend?.active" in CHAT_UI
+    assert "backendMode === \"fake\"" in CHAT_UI
+    assert "Llama server: connected" not in CHAT_UI
 
 
 def test_chat_ui_mobile_layout_prioritizes_chat_area_before_sidebar():
-    assert "@media (max-width: 900px)" in CHAT_HTML
-    assert ".app-shell {" in CHAT_HTML
-    assert 'id="sidebarPanel"' in CHAT_HTML
-    assert 'id="sidebarToggle"' in CHAT_HTML
-    assert 'id="sidebarCloseBtn"' in CHAT_HTML
-    assert 'id="sidebarBackdrop"' in CHAT_HTML
-    assert ".sidebar-backdrop {" in CHAT_HTML
-    assert "body.sidebar-open .sidebar {" in CHAT_HTML
-    assert "transform: translateX(-100%);" in CHAT_HTML
-    assert "body.sidebar-open {" in CHAT_HTML
-    assert "overflow: hidden;" in CHAT_HTML
-    assert "function setSidebarOpen(" in CHAT_HTML
-    assert "function bindMobileSidebar(" in CHAT_HTML
-    assert 'document.getElementById("sidebarToggle").addEventListener("click"' in CHAT_HTML
-    assert 'document.getElementById("sidebarCloseBtn").addEventListener("click"' in CHAT_HTML
-    assert 'document.getElementById("sidebarBackdrop").addEventListener("click"' in CHAT_HTML
-    assert 'id="settingsOpenBtn"' in CHAT_HTML
-    assert 'id="settingsModal"' in CHAT_HTML
-    assert 'id="settingsWorkspaceTabModel"' in CHAT_HTML
+    assert "@media (max-width: 900px)" in CHAT_UI
+    assert ".app-shell {" in CHAT_UI
+    assert 'id="sidebarPanel"' in CHAT_UI
+    assert 'id="sidebarToggle"' in CHAT_UI
+    assert 'id="sidebarCloseBtn"' in CHAT_UI
+    assert 'id="sidebarBackdrop"' in CHAT_UI
+    assert ".sidebar-backdrop {" in CHAT_UI
+    assert "body.sidebar-open .sidebar {" in CHAT_UI
+    assert "transform: translateX(-100%);" in CHAT_UI
+    assert "body.sidebar-open {" in CHAT_UI
+    assert "overflow: hidden;" in CHAT_UI
+    assert "function setSidebarOpen(" in CHAT_UI
+    assert "function bindMobileSidebar(" in CHAT_UI
+    assert 'document.getElementById("sidebarToggle").addEventListener("click"' in CHAT_UI
+    assert 'document.getElementById("sidebarCloseBtn").addEventListener("click"' in CHAT_UI
+    assert 'document.getElementById("sidebarBackdrop").addEventListener("click"' in CHAT_UI
+    assert 'id="settingsOpenBtn"' in CHAT_UI
+    assert 'id="settingsModal"' in CHAT_UI
+    assert 'id="settingsWorkspaceTabModel"' in CHAT_UI
 
 
 def test_chat_ui_mobile_composer_keeps_actions_together():
-    assert ".composer-bottom {" in CHAT_HTML
-    assert "display: grid;" in CHAT_HTML
-    assert "grid-template-columns: 1fr auto;" in CHAT_HTML
-    assert ".composer-right {" in CHAT_HTML
-    assert "justify-content: flex-end;" in CHAT_HTML
-    assert ".composer-left {" in CHAT_HTML
-    assert "@media (max-width: 900px)" in CHAT_HTML
-    assert ".composer-bottom { grid-template-columns: 1fr; }" in CHAT_HTML
-    assert ".composer-right {" in CHAT_HTML
-    assert "width: 100%;" in CHAT_HTML
-    assert "justify-content: flex-end;" in CHAT_HTML
+    assert ".composer-bottom {" in CHAT_UI
+    assert "display: grid;" in CHAT_UI
+    assert "grid-template-columns: 1fr auto;" in CHAT_UI
+    assert ".composer-right {" in CHAT_UI
+    assert "justify-content: flex-end;" in CHAT_UI
+    assert ".composer-left {" in CHAT_UI
+    assert "@media (max-width: 900px)" in CHAT_UI
+    assert ".composer-bottom { grid-template-columns: 1fr; }" in CHAT_UI
+    assert ".composer-right {" in CHAT_UI
+    assert "width: 100%;" in CHAT_UI
+    assert "justify-content: flex-end;" in CHAT_UI
 
 
 def test_chat_ui_uses_continuous_chat_history_in_openai_messages_format():
-    assert "const chatHistory = [];" in CHAT_HTML
-    assert "reqBody.messages = reqBody.messages.concat(chatHistory);" in CHAT_HTML
-    assert "const userMessage = { role: \"user\", content: buildUserMessageContent(content) };" in CHAT_HTML
-    assert "chatHistory.push(userMessage);" in CHAT_HTML
-    assert CHAT_HTML.index("reqBody.messages.push(userMessage);") < CHAT_HTML.index("chatHistory.push(userMessage);")
-    assert "const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);" in CHAT_HTML
-    assert "chatHistory.push({ role: \"assistant\", content: finalAssistantText });" in CHAT_HTML
-    assert "chatHistory.push({ role: \"assistant\", content: msg });" in CHAT_HTML
+    assert "const chatHistory = [];" in CHAT_UI
+    assert "reqBody.messages = reqBody.messages.concat(chatHistory);" in CHAT_UI
+    assert "const userMessage = { role: \"user\", content: buildUserMessageContent(content) };" in CHAT_UI
+    assert "chatHistory.push(userMessage);" in CHAT_UI
+    assert CHAT_JS.index("reqBody.messages.push(userMessage);") < CHAT_JS.index("chatHistory.push(userMessage);")
+    assert "const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);" in CHAT_UI
+    assert "chatHistory.push({ role: \"assistant\", content: finalAssistantText });" in CHAT_UI
+    assert "chatHistory.push({ role: \"assistant\", content: msg });" in CHAT_UI
 
 
 def test_chat_ui_formats_download_sizes_and_shows_model_filename_in_settings():
-    assert 'id="modelName"' in CHAT_HTML
-    assert "Selected model" in CHAT_HTML
-    assert 'id="modelIdentityMeta"' in CHAT_HTML
-    assert "function formatBytes(" in CHAT_HTML
-    assert "units = [\"B\", \"KB\", \"MB\", \"GB\", \"TB\"]" in CHAT_HTML
-    assert "formatBytes(download.bytes_downloaded)" in CHAT_HTML
-    assert "formatBytes(download.bytes_total)" in CHAT_HTML
-    assert "statusPayload?.model?.filename" in CHAT_HTML
-    assert 'document.getElementById("modelName")' in CHAT_HTML
+    assert 'id="modelName"' in CHAT_UI
+    assert "Selected model" in CHAT_UI
+    assert 'id="modelIdentityMeta"' in CHAT_UI
+    assert "function formatBytes(" in CHAT_UI
+    assert "units = [\"B\", \"KB\", \"MB\", \"GB\", \"TB\"]" in CHAT_UI
+    assert "formatBytes(download.bytes_downloaded)" in CHAT_UI
+    assert "formatBytes(download.bytes_total)" in CHAT_UI
+    assert "statusPayload?.model?.filename" in CHAT_UI
+    assert 'document.getElementById("modelName")' in CHAT_UI
 
 
 def test_chat_ui_supports_manual_or_idle_model_download_prompt():
-    assert 'id="downloadPrompt"' in CHAT_HTML
-    assert 'id="startDownloadBtn"' in CHAT_HTML
-    assert 'id="downloadPromptHint"' in CHAT_HTML
-    assert "function startModelDownload(" in CHAT_HTML
-    assert "function renderDownloadPrompt(" in CHAT_HTML
-    assert 'fetch("/internal/start-model-download"' in CHAT_HTML
-    assert "Auto-download starts in" in CHAT_HTML
-    assert "statusPayload.download.auto_start_remaining_seconds" in CHAT_HTML
-    assert "Not enough free storage for this model." in CHAT_HTML
-    assert "Model likely too large for free storage. Delete files and retry." in CHAT_HTML
-    assert "freeBytes < 512 * 1024 * 1024" in CHAT_HTML
+    assert 'id="downloadPrompt"' in CHAT_UI
+    assert 'id="startDownloadBtn"' in CHAT_UI
+    assert 'id="downloadPromptHint"' in CHAT_UI
+    assert "function startModelDownload(" in CHAT_UI
+    assert "function renderDownloadPrompt(" in CHAT_UI
+    assert 'fetch("/internal/start-model-download"' in CHAT_UI
+    assert "Auto-download starts in" in CHAT_UI
+    assert "statusPayload.download.auto_start_remaining_seconds" in CHAT_UI
+    assert "Not enough free storage for this model." in CHAT_UI
+    assert "Model likely too large for free storage. Delete files and retry." in CHAT_UI
+    assert "freeBytes < 512 * 1024 * 1024" in CHAT_UI
 
 
 def test_chat_ui_supports_heavy_runtime_reset_action_with_confirmation():
-    assert 'id="resetRuntimeBtn"' in CHAT_HTML
-    assert "Unload model + clean memory + restart" in CHAT_HTML
-    assert "function resetRuntimeHeavy(" in CHAT_HTML
-    assert "window.confirm(" in CHAT_HTML
-    assert 'fetch("/internal/reset-runtime"' in CHAT_HTML
-    assert 'document.getElementById("resetRuntimeBtn").addEventListener("click", resetRuntimeHeavy);' in CHAT_HTML
+    assert 'id="resetRuntimeBtn"' in CHAT_UI
+    assert "Unload model + clean memory + restart" in CHAT_UI
+    assert "function resetRuntimeHeavy(" in CHAT_UI
+    assert "window.confirm(" in CHAT_UI
+    assert 'fetch("/internal/reset-runtime"' in CHAT_UI
+    assert 'document.getElementById("resetRuntimeBtn").addEventListener("click", resetRuntimeHeavy);' in CHAT_UI
 
 
 def test_chat_ui_runtime_reset_has_active_reconnect_polling():
-    assert "function startRuntimeReconnectWatch(" in CHAT_HTML
-    assert "function stopRuntimeReconnectWatch(" in CHAT_HTML
-    assert "RUNTIME_RECONNECT_MAX_ATTEMPTS" in CHAT_HTML
-    assert "Runtime reset in progress. Reconnecting..." in CHAT_HTML
-    assert "Runtime reconnected." in CHAT_HTML
-    assert "Model files on disk are unchanged." in CHAT_HTML
-    assert "const controller = new AbortController();" in CHAT_HTML
-    assert "cache: \"no-store\"" in CHAT_HTML
-    assert "controller.abort();" in CHAT_HTML
+    assert "function startRuntimeReconnectWatch(" in CHAT_UI
+    assert "function stopRuntimeReconnectWatch(" in CHAT_UI
+    assert "RUNTIME_RECONNECT_MAX_ATTEMPTS" in CHAT_UI
+    assert "Runtime reset in progress. Reconnecting..." in CHAT_UI
+    assert "Runtime reconnected." in CHAT_UI
+    assert "Model files on disk are unchanged." in CHAT_UI
+    assert "const controller = new AbortController();" in CHAT_UI
+    assert "cache: \"no-store\"" in CHAT_UI
+    assert "controller.abort();" in CHAT_UI
 
 
 def test_chat_ui_shows_pi_runtime_compact_with_details_toggle_above_settings():
-    assert 'id="systemRuntimeCard"' in CHAT_HTML
-    assert 'id="runtimeCompact"' in CHAT_HTML
-    assert 'id="runtimeDetails"' in CHAT_HTML
-    assert 'id="runtimeViewToggle"' in CHAT_HTML
-    assert 'id="runtimeDetailsPowerGroup"' in CHAT_HTML
-    assert 'id="runtimeDetailsPerformanceGroup"' in CHAT_HTML
-    assert 'id="runtimeDetailsMemoryGroup"' in CHAT_HTML
-    assert 'id="runtimeDetailsPlatformGroup"' in CHAT_HTML
-    assert 'id="runtimeDetailCpuClockValue"' in CHAT_HTML
-    assert "Show details" in CHAT_HTML
-    assert "function setRuntimeDetailsExpanded(" in CHAT_HTML
-    assert "function renderSystemRuntime(" in CHAT_HTML
-    assert 'id="runtimeDetailStorageValue"' in CHAT_HTML
-    assert 'id="runtimeDetailSwapValue"' in CHAT_HTML
-    assert 'id="runtimeDetailPiModelValue"' in CHAT_HTML
-    assert 'id="runtimeDetailOsValue"' in CHAT_HTML
-    assert 'id="runtimeDetailKernelValue"' in CHAT_HTML
-    assert 'id="runtimeDetailBootloaderValue"' in CHAT_HTML
-    assert 'id="runtimeDetailFirmwareValue"' in CHAT_HTML
-    assert 'id="runtimeDetailPower"' in CHAT_HTML
-    assert 'id="runtimeDetailPowerRaw"' in CHAT_HTML
-    assert 'class="runtime-detail-prominent"' in CHAT_HTML
-    assert "Power (estimated total):" in CHAT_HTML
-    assert "Power (PMIC raw):" in CHAT_HTML
-    assert '>Bootloader</span>' in CHAT_HTML
-    assert '>Firmware</span>' in CHAT_HTML
-    assert "Performance" in CHAT_HTML
-    assert "Memory &amp; storage" in CHAT_HTML
-    assert "Platform" in CHAT_HTML
-    assert '>zram</span>' in CHAT_HTML
-    assert "Power note:" not in CHAT_HTML
+    assert 'id="systemRuntimeCard"' in CHAT_UI
+    assert 'id="runtimeCompact"' in CHAT_UI
+    assert 'id="runtimeDetails"' in CHAT_UI
+    assert 'id="runtimeViewToggle"' in CHAT_UI
+    assert 'id="runtimeDetailsPowerGroup"' in CHAT_UI
+    assert 'id="runtimeDetailsPerformanceGroup"' in CHAT_UI
+    assert 'id="runtimeDetailsMemoryGroup"' in CHAT_UI
+    assert 'id="runtimeDetailsPlatformGroup"' in CHAT_UI
+    assert 'id="runtimeDetailCpuClockValue"' in CHAT_UI
+    assert "Show details" in CHAT_UI
+    assert "function setRuntimeDetailsExpanded(" in CHAT_UI
+    assert "function renderSystemRuntime(" in CHAT_UI
+    assert 'id="runtimeDetailStorageValue"' in CHAT_UI
+    assert 'id="runtimeDetailSwapValue"' in CHAT_UI
+    assert 'id="runtimeDetailPiModelValue"' in CHAT_UI
+    assert 'id="runtimeDetailOsValue"' in CHAT_UI
+    assert 'id="runtimeDetailKernelValue"' in CHAT_UI
+    assert 'id="runtimeDetailBootloaderValue"' in CHAT_UI
+    assert 'id="runtimeDetailFirmwareValue"' in CHAT_UI
+    assert 'id="runtimeDetailPower"' in CHAT_UI
+    assert 'id="runtimeDetailPowerRaw"' in CHAT_UI
+    assert 'class="runtime-detail-prominent"' in CHAT_UI
+    assert "Power (estimated total):" in CHAT_UI
+    assert "Power (PMIC raw):" in CHAT_UI
+    assert '>Bootloader</span>' in CHAT_UI
+    assert '>Firmware</span>' in CHAT_UI
+    assert "Performance" in CHAT_UI
+    assert "Memory &amp; storage" in CHAT_UI
+    assert "Platform" in CHAT_UI
+    assert '>zram</span>' in CHAT_UI
+    assert "Power note:" not in CHAT_UI
     assert CHAT_HTML.index('id="runtimeDetailPower"') < CHAT_HTML.index('id="runtimeDetailCpuValue"')
-    assert "renderSystemRuntime(statusPayload?.system)" in CHAT_HTML
+    assert "renderSystemRuntime(statusPayload?.system)" in CHAT_UI
     assert CHAT_HTML.index('id="systemRuntimeCard"') < CHAT_HTML.index('id="settingsModal"')
-    assert 'id="settingsModelWorkspace"' in CHAT_HTML
-    assert 'id="settingsYamlPanel"' in CHAT_HTML
-    assert 'id="legacySettingsRuntimeSection"' in CHAT_HTML
-    assert 'id="settingsPowerCalibration"' in CHAT_HTML
-    assert 'id="powerCalibrationWallWatts"' in CHAT_HTML
-    assert 'id="capturePowerCalibrationSampleBtn"' in CHAT_HTML
-    assert 'id="fitPowerCalibrationBtn"' in CHAT_HTML
-    assert 'id="resetPowerCalibrationBtn"' in CHAT_HTML
-    assert "/internal/power-calibration/sample" in CHAT_HTML
-    assert "/internal/power-calibration/fit" in CHAT_HTML
-    assert "/internal/power-calibration/reset" in CHAT_HTML
+    assert 'id="settingsModelWorkspace"' in CHAT_UI
+    assert 'id="settingsYamlPanel"' in CHAT_UI
+    assert 'id="legacySettingsRuntimeSection"' in CHAT_UI
+    assert 'id="settingsPowerCalibration"' in CHAT_UI
+    assert 'id="powerCalibrationWallWatts"' in CHAT_UI
+    assert 'id="capturePowerCalibrationSampleBtn"' in CHAT_UI
+    assert 'id="fitPowerCalibrationBtn"' in CHAT_UI
+    assert 'id="resetPowerCalibrationBtn"' in CHAT_UI
+    assert "/internal/power-calibration/sample" in CHAT_UI
+    assert "/internal/power-calibration/fit" in CHAT_UI
+    assert "/internal/power-calibration/reset" in CHAT_UI
 
 
 def test_chat_ui_supports_image_upload_for_vision_messages():
-    assert 'id="imageInput"' in CHAT_HTML
-    assert 'accept="image/*"' in CHAT_HTML
-    assert 'id="attachImageBtn"' in CHAT_HTML
-    assert 'for="imageInput"' not in CHAT_HTML
-    assert 'id="attachImageBtn" class="attach-btn" type="button">Attach image</button>' in CHAT_HTML
-    assert "function handleImageSelected(" in CHAT_HTML
-    assert "FileReader()" in CHAT_HTML
-    assert "reader.readAsDataURL(file);" in CHAT_HTML
-    assert "pendingImage = {" in CHAT_HTML
-    assert "type: \"image_url\"" in CHAT_HTML
-    assert "image_url: { url: pendingImage.dataUrl }" in CHAT_HTML
-    assert "function openImagePicker(" in CHAT_HTML
-    assert "input.showPicker()" not in CHAT_HTML
-    assert "input.click();" in CHAT_HTML
-    assert 'document.getElementById("attachImageBtn").addEventListener("click", openImagePicker);' in CHAT_HTML
-    assert 'document.getElementById("attachImageBtn").addEventListener("click", (event) => {' not in CHAT_HTML
-    assert 'document.getElementById("attachImageBtn").addEventListener("keydown"' not in CHAT_HTML
+    assert 'id="imageInput"' in CHAT_UI
+    assert 'accept="image/*"' in CHAT_UI
+    assert 'id="attachImageBtn"' in CHAT_UI
+    assert 'for="imageInput"' not in CHAT_UI
+    assert 'id="attachImageBtn" class="attach-btn" type="button">Attach image</button>' in CHAT_UI
+    assert "function handleImageSelected(" in CHAT_UI
+    assert "FileReader()" in CHAT_UI
+    assert "reader.readAsDataURL(file);" in CHAT_UI
+    assert "pendingImage = {" in CHAT_UI
+    assert "type: \"image_url\"" in CHAT_UI
+    assert "image_url: { url: pendingImage.dataUrl }" in CHAT_UI
+    assert "function openImagePicker(" in CHAT_UI
+    assert "input.showPicker()" not in CHAT_UI
+    assert "input.click();" in CHAT_UI
+    assert 'document.getElementById("attachImageBtn").addEventListener("click", openImagePicker);' in CHAT_UI
+    assert 'document.getElementById("attachImageBtn").addEventListener("click", (event) => {' not in CHAT_UI
+    assert 'document.getElementById("attachImageBtn").addEventListener("keydown"' not in CHAT_UI
 
 
 def test_chat_ui_renders_image_thumbnail_in_user_bubble():
-    assert "function buildUserBubblePayload(" in CHAT_HTML
-    assert "imageDataUrl: pendingImage.dataUrl" in CHAT_HTML
-    assert 'thumbnail.className = "message-image-thumb"' in CHAT_HTML
-    assert 'thumbnail.src = imageDataUrl;' in CHAT_HTML
-    assert "bubble.replaceChildren();" in CHAT_HTML
-    assert 'caption.className = "message-text"' in CHAT_HTML
+    assert "function buildUserBubblePayload(" in CHAT_UI
+    assert "imageDataUrl: pendingImage.dataUrl" in CHAT_UI
+    assert 'thumbnail.className = "message-image-thumb"' in CHAT_UI
+    assert 'thumbnail.src = imageDataUrl;' in CHAT_UI
+    assert "bubble.replaceChildren();" in CHAT_UI
+    assert 'caption.className = "message-text"' in CHAT_UI
 
 
 def test_chat_ui_compresses_large_images_before_send():
-    assert "const IMAGE_SAFE_MAX_BYTES = 140 * 1024;" in CHAT_HTML
-    assert "const IMAGE_MAX_DIMENSION = 896;" in CHAT_HTML
-    assert "const IMAGE_MAX_PIXEL_COUNT = IMAGE_MAX_DIMENSION * IMAGE_MAX_DIMENSION;" in CHAT_HTML
-    assert "function estimateDataUrlBytes(" in CHAT_HTML
-    assert "function inspectImageDataUrl(" in CHAT_HTML
-    assert "function compressImageDataUrl(" in CHAT_HTML
-    assert "function maybeCompressImage(" in CHAT_HTML
-    assert "const needsResize =" in CHAT_HTML
-    assert "metadata.maxDim > IMAGE_MAX_DIMENSION" in CHAT_HTML
-    assert "metadata.pixelCount > IMAGE_MAX_PIXEL_COUNT" in CHAT_HTML
-    assert "setComposerActivity(\"Optimizing image...\")" in CHAT_HTML
-    assert "await maybeCompressImage(result, file);" in CHAT_HTML
-    assert "optimized from" in CHAT_HTML
+    assert "const IMAGE_SAFE_MAX_BYTES = 140 * 1024;" in CHAT_UI
+    assert "const IMAGE_MAX_DIMENSION = 896;" in CHAT_UI
+    assert "const IMAGE_MAX_PIXEL_COUNT = IMAGE_MAX_DIMENSION * IMAGE_MAX_DIMENSION;" in CHAT_UI
+    assert "function estimateDataUrlBytes(" in CHAT_UI
+    assert "function inspectImageDataUrl(" in CHAT_UI
+    assert "function compressImageDataUrl(" in CHAT_UI
+    assert "function maybeCompressImage(" in CHAT_UI
+    assert "const needsResize =" in CHAT_UI
+    assert "metadata.maxDim > IMAGE_MAX_DIMENSION" in CHAT_UI
+    assert "metadata.pixelCount > IMAGE_MAX_PIXEL_COUNT" in CHAT_UI
+    assert "setComposerActivity(\"Optimizing image...\")" in CHAT_UI
+    assert "await maybeCompressImage(result, file);" in CHAT_UI
+    assert "optimized from" in CHAT_UI
 
 
 def test_chat_ui_model_manager_supports_model_delete_action():
-    assert "async function deleteSelectedModel(" in CHAT_HTML
-    assert "async function moveModelToSsd(" in CHAT_HTML
-    assert "async function cancelActiveModelDownload(modelId = null)" in CHAT_HTML
-    assert "/internal/models/delete" in CHAT_HTML
-    assert "/internal/models/move-to-ssd" in CHAT_HTML
-    assert "Move to SSD" in CHAT_HTML
-    assert "On SSD" in CHAT_HTML
-    assert "statusPayload?.storage_targets?.ssd?.available" in CHAT_HTML
-    assert 'deleteBtn.dataset.action = "delete"' in CHAT_HTML
-    assert "Delete model" in CHAT_HTML
-    assert "Cancel + delete" in CHAT_HTML
-    assert "Stop download" in CHAT_HTML
-    assert "formatModelStatusLabel" in CHAT_HTML
-    assert "function startModelDownloadForModel(" in CHAT_HTML
-    assert "/internal/models/download" in CHAT_HTML
-    assert "insufficient_storage" in CHAT_HTML
-    assert 'id="purgeModelsBtn"' in CHAT_HTML
-    assert "async function purgeAllModels(" in CHAT_HTML
-    assert "/internal/models/purge" in CHAT_HTML
-    assert "reset_bootstrap_flag: false" in CHAT_HTML
+    assert "async function deleteSelectedModel(" in CHAT_UI
+    assert "async function moveModelToSsd(" in CHAT_UI
+    assert "async function cancelActiveModelDownload(modelId = null)" in CHAT_UI
+    assert "/internal/models/delete" in CHAT_UI
+    assert "/internal/models/move-to-ssd" in CHAT_UI
+    assert "Move to SSD" in CHAT_UI
+    assert "On SSD" in CHAT_UI
+    assert "statusPayload?.storage_targets?.ssd?.available" in CHAT_UI
+    assert 'deleteBtn.dataset.action = "delete"' in CHAT_UI
+    assert "Delete model" in CHAT_UI
+    assert "Cancel + delete" in CHAT_UI
+    assert "Stop download" in CHAT_UI
+    assert "formatModelStatusLabel" in CHAT_UI
+    assert "function startModelDownloadForModel(" in CHAT_UI
+    assert "/internal/models/download" in CHAT_UI
+    assert "insufficient_storage" in CHAT_UI
+    assert 'id="purgeModelsBtn"' in CHAT_UI
+    assert "async function purgeAllModels(" in CHAT_UI
+    assert "/internal/models/purge" in CHAT_UI
+    assert "reset_bootstrap_flag: false" in CHAT_UI
 
 
 def test_chat_ui_shows_processing_indicator_while_generating():
-    assert 'id="composerActivity"' in CHAT_HTML
-    assert 'id="composerStatusChip"' in CHAT_HTML
-    assert 'id="composerStatusText"' in CHAT_HTML
-    assert 'class="composer-status-chip"' in CHAT_HTML
-    assert 'id="cancelBtn"' in CHAT_HTML
-    assert "function setComposerActivity(" in CHAT_HTML
-    assert "function setComposerStatusChip(" in CHAT_HTML
-    assert "function hideComposerStatusChip(" in CHAT_HTML
-    assert "function setCancelEnabled(" in CHAT_HTML
-    assert "function cancelCurrentWork(" in CHAT_HTML
-    assert "const PREFILL_PROGRESS_CAP = 99;" in CHAT_HTML
-    assert "function estimatePrefillEtaMs(" in CHAT_HTML
-    assert "function beginPrefillProgress(" in CHAT_HTML
-    assert "function markPrefillGenerationStarted(" in CHAT_HTML
-    assert "function stopPrefillProgress(" in CHAT_HTML
-    assert "return Promise.resolve({ cancelled: false });" in CHAT_HTML
-    assert "resolve({ cancelled: true });" in CHAT_HTML
-    assert "resolve({ cancelled: false });" in CHAT_HTML
-    assert "function throwIfRequestStoppedAfterPrefill(" in CHAT_HTML
-    assert "if (finishResult?.cancelled || requestCtx?.stoppedByUser)" in CHAT_HTML
-    assert "const PREFILL_FINISH_DURATION_MS =" in CHAT_HTML
-    assert "const PREFILL_FINISH_HOLD_MS =" in CHAT_HTML
-    assert "function setMessageProcessingState(" in CHAT_HTML
-    assert "className = \"message-processing-shell\"" in CHAT_HTML
-    assert "const PREFILL_PROGRESS_TAIL_START = 89;" in CHAT_HTML
-    assert "Prompt processing" in CHAT_HTML
-    assert "Generating reply" not in CHAT_HTML
-    assert "potato_prefill_metrics_v1" in CHAT_HTML
-    assert "Preparing prompt..." in CHAT_HTML
-    assert "Preparing prompt • " in CHAT_HTML
-    assert "Preparing prompt: " not in CHAT_HTML
-    assert "1 - Math.exp(-3.2 * Math.min(1.4, normalized))" in CHAT_HTML
-    assert "Math.log1p(overtimeSeconds) * 2.6" in CHAT_HTML
-    assert "Math.min(PREFILL_PROGRESS_CAP" in CHAT_HTML
-    assert 'applyPrefillProgressState(requestCtx, 100);' in CHAT_HTML
-    assert 'window.__POTATO_PREFILL_FINISH_DURATION_MS__' in CHAT_HTML
-    assert 'window.__POTATO_PREFILL_FINISH_HOLD_MS__' in CHAT_HTML
-    assert 'setComposerActivity("Reading image...")' in CHAT_HTML
-    assert "reader.onprogress" in CHAT_HTML
-    assert "pendingImageReader.abort();" in CHAT_HTML
-    assert 'document.getElementById("cancelBtn").addEventListener("click", cancelCurrentWork);' in CHAT_HTML
-    assert "setComposerActivity(\"\")" in CHAT_HTML
-    assert "TTFT " in CHAT_HTML
+    assert 'id="composerActivity"' in CHAT_UI
+    assert 'id="composerStatusChip"' in CHAT_UI
+    assert 'id="composerStatusText"' in CHAT_UI
+    assert 'class="composer-status-chip"' in CHAT_UI
+    assert 'id="cancelBtn"' in CHAT_UI
+    assert "function setComposerActivity(" in CHAT_UI
+    assert "function setComposerStatusChip(" in CHAT_UI
+    assert "function hideComposerStatusChip(" in CHAT_UI
+    assert "function setCancelEnabled(" in CHAT_UI
+    assert "function cancelCurrentWork(" in CHAT_UI
+    assert "const PREFILL_PROGRESS_CAP = 99;" in CHAT_UI
+    assert "function estimatePrefillEtaMs(" in CHAT_UI
+    assert "function beginPrefillProgress(" in CHAT_UI
+    assert "function markPrefillGenerationStarted(" in CHAT_UI
+    assert "function stopPrefillProgress(" in CHAT_UI
+    assert "return Promise.resolve({ cancelled: false });" in CHAT_UI
+    assert "resolve({ cancelled: true });" in CHAT_UI
+    assert "resolve({ cancelled: false });" in CHAT_UI
+    assert "function throwIfRequestStoppedAfterPrefill(" in CHAT_UI
+    assert "if (finishResult?.cancelled || requestCtx?.stoppedByUser)" in CHAT_UI
+    assert "const PREFILL_FINISH_DURATION_MS =" in CHAT_UI
+    assert "const PREFILL_FINISH_HOLD_MS =" in CHAT_UI
+    assert "function setMessageProcessingState(" in CHAT_UI
+    assert "className = \"message-processing-shell\"" in CHAT_UI
+    assert "const PREFILL_PROGRESS_TAIL_START = 89;" in CHAT_UI
+    assert "Prompt processing" in CHAT_UI
+    assert "Generating reply" not in CHAT_UI
+    assert "potato_prefill_metrics_v1" in CHAT_UI
+    assert "Preparing prompt..." in CHAT_UI
+    assert "Preparing prompt • " in CHAT_UI
+    assert "Preparing prompt: " not in CHAT_UI
+    assert "1 - Math.exp(-3.2 * Math.min(1.4, normalized))" in CHAT_UI
+    assert "Math.log1p(overtimeSeconds) * 2.6" in CHAT_UI
+    assert "Math.min(PREFILL_PROGRESS_CAP" in CHAT_UI
+    assert 'applyPrefillProgressState(requestCtx, 100);' in CHAT_UI
+    assert 'window.__POTATO_PREFILL_FINISH_DURATION_MS__' in CHAT_UI
+    assert 'window.__POTATO_PREFILL_FINISH_HOLD_MS__' in CHAT_UI
+    assert 'setComposerActivity("Reading image...")' in CHAT_UI
+    assert "reader.onprogress" in CHAT_UI
+    assert "pendingImageReader.abort();" in CHAT_UI
+    assert 'document.getElementById("cancelBtn").addEventListener("click", cancelCurrentWork);' in CHAT_UI
+    assert "setComposerActivity(\"\")" in CHAT_UI
+    assert "TTFT " in CHAT_UI
+
+
+def test_chat_assets_are_loaded_from_external_files():
+    for name in ("chat.html", "chat.css", "chat.js"):
+        path = WEB_ASSETS_DIR / name
+        assert path.exists(), f"Expected {name} at {path}"
+
+    assert (WEB_ASSETS_DIR / "chat.html").read_text(encoding="utf-8") == CHAT_HTML
+    assert (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8") == CHAT_CSS
+    assert (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8") == CHAT_JS
+    assert '<link rel="stylesheet" href="/assets/chat.css">' in CHAT_HTML
+    assert '<script src="/assets/chat.js"></script>' in CHAT_HTML
+
+
+def test_root_endpoint_serves_chat_html(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "<!doctype html>" in response.text.lower()
+    assert "Potato Chat" in response.text

@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Potato OS Chat</title>
+    <link rel="stylesheet" href="/assets/chat.css">
+</head>
+<body>
+  <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
+  <div class="app-shell">
+    <aside id="sidebarPanel" class="sidebar" aria-hidden="false">
+      <div class="sidebar-mobile-actions">
+        <button id="sidebarCloseBtn" class="sidebar-close" type="button" hidden>Close</button>
+      </div>
+      <section class="sidebar-section">
+        <h2 class="brand">Potato OS</h2>
+        <p id="sidebarNote" class="sidebar-note">V0.3 Pre-Alpha</p>
+        <div class="status-summary">
+          <div id="statusText" class="status-card">Checking status...</div>
+          <div id="statusActions" class="status-actions" hidden>
+            <button id="statusResumeDownloadBtn" class="ghost-btn" type="button">Resume</button>
+          </div>
+        </div>
+        <div id="downloadPrompt" class="download-prompt" hidden>
+          <p class="download-prompt-title">Model download required</p>
+          <p id="downloadPromptHint" class="download-prompt-hint">Auto-download starts in 5:00.</p>
+          <div class="download-prompt-actions">
+            <button id="startDownloadBtn" class="ghost-btn" type="button">Start download now</button>
+          </div>
+        </div>
+        <div id="systemRuntimeCard" class="status-card runtime-card">
+          <div class="runtime-header">
+            <span>Pi Runtime</span>
+            <button id="runtimeViewToggle" class="runtime-toggle" type="button" aria-expanded="false">Show details</button>
+          </div>
+          <div id="compatibilityWarnings" class="runtime-compact" hidden>
+            <span id="compatibilityWarningsText"></span>
+            <button id="compatibilityOverrideBtn" class="ghost-btn" type="button" hidden>Try anyway</button>
+          </div>
+          <div id="runtimeCompact" class="runtime-compact">CPU -- | Cores -- | GPU -- | Swap -- | Throttle --</div>
+          <div id="runtimeDetails" class="runtime-details" hidden>
+            <section id="runtimeDetailsPowerGroup" class="runtime-detail-group runtime-detail-group--power" aria-label="Power">
+              <div class="runtime-detail-group-title">Power</div>
+              <div id="runtimeDetailPower" class="runtime-detail-prominent">Power (estimated total): --</div>
+              <div id="runtimeDetailPowerRaw" class="runtime-detail-secondary">Power (PMIC raw): --</div>
+            </section>
+            <section id="runtimeDetailsPerformanceGroup" class="runtime-detail-group" aria-label="Performance">
+              <div class="runtime-detail-group-title">Performance</div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">CPU total</span><span id="runtimeDetailCpuValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">CPU cores</span><span id="runtimeDetailCoresValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">CPU clock</span><span id="runtimeDetailCpuClockValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">GPU clock</span><span id="runtimeDetailGpuValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Temperature</span><span id="runtimeDetailTempValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Throttling</span><span id="runtimeDetailThrottleValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">History</span><span id="runtimeDetailThrottleHistoryValue" class="runtime-detail-value">--</span></div>
+            </section>
+            <section id="runtimeDetailsMemoryGroup" class="runtime-detail-group" aria-label="Memory and storage">
+              <div class="runtime-detail-group-title">Memory &amp; storage</div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Memory</span><span id="runtimeDetailMemoryValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span id="runtimeDetailSwapLabel" class="runtime-detail-label">zram</span><span id="runtimeDetailSwapValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Storage free</span><span id="runtimeDetailStorageValue" class="runtime-detail-value">--</span></div>
+            </section>
+            <section id="runtimeDetailsPlatformGroup" class="runtime-detail-group" aria-label="Platform">
+              <div class="runtime-detail-group-title">Platform</div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Pi model</span><span id="runtimeDetailPiModelValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">OS</span><span id="runtimeDetailOsValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Kernel</span><span id="runtimeDetailKernelValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Bootloader</span><span id="runtimeDetailBootloaderValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Firmware</span><span id="runtimeDetailFirmwareValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Updated</span><span id="runtimeDetailUpdatedValue" class="runtime-detail-value">--</span></div>
+            </section>
+          </div>
+        </div>
+      </section>
+      <div class="sidebar-actions">
+        <button id="settingsOpenBtn" class="ghost-btn sidebar-settings-btn" type="button">Settings</button>
+      </div>
+    </aside>
+
+    <main class="chat-shell">
+      <header class="chat-header">
+        <div class="header-primary">
+          <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Open sidebar" aria-controls="sidebarPanel" aria-expanded="false" hidden>
+            <span class="bars" aria-hidden="true">≡</span>
+          </button>
+          <span class="chat-brand-mark" aria-hidden="true">🥔</span>
+          <h1 aria-label="🥔 Potato Chat">Potato Chat</h1>
+        </div>
+        <div class="header-actions">
+          <span id="statusBadge" class="badge offline">
+            <span id="statusDot" class="indicator-dot offline" aria-hidden="true"></span>
+            <span id="statusSpinner" class="chip-spinner" aria-hidden="true" hidden></span>
+            <span id="statusLabel">DISCONNECTED:llama.cpp</span>
+          </span>
+          <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch theme">
+            <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"></path>
+            </svg>
+            <svg class="theme-icon theme-icon--sun" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4.5"></circle>
+              <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <section id="messages" class="messages"></section>
+
+      <form id="composerForm" class="composer">
+        <textarea id="userPrompt" rows="3" placeholder="Message Potato OS..."></textarea>
+        <div class="composer-bottom">
+          <div class="composer-left">
+            <input id="imageInput" class="visually-hidden-file" type="file" accept="image/*">
+            <button id="attachImageBtn" class="attach-btn" type="button">Attach image</button>
+            <button id="clearImageBtn" class="ghost-btn" type="button" hidden>Remove image</button>
+            <span id="imageMeta" class="image-meta" hidden></span>
+          </div>
+          <div class="composer-right">
+            <div id="composerStatusChip" class="composer-status-chip" hidden>
+              <span class="chip-spinner" aria-hidden="true"></span>
+              <span id="composerStatusText">Preparing prompt • 0%</span>
+              <button id="cancelBtn" class="chip-cancel-btn" type="button" hidden disabled aria-label="Cancel current work" title="Cancel">×</button>
+            </div>
+            <button id="sendBtn" class="send-btn" type="submit">Send</button>
+          </div>
+        </div>
+        <div id="composerVisionNotice" class="composer-vision-notice" hidden></div>
+        <div id="imagePreviewWrap" class="image-preview-wrap" hidden>
+          <img id="imagePreview" alt="Selected upload preview">
+        </div>
+        <div id="composerActivity" class="assistive-live" aria-live="polite"></div>
+      </form>
+
+    </main>
+  </div>
+  <div id="settingsBackdrop" class="settings-backdrop" hidden></div>
+  <div id="settingsModal" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle" hidden>
+    <div class="settings-modal-shell settings-workspace-shell">
+      <div class="settings-modal-header">
+        <div>
+          <h2 id="settingsModalTitle" class="settings-modal-title">Settings</h2>
+          <p class="settings-modal-note">Model profiles, downloads, vision encoders, and YAML in one place.</p>
+        </div>
+        <div class="settings-modal-header-actions">
+          <button id="settingsAdvancedBtn" class="ghost-btn settings-advanced-btn" type="button" aria-label="Open advanced settings" title="Advanced settings">Advanced</button>
+          <button id="settingsCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close settings">Close</button>
+        </div>
+      </div>
+      <div class="settings-workspace-tabs" role="tablist" aria-label="Settings views">
+        <button id="settingsWorkspaceTabModel" class="settings-workspace-tab active" type="button" role="tab" aria-selected="true">Model</button>
+        <button id="settingsWorkspaceTabYaml" class="settings-workspace-tab" type="button" role="tab" aria-selected="false">YAML</button>
+      </div>
+      <div id="settingsModelWorkspace" class="settings-workspace-panel">
+        <div class="settings-workspace-grid">
+          <section class="settings-section settings-models-column">
+            <div class="settings-panel-heading">
+              <div class="settings-panel-heading-copy">
+                <h3 class="settings-section-title">Models</h3>
+                <div class="settings-section-note">Auto-download bootstrap is paused for now. Use explicit downloads only.</div>
+              </div>
+            </div>
+            <div class="settings-utility-card">
+              <label class="full">Add model by URL
+                <input id="modelUrlInput" type="url" placeholder="https://.../model.gguf">
+              </label>
+              <div class="settings-action-row full">
+                <button id="registerModelBtn" class="ghost-btn" type="button">Add URL model</button>
+              </div>
+              <div id="modelUrlStatus" class="runtime-compact full">Add an HTTPS .gguf URL to register another model.</div>
+              <label class="full">Upload local GGUF to Pi
+                <input id="modelUploadInput" type="file" accept=".gguf,application/octet-stream">
+              </label>
+              <div class="settings-action-row full">
+                <button id="uploadModelBtn" class="ghost-btn" type="button">Upload model</button>
+                <button id="cancelUploadBtn" class="ghost-btn" type="button" hidden>Cancel upload</button>
+              </div>
+              <div id="modelUploadStatus" class="runtime-compact full">No upload in progress.</div>
+              <details class="settings-danger-zone full">
+                <summary>Danger zone</summary>
+                <div class="settings-danger-zone-body">
+                  <p class="settings-danger-note">Bulk deletion is tucked away so the main workspace can stay focused on setup and diagnostics.</p>
+                  <button id="purgeModelsBtn" class="ghost-btn danger-btn" type="button">Delete all models</button>
+                </div>
+              </details>
+            </div>
+            <div class="full settings-model-list-wrap">
+              <div id="modelsList" class="runtime-details settings-model-list"></div>
+            </div>
+          </section>
+          <section class="settings-section settings-editor-column">
+            <div class="selected-model-header">
+              <div class="selected-model-header-copy">
+                <h3 class="settings-section-title">Selected model</h3>
+                <div id="modelName">Checking...</div>
+                <div id="modelIdentityMeta" class="selected-model-meta" aria-live="polite"></div>
+                <div id="modelSettingsStatus" class="runtime-compact">Select a model to edit its chat and vision settings.</div>
+              </div>
+              <div class="selected-model-header-actions">
+                <button id="discardModelSettingsBtn" class="ghost-btn" type="button" hidden>Discard changes</button>
+                <button id="saveModelSettingsBtn" class="ghost-btn settings-save-btn" type="button">Save model settings</button>
+              </div>
+            </div>
+            <div id="modelCapabilitiesChips" class="settings-chip-row" aria-live="polite"></div>
+            <div id="modelCapabilitiesText" class="settings-section-note">Capabilities unknown.</div>
+            <section class="settings-subpanel full settings-chat-panel">
+              <div class="settings-subpanel-header">
+                <h4 class="settings-subpanel-title">Chat profile</h4>
+              </div>
+              <label class="full">System Prompt (optional)
+                <textarea id="systemPrompt" placeholder="Set assistant behavior for this model"></textarea>
+              </label>
+              <div class="settings-field-grid">
+                <label>
+                  <span class="settings-field-label">Generation Mode</span>
+                  <div class="settings-segmented" data-target="generationMode" role="group" aria-label="Generation Mode">
+                    <button type="button" class="settings-segment-btn" data-target="generationMode" data-value="random">Random</button>
+                    <button type="button" class="settings-segment-btn" data-target="generationMode" data-value="deterministic">Deterministic</button>
+                  </div>
+                  <input id="generationMode" type="hidden" value="random">
+                </label>
+                <label><span class="settings-field-label">Seed <span class="settings-field-hint">Only used in deterministic mode</span></span>
+                  <input id="seed" type="number" step="1">
+                </label>
+                <label><span class="settings-field-label">Temperature</span>
+                  <input id="temperature" type="number" step="0.1" min="0" max="2">
+                </label>
+                <label><span class="settings-field-label">Top P</span>
+                  <input id="top_p" type="number" step="0.1" min="0" max="1">
+                </label>
+                <label><span class="settings-field-label">Top K</span>
+                  <input id="top_k" type="number" step="1" min="0">
+                </label>
+                <label><span class="settings-field-label">Repetition Penalty</span>
+                  <input id="repetition_penalty" type="number" step="0.1" min="0">
+                </label>
+                <label><span class="settings-field-label">Presence Penalty</span>
+                  <input id="presence_penalty" type="number" step="0.1">
+                </label>
+                <label><span class="settings-field-label">Max Tokens</span>
+                  <input id="max_tokens" type="number" step="1" min="1">
+                </label>
+              </div>
+            </section>
+            <section id="settingsVisionSection" class="settings-subpanel full">
+              <div class="settings-subpanel-header">
+                <h4 class="settings-subpanel-title">Vision</h4>
+                <label class="settings-inline-toggle">
+                  <input id="visionEnabled" type="checkbox">
+                  <span>Enable vision</span>
+                </label>
+              </div>
+              <div id="projectorStatusText" class="runtime-compact">No vision projector configured.</div>
+              <div class="settings-action-row full">
+                <button id="downloadProjectorBtn" class="ghost-btn" type="button">Download vision encoder</button>
+              </div>
+            </section>
+          </section>
+        </div>
+      </div>
+      <div id="settingsYamlPanel" class="settings-workspace-panel" hidden>
+        <section class="settings-section full">
+          <h3 class="settings-section-title">Whole settings document</h3>
+          <div class="settings-section-note">Edit and apply the full settings document atomically.</div>
+          <textarea id="settingsYamlInput" class="settings-yaml-input" spellcheck="false" placeholder="Loading YAML..."></textarea>
+          <div class="settings-action-row full">
+            <button id="settingsYamlReloadBtn" class="ghost-btn" type="button">Reload YAML</button>
+            <button id="settingsYamlApplyBtn" class="ghost-btn" type="button">Apply YAML</button>
+          </div>
+          <div id="settingsYamlStatus" class="runtime-compact">No YAML loaded yet.</div>
+        </section>
+      </div>
+    </div>
+  </div>
+  <div id="legacySettingsBackdrop" class="settings-backdrop legacy-settings-backdrop" hidden></div>
+  <div id="legacySettingsModal" class="settings-modal legacy-settings-modal" role="dialog" aria-modal="true" aria-labelledby="legacySettingsModalTitle" hidden>
+    <div class="settings-modal-shell">
+      <div class="settings-modal-header">
+        <div>
+          <h2 id="legacySettingsModalTitle" class="settings-modal-title">Advanced settings</h2>
+          <p class="settings-modal-note">Legacy runtime and diagnostic controls kept around during the migration.</p>
+        </div>
+        <button id="legacySettingsCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close advanced settings">Close</button>
+      </div>
+      <div class="settings-grid">
+        <section id="legacySettingsRuntimeSection" class="settings-section full">
+          <h3 class="settings-section-title">Runtime controls</h3>
+          <div class="settings-section-note">Automatic default-model bootstrap download is temporarily paused.</div>
+          <label class="full" style="display:flex; align-items:center; gap:8px;">
+            <input id="largeModelOverrideEnabled" type="checkbox">
+            <span>Allow unsupported large models (try anyway)</span>
+          </label>
+          <div class="settings-action-row full">
+            <button id="applyLargeModelOverrideBtn" class="ghost-btn" type="button">Apply compatibility override</button>
+          </div>
+          <div id="largeModelOverrideStatus" class="runtime-compact">Compatibility override: default warnings</div>
+          <label class="full">GGUF loading mode (requires runtime restart)
+            <select id="llamaMemoryLoadingMode">
+              <option value="auto">Automatic (profile-based)</option>
+              <option value="full_ram">Full RAM load (--no-mmap)</option>
+              <option value="mmap">Memory-mapped (mmap)</option>
+            </select>
+          </label>
+          <div class="settings-action-row full">
+            <button id="applyLlamaMemoryLoadingBtn" class="ghost-btn" type="button">Apply memory loading + restart</button>
+          </div>
+          <div id="llamaMemoryLoadingStatus" class="runtime-compact">Current memory loading: unknown</div>
+          <div class="full">
+            <h3 class="settings-section-title">Llama Runtime Bundle</h3>
+            <div id="llamaRuntimeCurrent" class="runtime-compact">Current runtime: unknown</div>
+            <label class="full">Installed/Test Bundles
+              <select id="llamaRuntimeBundleSelect">
+                <option value="">No bundles discovered</option>
+              </select>
+            </label>
+            <div class="settings-action-row full">
+              <button id="switchLlamaRuntimeBtn" class="ghost-btn" type="button">Switch llama runtime</button>
+            </div>
+            <div id="llamaRuntimeSwitchStatus" class="runtime-compact">No runtime switch in progress.</div>
+          </div>
+          <div class="settings-action-row full">
+            <button id="resetRuntimeBtn" class="ghost-btn danger-btn" type="button">Unload model + clean memory + restart</button>
+          </div>
+        </section>
+        <section class="settings-section full">
+          <h3 class="settings-section-title">Power calibration</h3>
+          <details id="settingsPowerCalibration" class="settings-subdetails full" open>
+            <summary>PMIC to wall-meter calibration</summary>
+            <div class="settings-section-note">Optional wall-meter calibration for Pi 5 power estimates.</div>
+            <div id="powerCalibrationLiveStatus" class="runtime-compact">Current PMIC raw power: --</div>
+            <label class="full">Wall meter reading (W)
+              <input id="powerCalibrationWallWatts" type="number" min="0" step="0.01" placeholder="e.g. 9.4">
+            </label>
+            <div class="settings-action-row full">
+              <button id="capturePowerCalibrationSampleBtn" class="ghost-btn" type="button">Capture calibration sample</button>
+              <button id="fitPowerCalibrationBtn" class="ghost-btn" type="button">Compute calibration</button>
+              <button id="resetPowerCalibrationBtn" class="ghost-btn danger-btn" type="button">Reset calibration</button>
+            </div>
+            <div id="powerCalibrationStatus" class="runtime-compact">Power calibration: default correction</div>
+          </details>
+        </section>
+      </div>
+    </div>
+  </div>
+  <div id="editBackdrop" class="edit-backdrop" hidden></div>
+  <div id="editModal" class="edit-modal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle" hidden>
+    <div class="edit-modal-shell">
+      <div class="edit-modal-header">
+        <div>
+          <h2 id="editModalTitle" class="edit-modal-title">Edit message</h2>
+          <p id="editModalNote" class="edit-modal-note">Update the message and resend from this point in the conversation.</p>
+        </div>
+        <button id="editCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close edit message dialog">Close</button>
+      </div>
+      <textarea id="editMessageInput" class="edit-modal-input" placeholder="Update your message..."></textarea>
+      <div class="edit-modal-actions">
+        <div id="editModalHint" class="edit-modal-hint">Everything after this turn will be replaced by the new run.</div>
+        <div class="edit-modal-action-row">
+          <button id="editCancelBtn" class="ghost-btn" type="button">Cancel</button>
+          <button id="editSendBtn" class="primary-btn edit-send-btn" type="button">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/vendor/marked.umd.js"></script>
+  <script src="/assets/vendor/purify.min.js"></script>
+    <script src="/assets/chat.js"></script>
+</body>
+</html>
