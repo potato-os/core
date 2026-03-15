@@ -477,6 +477,8 @@ fi
 if [ "${DISABLE_WARMUP}" = "1" ]; then
   extra_args+=(--no-warmup)
 fi
+REASONING_FORMAT="${POTATO_REASONING_FORMAT:-none}"
+extra_args+=(--reasoning-format "${REASONING_FORMAT}")
 if should_disable_mmap; then
   extra_args+=(--no-mmap)
   printf 'Applying no-mmap runtime profile for local weights (disable GGUF mmap streaming)\n' >&2
