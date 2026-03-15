@@ -34,6 +34,7 @@ DEFAULT_MODEL_CHAT_SETTINGS = {
     "generation_mode": "random",
     "seed": 42,
     "system_prompt": "",
+    "cache_prompt": True,
 }
 
 DEFAULT_MODEL_VISION_SETTINGS = {
@@ -142,6 +143,7 @@ def _normalize_chat_settings(raw_value: Any) -> dict[str, Any]:
             default=DEFAULT_MODEL_CHAT_SETTINGS["seed"],
         ),
         "system_prompt": str(raw.get("system_prompt", DEFAULT_MODEL_CHAT_SETTINGS["system_prompt"]) or ""),
+        "cache_prompt": bool(raw.get("cache_prompt", DEFAULT_MODEL_CHAT_SETTINGS["cache_prompt"])),
     }
 
 

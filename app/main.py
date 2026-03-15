@@ -1480,6 +1480,7 @@ def _merge_defaults(payload: dict[str, Any]) -> dict[str, Any]:
         if key == "seed" and "seed" not in merged:
             continue
         merged.setdefault(key, value)
+    merged.setdefault("cache_prompt", True)
     return merged
 
 
@@ -1498,6 +1499,7 @@ def _merge_active_model_chat_defaults(payload: dict[str, Any], *, runtime: Runti
         "max_tokens",
         "stream",
         "generation_mode",
+        "cache_prompt",
     ):
         if key not in merged and key in chat_settings:
             merged[key] = chat_settings[key]

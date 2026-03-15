@@ -406,6 +406,110 @@ def _stream_response(status_code: int, payload: bytes):
     )
 
 
+def test_chat_sets_cache_prompt_true_by_default(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    request_payload = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-cp1",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                },
+            )
+        )
+
+        response = client.post("/v1/chat/completions", json=request_payload)
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert forwarded["cache_prompt"] is True
+
+
+def test_chat_does_not_forward_system_prompt_field(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    request_payload = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-sp1",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                },
+            )
+        )
+
+        response = client.post("/v1/chat/completions", json=request_payload)
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert "system_prompt" not in forwarded
+
+
+def test_chat_forwards_nonempty_system_prompt(client, runtime, monkeypatch):
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    request_payload = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "hello"}],
+        "system_prompt": "You are a pirate.",
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-sp2",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "arrr"}}],
+                },
+            )
+        )
+
+        response = client.post("/v1/chat/completions", json=request_payload)
+
+    assert route.called
+    assert response.status_code == 200
+    forwarded = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert forwarded["system_prompt"] == "You are a pirate."
+
+
+def test_cache_prompt_persists_in_model_settings():
+    from app.model_state import normalize_model_settings
+
+    settings = normalize_model_settings(
+        {"chat": {"cache_prompt": False}},
+        filename="test.gguf",
+    )
+    assert settings["chat"]["cache_prompt"] is False
+
+    settings_default = normalize_model_settings(
+        {"chat": {}},
+        filename="test.gguf",
+    )
+    assert settings_default["chat"]["cache_prompt"] is True
+
+
 def _set_active_model_ready(runtime, model_id: str, filename: str) -> None:
     save_models_state(
         runtime,
