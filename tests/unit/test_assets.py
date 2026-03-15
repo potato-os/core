@@ -30,6 +30,13 @@ def test_start_llama_uses_q8_kv_cache_by_default():
     assert 'CACHE_TYPE_V="${POTATO_CACHE_TYPE_V:-q8_0}"' in script
 
 
+def test_start_llama_supports_q4_v_cache_override():
+    script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
+
+    assert 'CACHE_TYPE_V="${POTATO_CACHE_TYPE_V:-q8_0}"' in script
+    assert "--cache-type-v" in script
+
+
 def test_start_llama_does_not_override_ctx_size_for_a3b():
     script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
 
