@@ -4608,6 +4608,9 @@ This will restart the local llama runtime process.`
           }
         }
       } finally {
+        if (chatHistory.length > 0) {
+          try { await saveActiveSession(); } catch (_e) { /* IndexedDB write failed — degrade gracefully */ }
+        }
         requestInFlight = false;
         activeRequest = null;
         setSendEnabled();
@@ -4615,9 +4618,6 @@ This will restart the local llama runtime process.`
         setComposerActivity("");
         setCancelEnabled(false);
         focusPromptInput();
-        if (chatHistory.length > 0) {
-          try { await saveActiveSession(); } catch (_e) { /* IndexedDB write failed — degrade gracefully */ }
-        }
       }
     }
 
