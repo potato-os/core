@@ -65,11 +65,16 @@ resolve_bundle_src() {
     echo "${LLAMA_BUNDLE_SRC}"
     return
   fi
-  if [ ! -d "${LLAMA_BUNDLE_ROOT}" ]; then
-    echo ""
+  local family="${POTATO_LLAMA_RUNTIME_FAMILY:-ik_llama}"
+  local slot_dir="${LLAMA_BUNDLE_ROOT}/runtimes/${family}"
+  if [ -d "${slot_dir}" ] && [ -x "${slot_dir}/bin/llama-server" ]; then
+    echo "${slot_dir}"
     return
   fi
-  find "${LLAMA_BUNDLE_ROOT}" -mindepth 1 -maxdepth 1 -type d -name 'llama_server_bundle_*' | sort | tail -n 1
+  # Legacy fallback
+  if [ -d "${LLAMA_BUNDLE_ROOT}" ]; then
+    find "${LLAMA_BUNDLE_ROOT}" -mindepth 1 -maxdepth 1 -type d -name 'llama_server_bundle_*' 2>/dev/null | sort | tail -n 1
+  fi
 }
 
 PI_HOST="$(pick_host)"

@@ -693,11 +693,12 @@ def read_llama_runtime_bundle_marker(runtime: RuntimeConfig) -> dict[str, Any] |
 
 def write_llama_runtime_bundle_marker(runtime: RuntimeConfig, bundle: dict[str, Any]) -> dict[str, Any]:
     payload = {
+        "family": str(bundle.get("family") or ""),
         "source_bundle_path": str(bundle.get("path") or ""),
-        "source_bundle_name": str(bundle.get("name") or ""),
+        "source_bundle_name": str(bundle.get("name") or bundle.get("family") or ""),
         "profile": str(bundle.get("profile") or "unknown"),
-        "version_summary": bundle.get("version_summary"),
-        "llama_cpp_commit": bundle.get("llama_cpp_commit"),
+        "version_summary": bundle.get("version_summary") or bundle.get("version"),
+        "llama_cpp_commit": bundle.get("llama_cpp_commit") or bundle.get("commit"),
         "switched_at_unix": int(time.time()),
     }
     _atomic_write_json(_llama_runtime_marker_path(runtime), payload)
@@ -756,21 +757,64 @@ def build_large_model_compatibility(
     }
 
 
+SUPPORTED_RUNTIME_FAMILIES = ("ik_llama", "llama_cpp")
+
+
+def _runtime_slots_dir(runtime: RuntimeConfig) -> Path:
+    return runtime.base_dir / "runtimes"
+
+
+def discover_runtime_slots(runtime: RuntimeConfig) -> list[dict[str, Any]]:
+    """Discover the two explicit runtime slots (ik_llama, llama_cpp)."""
+    slots: list[dict[str, Any]] = []
+    slots_dir = _runtime_slots_dir(runtime)
+    for family in SUPPORTED_RUNTIME_FAMILIES:
+        slot_dir = slots_dir / family
+        server_bin = slot_dir / "bin" / "llama-server"
+        if not slot_dir.is_dir() or not server_bin.exists():
+            continue
+        metadata: dict[str, Any] = {"family": family, "path": str(slot_dir)}
+        runtime_json = slot_dir / "runtime.json"
+        if runtime_json.exists():
+            try:
+                meta = json.loads(runtime_json.read_text(encoding="utf-8"))
+                if isinstance(meta, dict):
+                    metadata.update(meta)
+            except (OSError, json.JSONDecodeError):
+                pass
+        metadata.setdefault("commit", "unknown")
+        metadata.setdefault("profile", "unknown")
+        metadata.setdefault("repo", "")
+        metadata.setdefault("build_timestamp", "")
+        metadata.setdefault("version", "")
+        slots.append(metadata)
+    return slots
+
+
+def find_runtime_slot_by_family(runtime: RuntimeConfig, family: str) -> dict[str, Any] | None:
+    """Find a runtime slot by family name."""
+    for slot in discover_runtime_slots(runtime):
+        if slot.get("family") == family:
+            return slot
+    return None
+
+
 def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = None) -> dict[str, Any]:
     install_dir = _llama_runtime_install_dir(runtime)
     marker = read_llama_runtime_bundle_marker(runtime) or {}
-    current_source_bundle_path = str(marker.get("source_bundle_path") or "")
-    available = discover_llama_runtime_bundles(runtime)
-    for bundle in available:
-        bundle["is_current"] = bool(current_source_bundle_path and bundle.get("path") == current_source_bundle_path)
+    available_runtimes = discover_runtime_slots(runtime)
+
+    # Mark which slot is currently active based on the marker
+    current_family = str(marker.get("family") or marker.get("source_bundle_name") or "").strip()
+    for slot in available_runtimes:
+        slot["is_active"] = slot.get("family") == current_family
 
     switch_snapshot = {
         "active": False,
-        "target_bundle_path": None,
+        "target_family": None,
         "started_at_unix": None,
         "completed_at_unix": None,
         "error": None,
-        "last_bundle_path": None,
     }
     if app is not None:
         raw = getattr(app.state, "llama_runtime_switch_state", None)
@@ -778,18 +822,18 @@ def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = Non
             switch_snapshot.update(
                 {
                     "active": bool(raw.get("active", False)),
-                    "target_bundle_path": raw.get("target_bundle_path"),
+                    "target_family": raw.get("target_family"),
                     "started_at_unix": raw.get("started_at_unix"),
                     "completed_at_unix": raw.get("completed_at_unix"),
                     "error": raw.get("error"),
-                    "last_bundle_path": raw.get("last_bundle_path"),
                 }
             )
 
     current = {
         "install_dir": str(install_dir),
         "exists": install_dir.exists(),
-        "has_server_binary": (_llama_runtime_install_dir(runtime) / "bin" / "llama-server").exists(),
+        "has_server_binary": (install_dir / "bin" / "llama-server").exists(),
+        "family": marker.get("family"),
         "source_bundle_path": marker.get("source_bundle_path"),
         "source_bundle_name": marker.get("source_bundle_name"),
         "profile": marker.get("profile"),
@@ -800,7 +844,7 @@ def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = Non
 
     return {
         "current": current,
-        "available_bundles": available,
+        "available_runtimes": available_runtimes,
         "switch": switch_snapshot,
         "memory_loading": build_llama_memory_loading_status(runtime),
         "large_model_override": build_llama_large_model_override_status(runtime),

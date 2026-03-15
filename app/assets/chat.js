@@ -3307,14 +3307,16 @@
     function renderLlamaRuntimeStatus(statusPayload) {
       const runtimePayload = statusPayload?.llama_runtime || {};
       const currentEl = document.getElementById("llamaRuntimeCurrent");
-      const selectEl = document.getElementById("llamaRuntimeBundleSelect");
+      const selectEl = document.getElementById("llamaRuntimeFamilySelect");
       if (currentEl) {
         const current = runtimePayload?.current || {};
-        const sourceName = String(current?.source_bundle_name || "").trim();
+        const family = String(current?.family || current?.source_bundle_name || "").trim();
+        const commit = String(current?.llama_cpp_commit || "").trim();
         const profile = String(current?.profile || "").trim();
         const serverPresent = current?.has_server_binary === true;
         const parts = [];
-        if (sourceName) parts.push(sourceName);
+        if (family) parts.push(family);
+        if (commit) parts.push(commit);
         if (profile) parts.push(`profile=${profile}`);
         if (!parts.length && serverPresent) {
           parts.push("custom/current install");
@@ -3323,36 +3325,26 @@
       }
 
       if (selectEl) {
-        const bundles = Array.isArray(runtimePayload?.available_bundles) ? runtimePayload.available_bundles : [];
+        const runtimes = Array.isArray(runtimePayload?.available_runtimes) ? runtimePayload.available_runtimes : [];
         const prevValue = String(selectEl.value || "");
         selectEl.replaceChildren();
-        if (!bundles.length) {
+        if (!runtimes.length) {
           const option = document.createElement("option");
           option.value = "";
-          option.textContent = "No bundles discovered";
+          option.textContent = "No runtimes available";
           selectEl.appendChild(option);
           selectEl.disabled = true;
         } else {
-          let selectedApplied = false;
-          for (const bundle of bundles) {
+          for (const rt of runtimes) {
             const option = document.createElement("option");
-            option.value = String(bundle?.path || "");
-            const labelParts = [String(bundle?.name || "bundle")];
-            if (bundle?.profile) {
-              labelParts.push(`(${bundle.profile})`);
-            }
-            if (bundle?.is_current === true) {
-              labelParts.push("[current]");
-            }
-            option.textContent = labelParts.join(" ");
-            if (option.value && (option.value === prevValue || (!prevValue && bundle?.is_current === true))) {
+            option.value = String(rt?.family || "");
+            const label = String(rt?.family || "unknown").replace("_", " ");
+            const commit = String(rt?.commit || "").substring(0, 8);
+            option.textContent = commit ? `${label} (${commit})` : label;
+            if (rt?.is_active === true || option.value === prevValue) {
               option.selected = true;
-              selectedApplied = true;
             }
             selectEl.appendChild(option);
-          }
-          if (!selectedApplied && selectEl.options.length > 0) {
-            selectEl.options[0].selected = true;
           }
           selectEl.disabled = false;
         }
@@ -3412,12 +3404,12 @@
 
       const switchState = runtimePayload?.switch || {};
       if (switchState?.active) {
-        const target = String(switchState?.target_bundle_path || "selected bundle");
-        setLlamaRuntimeSwitchStatus(`Switching runtime bundle... ${target}`);
+        const target = String(switchState?.target_family || "selected runtime");
+        setLlamaRuntimeSwitchStatus(`Switching runtime... ${target}`);
       } else if (switchState?.error) {
         setLlamaRuntimeSwitchStatus(`Last runtime switch error: ${switchState.error}`);
-      } else if (runtimePayload?.current?.source_bundle_name) {
-        setLlamaRuntimeSwitchStatus(`Active runtime bundle: ${runtimePayload.current.source_bundle_name}`);
+      } else if (runtimePayload?.current?.family || runtimePayload?.current?.source_bundle_name) {
+        setLlamaRuntimeSwitchStatus(`Active runtime: ${runtimePayload.current.family || runtimePayload.current.source_bundle_name}`);
       } else {
         setLlamaRuntimeSwitchStatus("No runtime switch in progress.");
       }
@@ -3484,32 +3476,29 @@
 
     async function switchLlamaRuntimeBundle() {
       if (llamaRuntimeSwitchInFlight) return;
-      const select = document.getElementById("llamaRuntimeBundleSelect");
-      const bundlePath = String(select?.value || "").trim();
-      if (!bundlePath) {
-        appendMessage("assistant", "No llama runtime bundle selected.");
+      const select = document.getElementById("llamaRuntimeFamilySelect");
+      const family = String(select?.value || "").trim();
+      if (!family) {
+        appendMessage("assistant", "No llama runtime selected.");
         return;
       }
-      const selectedLabel = select?.selectedOptions?.[0]?.textContent || bundlePath;
+      const selectedLabel = select?.selectedOptions?.[0]?.textContent || family;
       const confirmed = window.confirm(
-        `Switch llama runtime to:
-${selectedLabel}
-
-This will restart the local llama runtime process.`
+        `Switch llama runtime to ${selectedLabel}?\n\nThis will restart the local llama runtime process.`
       );
       if (!confirmed) return;
 
       llamaRuntimeSwitchInFlight = true;
       setLlamaRuntimeSwitchButtonState(true);
-      setLlamaRuntimeSwitchStatus("Switching runtime bundle...");
+      setLlamaRuntimeSwitchStatus("Switching runtime...");
       setComposerActivity("Switching llama runtime...");
       try {
-        const { res, body } = await postJson("/internal/llama-runtime/switch", { bundle_path: bundlePath });
+        const { res, body } = await postJson("/internal/llama-runtime/switch", { family });
         if (!res.ok || body?.switched !== true) {
           appendMessage("assistant", `Could not switch llama runtime (${body?.reason || res.status}).`);
           return;
         }
-        appendMessage("assistant", `Switched llama runtime bundle to ${body?.bundle?.name || "selected bundle"}.`);
+        appendMessage("assistant", `Switched llama runtime to ${body?.family || "selected runtime"}.`);
         setComposerActivity("Llama runtime switched. Reconnecting...");
       } catch (err) {
         appendMessage("assistant", `Could not switch llama runtime: ${err}`);

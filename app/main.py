@@ -94,7 +94,7 @@ try:
         default_system_metrics_snapshot,
         discover_llama_runtime_bundles,
         fetch_remote_content_length_bytes,
-        find_llama_runtime_bundle_by_path,
+        find_runtime_slot_by_family,
         get_free_storage_bytes,
         get_large_model_warn_threshold_bytes,
         get_model_upload_max_bytes,
@@ -198,7 +198,7 @@ except ModuleNotFoundError:
         default_system_metrics_snapshot,
         discover_llama_runtime_bundles,
         fetch_remote_content_length_bytes,
-        find_llama_runtime_bundle_by_path,
+        find_runtime_slot_by_family,
         get_free_storage_bytes,
         get_large_model_warn_threshold_bytes,
         get_model_upload_max_bytes,
@@ -1805,7 +1805,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         )
 
     @app.post("/internal/llama-runtime/switch")
-    async def switch_llama_runtime_bundle(
+    async def switch_llama_runtime(
         request: Request,
         runtime_cfg: RuntimeConfig = Depends(get_runtime),
     ) -> JSONResponse:
@@ -1816,13 +1816,13 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
             )
 
         payload = await request.json()
-        bundle_path = str(payload.get("bundle_path") or "").strip()
-        if not bundle_path:
-            return JSONResponse(status_code=400, content={"switched": False, "reason": "bundle_path_required"})
+        family = str(payload.get("family") or "").strip()
+        if not family:
+            return JSONResponse(status_code=400, content={"switched": False, "reason": "family_required"})
 
-        bundle = find_llama_runtime_bundle_by_path(runtime_cfg, bundle_path)
-        if bundle is None:
-            return JSONResponse(status_code=404, content={"switched": False, "reason": "bundle_not_found"})
+        slot = find_runtime_slot_by_family(runtime_cfg, family)
+        if slot is None:
+            return JSONResponse(status_code=404, content={"switched": False, "reason": "runtime_not_found"})
 
         async with app.state.llama_runtime_switch_lock:
             switch_state = app.state.llama_runtime_switch_state
@@ -1832,7 +1832,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
             switch_state.update(
                 {
                     "active": True,
-                    "target_bundle_path": str(bundle.get("path") or bundle_path),
+                    "target_family": family,
                     "started_at_unix": int(time.time()),
                     "completed_at_unix": None,
                     "error": None,
@@ -1841,7 +1841,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
 
             try:
                 restarted, restart_reason = await restart_managed_llama_process(app)
-                install_result = await install_llama_runtime_bundle(runtime_cfg, Path(str(bundle["path"])))
+                install_result = await install_llama_runtime_bundle(runtime_cfg, Path(str(slot["path"])))
                 if not install_result.get("ok"):
                     reason = str(install_result.get("reason") or "install_failed")
                     switch_state.update(
@@ -1849,7 +1849,6 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                             "active": False,
                             "completed_at_unix": int(time.time()),
                             "error": reason,
-                            "last_bundle_path": switch_state.get("last_bundle_path"),
                         }
                     )
                     return JSONResponse(
@@ -1857,28 +1856,28 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                         content={
                             "switched": False,
                             "reason": reason,
-                            "bundle": bundle,
+                            "family": family,
                             "restarted": restarted,
                             "restart_reason": restart_reason,
                         },
                     )
 
-                marker = write_llama_runtime_bundle_marker(runtime_cfg, bundle)
+                marker = write_llama_runtime_bundle_marker(runtime_cfg, slot)
                 switch_state.update(
                     {
                         "active": False,
-                        "target_bundle_path": None,
+                        "target_family": None,
                         "completed_at_unix": int(time.time()),
                         "error": None,
-                        "last_bundle_path": str(bundle.get("path") or ""),
                     }
                 )
                 return JSONResponse(
                     status_code=200,
                     content={
                         "switched": True,
-                        "reason": "bundle_switched",
-                        "bundle": bundle,
+                        "reason": "runtime_switched",
+                        "family": family,
+                        "slot": slot,
                         "install": install_result,
                         "restarted": restarted,
                         "restart_reason": restart_reason,
