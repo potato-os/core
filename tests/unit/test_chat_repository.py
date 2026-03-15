@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 
 from app.repositories import chat_repository
+from app.repositories.chat_repository import BackendProxyError
 
 
 class _FakeUpstream:
@@ -171,3 +173,76 @@ def test_fake_default_timing_targets_about_five_tokens_per_second(monkeypatch: p
     prefill_s, chunk_s = chat_repository._read_fake_timing_config()
     assert prefill_s == 0.0
     assert 0.19 <= chunk_s <= 0.23
+
+
+class _TimeoutCapturingClient:
+    """Fake httpx.AsyncClient that captures the timeout and raises ReadTimeout."""
+
+    captured_timeouts: list[httpx.Timeout] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        timeout = kwargs.get("timeout")
+        if isinstance(timeout, httpx.Timeout):
+            _TimeoutCapturingClient.captured_timeouts.append(timeout)
+
+    def build_request(self, **kwargs: Any) -> dict[str, Any]:
+        return kwargs
+
+    async def send(self, request: Any, **kwargs: Any) -> None:
+        raise httpx.ReadTimeout("read timed out")
+
+    async def post(self, url: str, **kwargs: Any) -> None:
+        raise httpx.ReadTimeout("read timed out")
+
+    async def aclose(self) -> None:
+        pass
+
+    async def __aenter__(self) -> "_TimeoutCapturingClient":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        pass
+
+
+@pytest.mark.anyio
+async def test_llama_stream_uses_unbounded_read_timeout(monkeypatch: pytest.MonkeyPatch):
+    _TimeoutCapturingClient.captured_timeouts.clear()
+    monkeypatch.setattr(chat_repository.httpx, "AsyncClient", _TimeoutCapturingClient)
+    repo = chat_repository.LlamaCppRepository("http://llama.local")
+    with pytest.raises(BackendProxyError):
+        await repo.create_chat_completion(
+            payload={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+            forward_headers={},
+        )
+    assert len(_TimeoutCapturingClient.captured_timeouts) == 1
+    assert _TimeoutCapturingClient.captured_timeouts[0].read is None
+
+
+@pytest.mark.anyio
+async def test_llama_non_stream_uses_unbounded_read_timeout(monkeypatch: pytest.MonkeyPatch):
+    _TimeoutCapturingClient.captured_timeouts.clear()
+    monkeypatch.setattr(chat_repository.httpx, "AsyncClient", _TimeoutCapturingClient)
+    repo = chat_repository.LlamaCppRepository("http://llama.local")
+    with pytest.raises(BackendProxyError):
+        await repo.create_chat_completion(
+            payload={"stream": False, "messages": [{"role": "user", "content": "hi"}]},
+            forward_headers={},
+        )
+    assert len(_TimeoutCapturingClient.captured_timeouts) == 1
+    assert _TimeoutCapturingClient.captured_timeouts[0].read is None
+
+
+@pytest.mark.anyio
+async def test_llama_both_paths_have_bounded_connect_timeout(monkeypatch: pytest.MonkeyPatch):
+    _TimeoutCapturingClient.captured_timeouts.clear()
+    monkeypatch.setattr(chat_repository.httpx, "AsyncClient", _TimeoutCapturingClient)
+    repo = chat_repository.LlamaCppRepository("http://llama.local")
+    for stream in (True, False):
+        with pytest.raises(BackendProxyError):
+            await repo.create_chat_completion(
+                payload={"stream": stream, "messages": [{"role": "user", "content": "hi"}]},
+                forward_headers={},
+            )
+    assert len(_TimeoutCapturingClient.captured_timeouts) == 2
+    for t in _TimeoutCapturingClient.captured_timeouts:
+        assert t.connect == 5.0
