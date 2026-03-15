@@ -334,8 +334,7 @@ printf '%s\n' "$@" > "$ARGS_OUT"
     assert str(model_path) in args
     assert "--mmproj" not in args
     assert "--ctx-size" in args
-    assert "4096" in args
-    assert "16384" not in args
+    assert "16384" in args
 
 
 def test_start_llama_qwen35_a3b_vision_enabled_uses_mmproj(tmp_path: Path):
@@ -376,8 +375,7 @@ printf '%s\\n' "$@" > "$ARGS_OUT"
     assert "--mmproj" in args
     assert str(mmproj_path) in args
     assert "--ctx-size" in args
-    assert "4096" in args
-    assert "16384" not in args
+    assert "16384" in args
 
 
 def test_start_llama_qwen35_a3b_honors_explicit_ctx_override(tmp_path: Path):

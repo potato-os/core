@@ -11,7 +11,7 @@ CTX_SIZE_DEFAULT="16384"
 CTX_SIZE="${POTATO_CTX_SIZE:-${CTX_SIZE_DEFAULT}}"
 LLAMA_PARALLEL="${POTATO_LLAMA_PARALLEL:-1}"
 SLOT_SAVE_PATH="${POTATO_SLOT_SAVE_PATH:-${POTATO_BASE_DIR}/state/llama-slots}"
-CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-0}"
+CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-1024}"
 
 MMPROJ_PATH="${POTATO_MMPROJ_PATH:-}"
 AUTO_DOWNLOAD_MMPROJ="${POTATO_AUTO_DOWNLOAD_MMPROJ:-1}"
@@ -443,12 +443,9 @@ pick_mmproj() {
 [ -f "${MODEL_PATH}" ] || die "Model file not found: ${MODEL_PATH}"
 [ -x "${LLAMA_SERVER_BIN}" ] || die "llama-server binary not found or not executable: ${LLAMA_SERVER_BIN}"
 
-# Qwen3.5-35B-A3B on Pi5 16GB is memory-sensitive; use a smaller default context
-# unless the operator explicitly set POTATO_CTX_SIZE.
-if model_is_qwen35_a3b && [ -z "${POTATO_CTX_SIZE+x}" ]; then
-  CTX_SIZE="4096"
-  printf 'Applying Qwen3.5-35B-A3B runtime profile: ctx-size=%s\n' "${CTX_SIZE}" >&2
-fi
+# Qwen3.5-35B-A3B: use the default 16k context. The previous 4096 override
+# caused context-shift crashes (GGML_ASSERT in rope) and is no longer needed
+# with the ik_llama 433531dd build on Pi5 16GB with q8_0 KV cache.
 
 if model_requires_mmproj; then
   pick_mmproj

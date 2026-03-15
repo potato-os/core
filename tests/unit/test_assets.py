@@ -15,13 +15,25 @@ def test_start_llama_contains_required_flags():
     assert "--ctx-size" in script
     assert 'CTX_SIZE_DEFAULT="16384"' in script
     assert 'CTX_SIZE="${POTATO_CTX_SIZE:-${CTX_SIZE_DEFAULT}}"' in script
-    assert "Applying Qwen3.5-35B-A3B runtime profile" in script
-    assert 'CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-0}"' in script
+    assert 'CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-1024}"' in script
     assert "--cache-ram" in script
     assert "--jinja" in script
     assert "--no-warmup" in script
     assert 'DISABLE_WARMUP="${POTATO_LLAMA_NO_WARMUP:-1}"' in script
     assert "--slot-save-path" in script
+
+
+def test_start_llama_uses_q8_kv_cache_by_default():
+    script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
+
+    assert 'CACHE_TYPE_K="${POTATO_CACHE_TYPE_K:-q8_0}"' in script
+    assert 'CACHE_TYPE_V="${POTATO_CACHE_TYPE_V:-q8_0}"' in script
+
+
+def test_start_llama_does_not_override_ctx_size_for_a3b():
+    script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
+
+    assert 'CTX_SIZE="4096"' not in script
 
 
 def test_run_script_defaults_to_llama_backend_without_fake_fallback():
