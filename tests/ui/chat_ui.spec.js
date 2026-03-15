@@ -359,7 +359,7 @@ test("large image selection shows loading phases and optimization metadata", asy
   });
   await waitUntilReady(page);
 
-  await page.locator("#imageInput").setInputFiles("references/test-cat.jpg");
+  await page.locator("#imageInput").setInputFiles("tests/ui/fixtures/test-cat.jpg");
 
   await expect(page.locator("#imageMeta")).toBeVisible();
   await expect(page.locator("#imageMeta")).toContainText("optimized from");
@@ -393,7 +393,7 @@ test("large image selection shows loading phases and optimization metadata", asy
 test("image upload returns typing focus to prompt and keeps it after enter-send", async ({ page }) => {
   await waitUntilReady(page);
 
-  await page.locator("#imageInput").setInputFiles("references/test-cat.jpg");
+  await page.locator("#imageInput").setInputFiles("tests/ui/fixtures/test-cat.jpg");
   await expect(page.locator("#imageMeta")).toBeVisible();
   await expect(page.locator("#userPrompt")).toBeFocused();
 
@@ -507,7 +507,7 @@ test("text-only active model disables image attach and explains why", async ({ p
   await expect(page.locator("#composerVisionNotice")).toContainText("text-only");
   await expect(page.locator("#composerVisionNotice")).toContainText("vision-capable");
 
-  await page.locator("#imageInput").setInputFiles("references/test-cat.jpg");
+  await page.locator("#imageInput").setInputFiles("tests/ui/fixtures/test-cat.jpg");
   await expect(page.locator("#imageMeta")).toBeHidden();
   await expect(page.locator("#imagePreviewWrap")).toBeHidden();
   await expect(page.locator("#clearImageBtn")).toBeHidden();
@@ -637,7 +637,7 @@ test("image-send failures show friendly guidance and leave the composer ready fo
 
   await waitUntilReady(page);
 
-  await page.locator("#imageInput").setInputFiles("references/test-cat.jpg");
+  await page.locator("#imageInput").setInputFiles("tests/ui/fixtures/test-cat.jpg");
   await expect(page.locator("#imageMeta")).toBeVisible();
   await expect(page.locator("#clearImageBtn")).toBeVisible();
   await expect(page.locator("#imagePreviewWrap")).toBeVisible();
@@ -677,7 +677,7 @@ test("cancel image generation uses cancel endpoint and avoids restart endpoint",
     }
   });
 
-  await page.locator("#imageInput").setInputFiles("references/test-cat.jpg");
+  await page.locator("#imageInput").setInputFiles("tests/ui/fixtures/test-cat.jpg");
   await expect(page.locator("#imageMeta")).toBeVisible();
 
   await page.locator("#userPrompt").fill("Describe this image briefly.");
