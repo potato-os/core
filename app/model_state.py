@@ -34,7 +34,7 @@ DEFAULT_MODEL_CHAT_SETTINGS = {
     "generation_mode": "random",
     "seed": 42,
     "system_prompt": "",
-    "cache_prompt": False,
+    "cache_prompt": True,
 }
 
 DEFAULT_MODEL_VISION_SETTINGS = {

@@ -1480,7 +1480,7 @@ def _merge_defaults(payload: dict[str, Any]) -> dict[str, Any]:
         if key == "seed" and "seed" not in merged:
             continue
         merged.setdefault(key, value)
-    merged.setdefault("cache_prompt", False)
+    merged.setdefault("cache_prompt", True)
     return merged
 
 
