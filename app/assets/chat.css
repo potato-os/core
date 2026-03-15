@@ -510,6 +510,17 @@
     .badge[role="button"] {
       cursor: pointer;
       user-select: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .badge[role="button"]:hover {
+      border-color: color-mix(in srgb, var(--focus) 40%, var(--border));
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 12%, transparent);
+    }
+
+    .badge[role="button"][aria-expanded="true"] {
+      border-color: color-mix(in srgb, var(--focus) 55%, var(--border));
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 18%, transparent);
     }
 
     .model-switcher-anchor {
@@ -518,64 +529,91 @@
 
     .model-switcher {
       position: absolute;
-      top: calc(100% + 6px);
+      top: calc(100% + 8px);
       right: 0;
-      min-width: 260px;
-      max-width: 360px;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
+      min-width: 280px;
+      max-width: 380px;
+      background:
+        linear-gradient(
+          180deg,
+          color-mix(in srgb, var(--panel) 96%, white 4%),
+          color-mix(in srgb, var(--panel-muted) 20%, var(--panel) 80%)
+        );
+      border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+      border-radius: 16px;
+      box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--border) 20%, transparent);
       z-index: 200;
       opacity: 0;
-      transform: translateY(-4px);
-      transition: opacity 0.15s ease, transform 0.15s ease;
+      transform: translateY(-6px) scale(0.98);
+      transform-origin: top right;
+      transition: opacity 0.18s cubic-bezier(0.22, 1, 0.36, 1),
+                  transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
       overflow: hidden;
+      pointer-events: none;
     }
 
     .model-switcher.open {
       opacity: 1;
-      transform: translateY(0);
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
     }
 
     .model-switcher-list {
       list-style: none;
       margin: 0;
-      padding: 6px 0;
+      padding: 6px;
     }
 
     .model-switcher-item {
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 10px 14px;
+      padding: 10px 12px;
       font-size: 13px;
       font-family: inherit;
       color: var(--text);
       cursor: pointer;
-      transition: background 0.1s ease;
-      line-height: 1.3;
+      border-radius: 10px;
+      transition: background 0.12s ease, color 0.12s ease;
+      line-height: 1.35;
     }
 
     .model-switcher-item:hover:not(.disabled) {
-      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      background: color-mix(in srgb, var(--focus) 10%, transparent);
+    }
+
+    .model-switcher-item:active:not(.disabled) {
+      background: color-mix(in srgb, var(--focus) 16%, transparent);
     }
 
     .model-switcher-item.active {
-      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      background: color-mix(in srgb, var(--focus) 9%, transparent);
       font-weight: 600;
     }
 
+    .model-switcher-item.active:hover {
+      background: color-mix(in srgb, var(--focus) 14%, transparent);
+    }
+
     .model-switcher-item.disabled {
-      opacity: 0.45;
+      opacity: 0.4;
       cursor: default;
     }
 
     .model-switcher-check {
-      width: 16px;
+      width: 18px;
+      height: 18px;
       flex-shrink: 0;
-      text-align: center;
-      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      border-radius: 50%;
+      color: var(--focus);
+    }
+
+    .model-switcher-item.active .model-switcher-check {
+      background: color-mix(in srgb, var(--focus) 14%, transparent);
     }
 
     .model-switcher-name {
@@ -587,10 +625,14 @@
 
     .model-switcher-status {
       flex-shrink: 0;
-      font-size: 11px;
+      font-size: 10.5px;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.3px;
-      opacity: 0.7;
+      letter-spacing: 0.4px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      color: var(--text-muted);
+      background: color-mix(in srgb, var(--border) 40%, transparent);
     }
 
     .messages {
@@ -2335,6 +2377,18 @@
       }
       .header-actions {
         gap: 8px;
+      }
+      .model-switcher {
+        position: fixed;
+        top: auto;
+        right: 8px;
+        left: 8px;
+        bottom: 8px;
+        min-width: 0;
+        max-width: none;
+        border-radius: 18px;
+        transform-origin: bottom center;
+        box-shadow: var(--shadow), 0 0 0 100vmax rgba(0, 0, 0, 0.25);
       }
       .theme-toggle {
         width: 40px;
