@@ -257,10 +257,7 @@ qwen35_mmproj_name_candidates() {
     printf 'mmproj-%s-f16.gguf\n' "${trimmed_stem}"
   done
 
-  printf '%s\n' \
-    "mmproj-F16.gguf" \
-    "mmproj-BF16.gguf" \
-    "mmproj-F32.gguf"
+  printf '%s\n' "mmproj-F16.gguf"
 }
 
 mmproj_filename_candidates() {
@@ -283,10 +280,7 @@ mmproj_filename_candidates() {
     fi
   fi
   if model_is_qwen35_vision; then
-    printf '%s\n' \
-      "mmproj-F16.gguf" \
-      "mmproj-BF16.gguf" \
-      "mmproj-F32.gguf"
+    printf '%s\n' "mmproj-F16.gguf"
   fi
 
   case "${repo}" in
@@ -389,7 +383,7 @@ pick_mmproj() {
 
     for candidate in "${mmproj_candidates[@]}"; do
       candidate_base="$(basename "${candidate}" | tr '[:upper:]' '[:lower:]')"
-      if [[ "${candidate_base}" == mmproj-f16.gguf || "${candidate_base}" == mmproj-bf16.gguf || "${candidate_base}" == mmproj-f32.gguf || "${candidate_base}" == *qwen*3.5* ]]; then
+      if [[ "${candidate_base}" == mmproj-f16.gguf || "${candidate_base}" == *qwen*3.5* ]]; then
         compatible_candidates+=("${candidate}")
       fi
     done
