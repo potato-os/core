@@ -50,14 +50,19 @@ resolve_llama_bundle_src() {
     printf '%s\n' "${slot_dir}"
     return
   fi
-  # Legacy fallback: find a single llama_server_bundle_* directory
+  # Legacy fallback: find legacy bundle matching the requested family
   if [ -d "${LLAMA_BUNDLE_ROOT}" ]; then
     local -a found=()
+    local family_pattern=""
+    case "${LLAMA_RUNTIME_FAMILY}" in
+      ik_llama) family_pattern="*ik*" ;;
+      llama_cpp) family_pattern="*baseline*|*pi5-opt" ;;
+    esac
     while IFS= read -r d; do found+=("$d"); done < <(find "${LLAMA_BUNDLE_ROOT}" -mindepth 1 -maxdepth 1 -type d -name 'llama_server_bundle_*' 2>/dev/null)
     if [ "${#found[@]}" -eq 1 ]; then
       printf '%s\n' "${found[0]}"
     elif [ "${#found[@]}" -gt 1 ]; then
-      printf 'WARNING: multiple legacy bundles found — expected one. Using latest.\n' >&2
+      printf 'WARNING: multiple legacy bundles found — using latest matching family=%s.\n' "${LLAMA_RUNTIME_FAMILY}" >&2
       printf '%s\n' "${found[@]}" | sort | tail -n 1
     fi
   fi
@@ -145,7 +150,12 @@ if [ -n "${bundle_src}" ] && [ -x "${bundle_src}/bin/llama-server" ] && [ -d "${
   if [ -f "${LLAMA_RUNTIME_DIR}/run-llama-server.sh" ]; then
     run_sudo chmod +x "${LLAMA_RUNTIME_DIR}/run-llama-server.sh"
   fi
-  printf 'Installed llama runtime: %s -> %s (family: %s)\n' "${bundle_src}" "${LLAMA_RUNTIME_DIR}" "${LLAMA_RUNTIME_FAMILY}"
+  # Also populate the runtime slot so discover_runtime_slots() finds it
+  local slot_dir="${TARGET_ROOT}/runtimes/${LLAMA_RUNTIME_FAMILY}"
+  run_sudo mkdir -p "${slot_dir}"
+  run_sudo rsync -a --delete "${bundle_src}/" "${slot_dir}/"
+  run_sudo chmod +x "${slot_dir}/bin/llama-server"
+  printf 'Installed llama runtime: %s -> %s (family: %s, slot: %s)\n' "${bundle_src}" "${LLAMA_RUNTIME_DIR}" "${LLAMA_RUNTIME_FAMILY}" "${slot_dir}"
 else
   msg="llama runtime not found. Expected at ${LLAMA_BUNDLE_ROOT}/runtimes/${LLAMA_RUNTIME_FAMILY}/ or set POTATO_LLAMA_BUNDLE_SRC."
   if [ "${REQUIRE_LLAMA_BUNDLE}" = "1" ]; then

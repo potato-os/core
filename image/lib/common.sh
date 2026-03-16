@@ -190,6 +190,15 @@ build_stage_payload() {
     done
   fi
 
+  # Also populate the default family slot from the active bundle if no slot exists yet
+  local family="${POTATO_LLAMA_RUNTIME_FAMILY:-ik_llama}"
+  local active_slot="${potato_root}/runtimes/${family}"
+  if [ ! -d "${active_slot}/bin" ]; then
+    mkdir -p "${active_slot}"
+    rsync -a --delete "${bundle_src}/" "${active_slot}/"
+    chmod +x "${active_slot}/bin/llama-server"
+  fi
+
   if [ "${variant}" = "full" ]; then
     local model_path="${POTATO_FULL_MODEL_PATH:-}"
     local model_url="${POTATO_MODEL_URL:-${MODEL_URL_DEFAULT}}"
