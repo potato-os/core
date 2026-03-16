@@ -1,5 +1,6 @@
 const { test, expect } = require("@playwright/test");
 const {
+  waitForStatusApplied,
   waitUntilReady,
   openSettingsModal,
   closeSettingsModal,
@@ -64,6 +65,7 @@ test("renders compact Pi runtime info and toggles details view", async ({ page }
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
   await expect(page.locator("#runtimeDetails")).toBeVisible();
   await expect(page.locator("#runtimeViewToggle")).toHaveText("Hide details");
   await expect(page.locator("#runtimeDetailCpuClockValue")).toHaveText("2400 MHz");
@@ -127,6 +129,7 @@ test("runtime details apply threshold colors for clock, memory, swap, and temper
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
   await page.locator("#runtimeViewToggle").click();
 
   await expect(page.locator("#runtimeDetailCpuClockValue")).toHaveClass(/runtime-metric-critical/);
@@ -176,6 +179,7 @@ test("llama ready state shows SSD marker in connected badge for SSD-backed activ
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
   await expect(page.locator("#statusLabel")).toHaveText("CONNECTED:llama.cpp:Qwen3.5-2B-Q4_0.gguf:SSD");
   await expect(page.locator("#statusBadge")).toHaveClass(/online/);
 });
@@ -207,6 +211,7 @@ test("llama booting with model present shows loading badge", async ({ page }) =>
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
   await expect(page.locator("#statusLabel")).toHaveText("LOADING:llama.cpp:Qwen3.5-2B-Q4_K_M.gguf");
   await expect(page.locator("#statusBadge")).toHaveClass(/loading/);
 });
@@ -238,6 +243,7 @@ test("llama error state shows failed badge", async ({ page }) => {
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
   await expect(page.locator("#statusLabel")).toHaveText("FAILED:llama.cpp:Qwen3.5-2B-Q4_K_M.gguf");
   await expect(page.locator("#statusBadge")).toHaveClass(/failed/);
 });
@@ -320,6 +326,7 @@ test("sidebar status avoids stale completed download text when downloads are idl
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
 
   await expect(page.locator("#statusText")).toContainText("Auto-download paused");
   await expect(page.locator("#statusText")).not.toContainText("Download: 100%");
@@ -381,6 +388,7 @@ test("model upload sends file with filename header", async ({ page }) => {
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
   await openSettingsModal(page);
 
   await page.locator("#modelUploadInput").setInputFiles({
@@ -480,6 +488,7 @@ test("model manager shows move-to-ssd action when SSD is available and posts the
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
   await openSettingsModal(page);
 
   page.once("dialog", async (dialog) => {

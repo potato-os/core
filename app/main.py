@@ -68,6 +68,7 @@ try:
         _model_file_path,
         _sanitize_filename,
         _slugify_id,
+        build_model_projector_status,
         default_projector_candidates_for_model,
         download_default_projector_for_model,
         _unique_filename,
@@ -175,6 +176,7 @@ except ModuleNotFoundError:
         _model_file_path,
         _sanitize_filename,
         _slugify_id,
+        build_model_projector_status,
         default_projector_candidates_for_model,
         download_default_projector_for_model,
         _unique_filename,
@@ -388,12 +390,10 @@ async def refresh_llama_readiness(
     return dict(next_state)
 
 
-def get_runtime(request: Request) -> RuntimeConfig:
-    return request.app.state.runtime
-
-
-def get_chat_repository(request: Request) -> ChatRepositoryManager:
-    return request.app.state.chat_repository
+try:
+    from app.deps import get_runtime, get_chat_repository  # noqa: F811
+except ModuleNotFoundError:
+    from deps import get_runtime, get_chat_repository  # type: ignore[no-redef]  # noqa: F811
 
 
 try:
@@ -522,42 +522,7 @@ def is_download_task_active(task: asyncio.Task[Any] | None) -> bool:
     return task is not None and not task.done()
 
 
-def build_model_projector_status(runtime: RuntimeConfig, model: dict[str, Any]) -> dict[str, Any]:
-    filename = str(model.get("filename") or "")
-    settings = normalize_model_settings(model.get("settings"), filename=filename)
-    vision = settings.get("vision", {})
-    projector_mode = str(vision.get("projector_mode") or "default").strip().lower()
-    configured_filename = str(vision.get("projector_filename") or "").strip() or None
-    default_candidates = default_projector_candidates_for_model(filename)
-    search_names: list[str] = []
-    if projector_mode == "custom":
-        if configured_filename:
-            search_names.append(configured_filename)
-    else:
-        for candidate in default_candidates:
-            if candidate not in search_names:
-                search_names.append(candidate)
-        if configured_filename and configured_filename not in search_names:
-            search_names.append(configured_filename)
-
-    resolved_name = configured_filename
-    present = False
-    resolved_path = None
-    for candidate in search_names:
-        candidate_path = runtime.base_dir / "models" / candidate
-        if candidate_path.exists():
-            present = True
-            resolved_name = candidate
-            resolved_path = candidate_path
-            break
-
-    return {
-        "configured_filename": configured_filename,
-        "filename": resolved_name,
-        "present": present,
-        "path": str(resolved_path) if resolved_path is not None else None,
-        "default_candidates": default_candidates,
-    }
+    # build_model_projector_status — extracted to model_state.py
 
 
 async def build_status(
@@ -1422,7 +1387,8 @@ def _forward_headers(request: Request) -> dict[str, str]:
     return forward
 
 
-CHAT_HTML = (Path(__file__).resolve().parent / "assets" / "chat.html").read_text(encoding="utf-8")
+_CHAT_HTML_PATH = Path(__file__).resolve().parent / "assets" / "chat.html"
+CHAT_HTML = _CHAT_HTML_PATH.read_text(encoding="utf-8")
 
 
 def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool | None = None) -> FastAPI:
@@ -1502,7 +1468,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
 
     @app.get("/", response_class=HTMLResponse)
     async def root() -> HTMLResponse:
-        return HTMLResponse(CHAT_HTML)
+        return HTMLResponse(_CHAT_HTML_PATH.read_text(encoding="utf-8"))
 
     @app.get("/status")
     async def status(request: Request, runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
@@ -1907,40 +1873,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
             },
         )
 
-    @app.get("/internal/settings-document")
-    async def get_settings_document(runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
-        return JSONResponse(
-            status_code=200,
-            content={
-                "format": "yaml",
-                "document": export_settings_document_yaml(runtime_cfg),
-            },
-        )
-
-    @app.post("/internal/settings-document")
-    async def apply_settings_document_endpoint(
-        request: Request,
-        runtime_cfg: RuntimeConfig = Depends(get_runtime),
-    ) -> JSONResponse:
-        payload = await request.json()
-        document = str(payload.get("document") or "")
-        if not document.strip():
-            return JSONResponse(status_code=400, content={"updated": False, "reason": "document_required"})
-        updated, reason, settings_document = apply_settings_document_yaml(runtime_cfg, document)
-        if not updated:
-            return JSONResponse(status_code=400, content={"updated": False, "reason": reason, **settings_document})
-        restarted, restart_reason = await restart_managed_llama_process(app)
-        return JSONResponse(
-            status_code=200,
-            content={
-                "updated": True,
-                "reason": reason,
-                "active_model_id": settings_document.get("active_model_id"),
-                "document": yaml.safe_dump(settings_document, sort_keys=False, allow_unicode=True),
-                "restarted": restarted,
-                "restart_reason": restart_reason,
-            },
-        )
+    # Settings document routes — extracted to app/routes/settings.py
 
     @app.post("/internal/models/download-projector")
     async def download_projector_for_model_endpoint(
@@ -2370,67 +2303,24 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
             content={"cancelled": False, "restarted": False, "method": "none", "reason": "slot_action_unavailable"},
         )
 
-    @app.post("/v1/chat/completions")
-    async def chat_completions(
-        request: Request,
-        runtime_cfg: RuntimeConfig = Depends(get_runtime),
-        chat_repository: ChatRepositoryManager = Depends(get_chat_repository),
-    ) -> Response:
-        download_active, auto_start_remaining = get_status_download_context(request.app, runtime_cfg)
-        status_payload = await build_status(
-            runtime_cfg,
-            app=request.app,
-            download_active=download_active,
-            auto_start_remaining_seconds=auto_start_remaining,
-            system_snapshot=request.app.state.system_metrics_snapshot,
-        )
-        if status_payload["state"] != "READY":
-            return JSONResponse(status_code=503, content=status_payload)
+    # Chat completions route — extracted to app/routes/chat.py
+    try:
+        from app.routes.chat import router as chat_router, register_chat_helpers
+        from app.routes.settings import router as settings_router, register_settings_helpers
+    except ModuleNotFoundError:
+        from routes.chat import router as chat_router, register_chat_helpers  # type: ignore[no-redef]
+        from routes.settings import router as settings_router, register_settings_helpers  # type: ignore[no-redef]
 
-        try:
-            payload = await request.json()
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
-
-        payload = _merge_active_model_chat_defaults(payload, runtime=runtime_cfg)
-        payload = _merge_defaults(payload)
-        payload = apply_model_chat_defaults(
-            payload,
-            active_model_filename=str(status_payload.get("model", {}).get("filename") or ""),
-        )
-        headers = _forward_headers(request)
-        active_backend = status_payload["backend"]["active"]
-
-        try:
-            backend_response = await chat_repository.create_chat_completion(
-                backend=active_backend,
-                payload=payload,
-                forward_headers=headers,
-            )
-        except BackendProxyError as exc:
-            if runtime_cfg.chat_backend_mode == "auto" and active_backend == "llama":
-                backend_response = await chat_repository.create_chat_completion(
-                    backend="fake",
-                    payload=payload,
-                    forward_headers=headers,
-                )
-            else:
-                logger.exception("Backend proxy error")
-                raise HTTPException(status_code=502, detail=f"backend unavailable: {exc}") from exc
-
-        if backend_response.stream is not None:
-            return StreamingResponse(
-                backend_response.stream,
-                status_code=backend_response.status_code,
-                headers=backend_response.headers,
-                background=backend_response.background,
-            )
-
-        return Response(
-            content=backend_response.body or b"",
-            status_code=backend_response.status_code,
-            headers=backend_response.headers,
-        )
+    register_chat_helpers(
+        build_status=build_status,
+        get_status_download_context=get_status_download_context,
+        forward_headers=_forward_headers,
+    )
+    register_settings_helpers(
+        restart_managed_llama_process=restart_managed_llama_process,
+    )
+    app.include_router(chat_router)
+    app.include_router(settings_router)
 
     return app
 

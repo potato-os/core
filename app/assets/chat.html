@@ -377,6 +377,10 @@
 
   <script src="/assets/vendor/marked.umd.js"></script>
   <script src="/assets/vendor/purify.min.js"></script>
-    <script src="/assets/chat.js"></script>
+  <link rel="modulepreload" href="/assets/state.js">
+  <link rel="modulepreload" href="/assets/utils.js">
+  <link rel="modulepreload" href="/assets/session-manager.js">
+  <link rel="modulepreload" href="/assets/model-switcher.js">
+    <script type="module" src="/assets/chat.js"></script>
 </body>
 </html>

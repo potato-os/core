@@ -1,5 +1,9 @@
 const { expect } = require("@playwright/test");
 
+async function waitForStatusApplied(page) {
+  await expect(page.locator("#statusText")).not.toHaveText("Checking status...", { timeout: 10000 });
+}
+
 async function waitUntilReady(page) {
   await page.goto("/");
   await expect(page.locator("#statusText")).toContainText("State: READY");
@@ -202,6 +206,7 @@ async function sendAndWaitForReply(page, text) {
 }
 
 module.exports = {
+  waitForStatusApplied,
   waitUntilReady,
   openSettingsModal,
   closeSettingsModal,

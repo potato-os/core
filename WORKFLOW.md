@@ -105,20 +105,39 @@ All tests **must** pass locally before pushing. Do not rely on CI to catch failu
 uv run python -m pytest tests/unit tests/api -q -n auto
 ```
 
-The `-m pytest` flag is required so Python adds the project root to `sys.path`, matching CI behavior.
+The `-m pytest` flag is required so Python adds the project root to `sys.path`, matching CI behavior. Uses `pytest-xdist` for parallel execution (~10s).
 
 ### Playwright UI tests
 
+**Full suite (fast, parallel):**
 ```bash
-npx playwright test
+npx playwright test --reporter=dot --timeout=15000 --workers=3 2>&1
+```
+
+**Single spec file (for iterating on changes):**
+```bash
+npx playwright test tests/ui/bootstrap.spec.js --timeout=15000 2>&1
+```
+
+**Single test by name:**
+```bash
+npx playwright test --grep "download prompt" --timeout=15000 2>&1
 ```
 
 Requires Chromium installed (`npx playwright install chromium` on first run). The test server starts automatically via `playwright.config.js`.
 
+### Important: test output and timeouts
+
+- **Never pipe test output through `tail`, `grep`, or `head`** — it buffers and hides results until the command finishes, making it look like the tests are hanging.
+- **Always use `2>&1`** at the end to capture stderr (where Playwright writes progress).
+- **Use `--timeout=15000`** (15s per test) instead of the default 45s — most tests finish in <5s, so this catches hangs 3x faster.
+- **Kill stale processes** before re-running if tests hang: `pkill -f "uvicorn|node|playwright" 2>/dev/null; sleep 2`
+- **Run per-spec-file** when iterating — faster feedback than running all 56 tests.
+
 ### Running both before push
 
 ```bash
-uv run python -m pytest tests/unit tests/api -q -n auto && npx playwright test
+uv run python -m pytest tests/unit tests/api -q -n auto && npx playwright test --reporter=dot --timeout=15000 --workers=3 2>&1
 ```
 
 If either suite fails, fix the issue before pushing. Include summarized test output in the PR description.

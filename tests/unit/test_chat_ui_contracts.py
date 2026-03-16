@@ -6,7 +6,10 @@ from app.main import CHAT_HTML, WEB_ASSETS_DIR
 
 CHAT_CSS = (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8")
 CHAT_JS = (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8")
-CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS
+CHAT_STATE_JS = (WEB_ASSETS_DIR / "state.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "state.js").exists() else ""
+CHAT_UTILS_JS = (WEB_ASSETS_DIR / "utils.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "utils.js").exists() else ""
+CHAT_SESSION_JS = (WEB_ASSETS_DIR / "session-manager.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "session-manager.js").exists() else ""
+CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS
 
 
 def test_chat_ui_streaming_parses_sse_and_ignores_done_marker():
@@ -91,8 +94,8 @@ def test_chat_ui_runtime_details_hide_compact_and_apply_metric_threshold_classes
     assert "statusPayload?.compatibility?.warnings" in CHAT_UI
     assert "statusPayload?.compatibility?.override_enabled" in CHAT_UI
     assert 'id="runtimeCompact"' in CHAT_UI
-    assert "compact.hidden = runtimeDetailsExpanded;" in CHAT_UI
-    assert 'toggle.textContent = runtimeDetailsExpanded ? "Hide details" : "Show details";' in CHAT_UI
+    assert "compact.hidden = appState.runtimeDetailsExpanded;" in CHAT_UI
+    assert 'toggle.textContent = appState.runtimeDetailsExpanded ? "Hide details" : "Show details";' in CHAT_UI
     assert "function runtimeMetricSeverityClass(" in CHAT_UI
     assert "runtime-metric-normal" in CHAT_UI
     assert "runtime-metric-warn" in CHAT_UI
@@ -150,7 +153,7 @@ def test_chat_ui_has_potato_chat_brand_and_thinking_toggle():
 
 
 def test_chat_ui_supports_stop_generation_button_and_abort_controller():
-    assert "let activeRequest = null;" in CHAT_UI
+    assert "activeRequest: null," in CHAT_UI
     assert "function stopGeneration()" in CHAT_UI
     assert "function requestLlamaCancelRecovery(" in CHAT_UI
     assert "function requestLlamaRestart(" in CHAT_UI
@@ -161,7 +164,7 @@ def test_chat_ui_supports_stop_generation_button_and_abort_controller():
     assert 'sendBtn.classList.add("stop-mode")' in CHAT_UI
     assert "controller: new AbortController()" in CHAT_UI
     assert "signal: requestCtx.controller.signal" in CHAT_UI
-    assert 'if (requestInFlight) {' in CHAT_UI
+    assert 'if (appState.requestInFlight) {' in CHAT_UI
     assert "stopGeneration();" in CHAT_UI
     assert "queueImageCancelRecovery(current);" in CHAT_UI
     assert "if (!requestCtx?.hasImageRequest)" in CHAT_UI
@@ -240,14 +243,14 @@ def test_chat_ui_mobile_composer_keeps_actions_together():
 
 
 def test_chat_ui_uses_continuous_chat_history_in_openai_messages_format():
-    assert "const chatHistory = [];" in CHAT_UI
-    assert "reqBody.messages = reqBody.messages.concat(chatHistory);" in CHAT_UI
+    assert "chatHistory: []," in CHAT_UI
+    assert "reqBody.messages = reqBody.messages.concat(appState.chatHistory);" in CHAT_UI
     assert "const userMessage = { role: \"user\", content: buildUserMessageContent(content) };" in CHAT_UI
-    assert "chatHistory.push(userMessage);" in CHAT_UI
-    assert CHAT_JS.index("reqBody.messages.push(userMessage);") < CHAT_JS.index("chatHistory.push(userMessage);")
+    assert "appState.chatHistory.push(userMessage);" in CHAT_UI
+    assert CHAT_JS.index("reqBody.messages.push(userMessage);") < CHAT_JS.index("appState.chatHistory.push(userMessage);")
     assert "const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);" in CHAT_UI
-    assert "chatHistory.push({ role: \"assistant\", content: finalAssistantText });" in CHAT_UI
-    assert "chatHistory.push({ role: \"assistant\", content: msg });" in CHAT_UI
+    assert "appState.chatHistory.push({ role: \"assistant\", content: finalAssistantText });" in CHAT_UI
+    assert "appState.chatHistory.push({ role: \"assistant\", content: msg });" in CHAT_UI
 
 
 def test_chat_ui_formats_download_sizes_and_shows_model_filename_in_settings():
@@ -354,9 +357,9 @@ def test_chat_ui_supports_image_upload_for_vision_messages():
     assert "function handleImageSelected(" in CHAT_UI
     assert "FileReader()" in CHAT_UI
     assert "reader.readAsDataURL(file);" in CHAT_UI
-    assert "pendingImage = {" in CHAT_UI
+    assert "appState.pendingImage = {" in CHAT_UI
     assert "type: \"image_url\"" in CHAT_UI
-    assert "image_url: { url: pendingImage.dataUrl }" in CHAT_UI
+    assert "image_url: { url: appState.pendingImage.dataUrl }" in CHAT_UI
     assert "function openImagePicker(" in CHAT_UI
     assert "input.showPicker()" not in CHAT_UI
     assert "input.click();" in CHAT_UI
@@ -367,7 +370,7 @@ def test_chat_ui_supports_image_upload_for_vision_messages():
 
 def test_chat_ui_renders_image_thumbnail_in_user_bubble():
     assert "function buildUserBubblePayload(" in CHAT_UI
-    assert "imageDataUrl: pendingImage.dataUrl" in CHAT_UI
+    assert "imageDataUrl: appState.pendingImage.dataUrl" in CHAT_UI
     assert 'thumbnail.className = "message-image-thumb"' in CHAT_UI
     assert 'thumbnail.src = imageDataUrl;' in CHAT_UI
     assert "bubble.replaceChildren();" in CHAT_UI
@@ -460,7 +463,7 @@ def test_chat_ui_shows_processing_indicator_while_generating():
 
 
 def test_chat_assets_are_loaded_from_external_files():
-    for name in ("chat.html", "chat.css", "chat.js"):
+    for name in ("chat.html", "chat.css", "chat.js", "state.js"):
         path = WEB_ASSETS_DIR / name
         assert path.exists(), f"Expected {name} at {path}"
 
@@ -468,7 +471,8 @@ def test_chat_assets_are_loaded_from_external_files():
     assert (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8") == CHAT_CSS
     assert (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8") == CHAT_JS
     assert '<link rel="stylesheet" href="/assets/chat.css">' in CHAT_HTML
-    assert '<script src="/assets/chat.js"></script>' in CHAT_HTML
+    assert '<script type="module" src="/assets/chat.js"></script>' in CHAT_HTML
+    assert '<link rel="modulepreload" href="/assets/state.js">' in CHAT_HTML
 
 
 def test_root_endpoint_serves_chat_html(client):

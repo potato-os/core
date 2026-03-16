@@ -1,5 +1,6 @@
 const { test, expect } = require("@playwright/test");
 const {
+  waitForStatusApplied,
   waitUntilReady,
   openSettingsModal,
   closeSettingsModal,
@@ -55,6 +56,7 @@ test("shows manual download prompt when model missing and starts download on cli
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
 
   await expect(page.locator("#downloadPrompt")).toBeVisible();
   await expect(page.locator("#downloadPromptHint")).toContainText("Auto-download starts in");
@@ -133,6 +135,7 @@ test("surfaces failed downloads clearly and resumes them from the UI", async ({ 
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
 
   await expect(page.locator("#downloadPrompt")).toBeVisible();
   await expect(page.locator("#downloadPromptHint")).toContainText("Last download failed");
@@ -232,6 +235,7 @@ test("shows sidebar resume button for failed download while another model is act
   });
 
   await page.goto("/");
+  await waitForStatusApplied(page);
 
   await expect(page.locator("#downloadPrompt")).toBeHidden();
   await expect(page.locator("#statusText")).toContainText("Download failed");

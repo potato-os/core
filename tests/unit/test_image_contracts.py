@@ -6,7 +6,10 @@ from app.main import CHAT_HTML, WEB_ASSETS_DIR
 
 CHAT_CSS = (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8")
 CHAT_JS = (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8")
-CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS
+CHAT_STATE_JS = (WEB_ASSETS_DIR / "state.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "state.js").exists() else ""
+CHAT_UTILS_JS = (WEB_ASSETS_DIR / "utils.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "utils.js").exists() else ""
+CHAT_SESSION_JS = (WEB_ASSETS_DIR / "session-manager.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "session-manager.js").exists() else ""
+CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS
 
 def test_nginx_config_allows_large_streaming_uploads():
     conf = Path("nginx/potato.conf").read_text(encoding="utf-8")

@@ -805,3 +805,42 @@ def download_default_projector_for_model(*, runtime: RuntimeConfig, model_id: st
     finally:
         client.close()
     return False, "download_failed", None
+
+
+def build_model_projector_status(runtime: RuntimeConfig, model: dict[str, Any]) -> dict[str, Any]:
+    """Build projector status for a model (presence, path, candidates)."""
+    filename = str(model.get("filename") or "")
+    settings = normalize_model_settings(model.get("settings"), filename=filename)
+    vision = settings.get("vision", {})
+    projector_mode = str(vision.get("projector_mode") or "default").strip().lower()
+    configured_filename = str(vision.get("projector_filename") or "").strip() or None
+    default_candidates = default_projector_candidates_for_model(filename)
+    search_names: list[str] = []
+    if projector_mode == "custom":
+        if configured_filename:
+            search_names.append(configured_filename)
+    else:
+        for candidate in default_candidates:
+            if candidate not in search_names:
+                search_names.append(candidate)
+        if configured_filename and configured_filename not in search_names:
+            search_names.append(configured_filename)
+
+    resolved_name = configured_filename
+    present = False
+    resolved_path = None
+    for candidate in search_names:
+        candidate_path = runtime.base_dir / "models" / candidate
+        if candidate_path.exists():
+            present = True
+            resolved_name = candidate
+            resolved_path = candidate_path
+            break
+
+    return {
+        "configured_filename": configured_filename,
+        "filename": resolved_name,
+        "present": present,
+        "path": str(resolved_path) if resolved_path is not None else None,
+        "default_candidates": default_candidates,
+    }
