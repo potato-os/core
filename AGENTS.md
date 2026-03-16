@@ -1,84 +1,116 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
+
 Core application code lives in `app/`:
-- `app/main.py`: FastAPI entrypoint and API routes.
-- `app/repositories/`: backend abstraction (real llama.cpp and fake backend).
+- `app/main.py`: FastAPI entrypoint, API routes, orchestrator loop, lifespan.
+- `app/model_state.py`: Model registry, settings persistence, projector helpers.
+- `app/runtime_state.py`: Runtime config, dual-runtime slot discovery, system metrics, power calibration.
+- `app/repositories/`: Backend abstraction (real llama.cpp proxy and fake backend).
+- `app/constants/`: Model family detection, projector repo mapping.
+- `app/assets/`: Frontend — `chat.html`, `chat.css`, `chat.js` (single-file UI), vendor libs.
 
-Operational scripts are in `bin/` (`install_dev.sh`, `run.sh`, `start_llama.sh`, `uninstall_dev.sh`). Service definitions are in `systemd/`. Tests are organized under `tests/`:
-- `tests/api/` for HTTP/API behavior.
-- `tests/unit/` for Python and shell-script logic.
-- `tests/e2e/` for Pi smoke/uninstall flows over SSH.
+Operational scripts are in `bin/`:
+- `run.sh`: Main entrypoint (systemd calls this).
+- `start_llama.sh`: Launches llama-server with correct flags, auto-downloads mmproj.
+- `install_dev.sh`: Deploys to Pi (idempotent). Uses `POTATO_LLAMA_RUNTIME_FAMILY` for slot selection.
+- `build_llama_runtime.sh`: Builds ik_llama or upstream llama.cpp on Pi from source.
+- `prepare_imager_bundle.sh`: Packages SD card image payload.
+- `ensure_model.sh`: Bootstrap model download helper.
 
-Reference material and image artifacts are in `references/` and `raspberry_os_clean_image/`.
+Service definitions in `systemd/`. Nginx config in `nginx/`. Image build in `image/`.
+
+Tests are organized under `tests/`:
+- `tests/api/`: HTTP/API behavior tests (pytest).
+- `tests/unit/`: Python and shell-script logic tests (pytest).
+- `tests/ui/`: Playwright E2E tests — split into 8 feature-scoped spec files:
+  - `settings.spec.js`, `chat.spec.js`, `image.spec.js`, `download.spec.js`
+  - `runtime.spec.js`, `model-switcher.spec.js`, `sessions.spec.js`, `bootstrap.spec.js`
+- `tests/ui/helpers.js`: Shared test utilities (`waitUntilReady`, `makeStatusPayload`, etc.).
+- `tests/e2e/`: Pi smoke/uninstall flows over SSH.
 
 ## Build, Test, and Development Commands
-- `uv sync`: create/sync local dev environment.
-- `uv run python -m pytest tests/unit tests/api -q`: run Python tests (unit + API).
-- `npx playwright test --reporter=dot --timeout=15000 --workers=3`: run Playwright UI tests (fast, 3 workers, dot output).
-- `POTATO_ENABLE_ORCHESTRATOR=0 uv run uvicorn app.main:app --host 0.0.0.0 --port 1983`: run API locally.
-- Both test suites **must** pass locally before pushing. Run them together:
-  - `uv run python -m pytest tests/unit tests/api -q && npx playwright test --reporter=dot --timeout=15000 --workers=3`
-- `./bin/install_dev.sh`: install/update services on Pi (idempotent).
-- `./bin/build_local_image.sh --variant lite`: build local Pi image bundle and generate Imager manifest.
-  - Script prompts before deleting previous `output/images` artifacts (`ask|yes|no` via `--clean-artifacts`).
-  - Each generated `local-test-*` folder includes `README.md` with Raspberry Pi Imager import steps.
-- `./tests/e2e/smoke_pi.sh`: run remote smoke checks (set `PI_HOST_PRIMARY`, `PI_USER`, `PI_PASSWORD` as needed).
 
-## Real Pi Runbook (Manual E2E)
-Use this flow before opening PRs that affect runtime/UI behavior on device:
-- Set environment first (do not hardcode host/user/password in docs or scripts):
-  - `export PI_HOST_PRIMARY=<pi-host-or-mdns>`
-  - `export PI_USER=<ssh-user>`
-  - `export PI_PASSWORD=<ssh-password>`
-- Fast deploy (avoids large artifact sync):
-  - `SSHPASS="$PI_PASSWORD" sshpass -e rsync -az --delete --exclude '.git' --exclude '.venv' --exclude '__pycache__' --exclude 'references/' --exclude 'output/' --exclude '.cache/' --exclude 'node_modules/' --exclude 'models/' --exclude 'raspberry_os_clean_image/' ./ "$PI_USER@$PI_HOST_PRIMARY:/tmp/potato-os/"`
-- Run installer as root on Pi (important):
-  - `SSHPASS="$PI_PASSWORD" sshpass -e ssh "$PI_USER@$PI_HOST_PRIMARY" "printf '%s\n' '$PI_PASSWORD' | sudo -S -p '' bash -lc 'cd /tmp/potato-os && POTATO_REQUIRE_LLAMA_BUNDLE=0 ./bin/install_dev.sh'"`
-  - Reason: `install_dev.sh` edits hostname/hosts and may fail when run non-root (`/etc/hosts` read permission).
-- Health checks:
-  - `curl -sS "http://$PI_HOST_PRIMARY/status" | jq '{state: .state, backend: .backend.active, llama_healthy: .llama_server.healthy}'`
-  - `curl -sS "http://<pi-mdns-hostname>.local/status" | jq '{state: .state, backend: .backend.active, llama_healthy: .llama_server.healthy}'`
-  - Immediately after restart, `state=BOOTING` and `llama_healthy=false` is expected while model loads.
-- Streaming API quick check:
-  - `curl -sN "http://$PI_HOST_PRIMARY/v1/chat/completions" -H 'Content-Type: application/json' -d '{"model":"qwen-local","messages":[{"role":"user","content":"Say hello."}],"stream":true}' | sed -n 's/^data: //p'`
-- Service diagnostics:
-  - `ssh "$PI_USER@$PI_HOST_PRIMARY" "sudo systemctl --no-pager --full status potato.service potato-firstboot.service"`
-  - `ssh "$PI_USER@$PI_HOST_PRIMARY" "sudo journalctl -u potato -n 200 --no-pager"`
+### Local development
+- `uv sync`: Create/sync local dev environment.
+- `POTATO_ENABLE_ORCHESTRATOR=0 uv run uvicorn app.main:app --host 0.0.0.0 --port 1983`: Run API locally.
+
+### Running tests (required before every push)
+- Python (unit + API): `uv run python -m pytest tests/unit tests/api -q`
+- Playwright (UI): `npx playwright test --reporter=dot --timeout=15000 --workers=3`
+- Both together: `uv run python -m pytest tests/unit tests/api -q && npx playwright test --reporter=dot --timeout=15000 --workers=3`
+- First-time Playwright setup: `npx playwright install chromium`
+
+### Pi deployment
+- Fast asset deploy: `sshpass -e rsync -az --delete --rsync-path="sudo rsync" -e "ssh -o StrictHostKeyChecking=accept-new" app/ pi@potato.local:/opt/potato/app/`
+- Full install: `sshpass -e ssh pi@potato.local "cd /tmp/potato-os && sudo ./bin/install_dev.sh"`
+- Restart service: `sshpass -e ssh pi@potato.local "sudo systemctl restart potato"`
+
+### Image building
+- `./bin/prepare_imager_bundle.sh`: Package SD card image payload.
+- `./image/build-all.sh`: Full image build (requires pi-gen / Docker).
+
+## Runtime Architecture
+
+### Dual-runtime system
+Potato OS supports two curated llama runtimes:
+- **ik_llama** (default): IQK-optimized fork, faster on Pi 5.
+- **llama_cpp**: Upstream llama.cpp, standard build.
+
+Runtime slots live at `/opt/potato/runtimes/{ik_llama,llama_cpp}/` with `runtime.json` metadata. The active runtime is rsynced to `/opt/potato/llama/`. Switch via `POST /internal/llama-runtime/switch` with `{"family": "ik_llama"}`.
+
+### Bootstrap auto-download
+On fresh installs with no model, a 5-minute countdown triggers automatic download of `Qwen3.5-2B-Q4_K_M.gguf` (~1.8GB) + its F16 vision projector from Unsloth/HuggingFace. One-off: never runs again after completion or cancellation.
+
+### Multi-chat sessions
+Chat history persisted in browser IndexedDB (`potato_sessions` database). Sessions survive page reload. Image data URLs stripped before persistence; sanitized on restore so backend never receives `[stripped]` references.
+
+## Real Pi QA
+
+Use Chrome MCP for browser-based QA on `http://potato.local`. Test on real hardware before merging Pi-impacting changes.
+
+Health check: `curl -s http://potato.local/status | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['state'])"`
 
 ## Coding Style & Naming Conventions
-Use Python 3.11+ style with 4-space indentation and type hints for new/changed code. Prefer small, testable functions and explicit error paths. Use `snake_case` for functions/files, `PascalCase` for classes, and clear env var names with `POTATO_` prefix (for example `POTATO_CHAT_BACKEND`).
 
-Shell scripts should be POSIX/Bash-safe, include `set -euo pipefail` where appropriate, and keep side effects explicit.
+- Python 3.11+, 4-space indentation, type hints for new/changed code.
+- Small testable functions, explicit error paths.
+- `snake_case` for functions/files, `PascalCase` for classes.
+- Env vars prefixed with `POTATO_` (e.g. `POTATO_LLAMA_RUNTIME_FAMILY`).
+- Shell scripts: `set -euo pipefail`, POSIX/Bash-safe, explicit side effects.
+- Frontend: Vanilla JS (no frameworks, no build step). Single `chat.js` loaded via `<script>` tag.
 
 ## Testing Guidelines
-Use `pytest` for all test layers. Name files `test_*.py` and keep scenario-focused names (`test_fake_backend.py`, `test_shell_scripts.py`). For new behavior:
-- add/adjust unit tests first (TDD default),
-- add API tests for contract changes,
-- run E2E smoke only when Pi-impacting code changes.
+
+- TDD-first for all feature tickets.
+- Playwright tests split by feature (8 spec files in `tests/ui/`).
+- Python tests: `pytest` with `tests/unit/` and `tests/api/`.
+- Name test files `test_*.py` (Python) or `*.spec.js` (Playwright).
+- For Qwen3.5 models: only F16 projectors. Vision detection matches `*qwen*3.5*`.
 
 ## Commit & Pull Request Guidelines
-Current history is minimal (`Initial commit`), so use concise imperative commits going forward, e.g.:
+
+Concise imperative commits:
 - `feat(api): add backend mode fallback`
-- `test(scripts): cover uninstall guardrails`
+- `fix(chat): preserve multi-turn history`
+- `chore(runtime): standardize bundle layout`
+- `test(ui): add model switcher specs`
 
-PRs should include:
-- what changed and why,
-- risk/rollback notes (especially Pi-side effects),
-- test evidence (`pytest` output and any `smoke_pi.sh` result),
-- linked issue/task when available.
+PRs must include:
+- What changed and why.
+- `Closes #<id>` or `Refs #<id>` for issue linkage.
+- Test evidence (pytest + Playwright output).
+- Pi QA results for Pi-impacting changes.
+- No AI attribution lines.
 
-## Branching Strategy
-Use a lightweight branch model (not GitFlow):
-- `main` is always releasable; avoid direct pushes.
-- Create short-lived branches from `main`:
-  - `feat/<short-name>` for features
-  - `fix/<short-name>` for bug fixes
-  - `chore/<short-name>` for maintenance/docs/tooling
-- Keep PRs focused and small; prefer squash merge into `main`.
-- For urgent production fixes, create `fix/<urgent-name>` from latest `main`, validate quickly, and merge as priority.
-- After merge, delete the branch locally/remotely to keep branch list clean.
+## Branching & Workflow
 
-## Security & Configuration Notes
-Never commit secrets, SSH private keys, or device-specific credentials. Keep credentials in environment variables and confirm `.gitignore` excludes local-only artifacts.
-For Raspberry Pi Imager, always use the generated `.rpi-imager-manifest` file (Pi 5-only tag `pi5-64bit`), not internal metadata files like `METADATA.json` or `potato-*-build-info.json`.
+- `main` is merge-only. No direct commits for feature/bug/chore work.
+- Branch from `main`: `feat/issue-<id>-<slug>`, `fix/issue-<id>-<slug>`, `chore/issue-<id>-<slug>`.
+- Board flow: Todo → In Progress → In Review → QA → Done.
+- Squash merge preferred. Delete branch after merge.
+- See `WORKFLOW.md` for full lifecycle details.
+
+## Security & Configuration
+
+Never commit secrets, SSH keys, or device-specific credentials. Keep credentials in environment variables. Confirm `.gitignore` excludes local-only artifacts (`references/`, `output/`, `.venv/`, `node_modules/`).
