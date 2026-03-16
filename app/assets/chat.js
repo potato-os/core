@@ -1,112 +1,6 @@
 "use strict";
 
-    const defaultSettings = {
-      temperature: 0.7,
-      top_p: 0.8,
-      top_k: 20,
-      repetition_penalty: 1.0,
-      presence_penalty: 1.5,
-      max_tokens: 16384,
-      stream: true,
-      generation_mode: "random",
-      seed: 42,
-      theme: "light",
-      system_prompt: "",
-    };
-    const settingsKey = "potato_settings_v2";
-    const PREFILL_METRICS_KEY = "potato_prefill_metrics_v1";
-    const PREFILL_PROGRESS_CAP = 99;
-    const PREFILL_PROGRESS_TAIL_START = 89;
-    const PREFILL_PROGRESS_FLOOR = 6;
-    const PREFILL_TICK_MS = 180;
-    const PREFILL_FINISH_DURATION_MS = Math.max(
-      120,
-      Number(window.__POTATO_PREFILL_FINISH_DURATION_MS__ || 1000),
-    );
-    const PREFILL_FINISH_TICK_MS = 40;
-    const PREFILL_FINISH_HOLD_MS = Math.max(
-      80,
-      Number(window.__POTATO_PREFILL_FINISH_HOLD_MS__ || 220),
-    );
-    const STATUS_CHIP_MIN_VISIBLE_MS = 260;
-    const STATUS_POLL_TIMEOUT_MS = 3500;
-    const RUNTIME_RECONNECT_INTERVAL_MS = 1200;
-    const RUNTIME_RECONNECT_TIMEOUT_MS = 2500;
-    const RUNTIME_RECONNECT_MAX_ATTEMPTS = 75;
-    const IMAGE_CANCEL_RECOVERY_DELAY_MS = Math.max(
-      200,
-      Number(window.__POTATO_CANCEL_RECOVERY_DELAY_MS__ || 8000),
-    );
-    const IMAGE_CANCEL_RESTART_DELAY_MS = Math.max(
-      2000,
-      Number(window.__POTATO_CANCEL_RESTART_DELAY_MS__ || 45000),
-    );
-    let requestInFlight = false;
-    let activeRequest = null;
-    let activePrefillProgress = null;
-    let imageCancelRecoveryTimer = null;
-    let imageCancelRestartTimer = null;
-    let statusChipVisibleAtMs = 0;
-    let statusChipHideTimer = null;
-    let latestStatus = null;
-    let downloadStartInFlight = false;
-    let modelActionInFlight = false;
-    let llamaRuntimeSwitchInFlight = false;
-    let llamaMemoryLoadingApplyInFlight = false;
-    let largeModelOverrideApplyInFlight = false;
-    let powerCalibrationActionInFlight = false;
-    let uploadRequest = null;
-    let runtimeResetInFlight = false;
-    let runtimeReconnectWatchActive = false;
-    let runtimeReconnectWatchTimer = null;
-    let runtimeReconnectAttempts = 0;
-    let statusPollSeq = 0;
-    let statusPollAppliedSeq = 0;
-    let runtimeDetailsExpanded = true;
-    let mobileSidebarMql = null;
-    let settingsModalOpen = false;
-    let legacySettingsModalOpen = false;
-    let settingsModalOpenedAtMs = 0;
-    let editModalOpen = false;
-    let modelSwitcherOpen = false;
-    let settingsWorkspaceTab = "model";
-    let selectedSettingsModelId = "";
-    let settingsYamlLoaded = false;
-    let settingsYamlRequestInFlight = false;
-    let modelSettingsSaveInFlight = false;
-    let modelSettingsStatusModelId = "";
-    let modelSettingsDraftDirty = false;
-    let modelSettingsDraftModelId = "";
-    let displayedSettingsModelId = "";
-    let projectorDownloadInFlight = false;
-    let messagesPinnedToBottom = true;
-    let messagePointerSelectionActive = false;
-    const chatHistory = [];
-    const conversationTurns = [];
-    let activeEditState = null;
-    let activeSessionId = null;
-    let sessionIndex = [];
-    let sessionSwitchInFlight = false;
-    const SESSIONS_DB_NAME = "potato_sessions";
-    const SESSIONS_DB_VERSION = 1;
-    const SESSIONS_STORE = "sessions";
-    const ACTIVE_SESSION_KEY = "potato_active_session_id";
-    const SESSION_TITLE_MAX_LENGTH = 40;
-    const SESSION_LIST_MAX_VISIBLE = 50;
-    let pendingImage = null;
-    let pendingImageReader = null;
-    let pendingImageToken = 0;
-    const IMAGE_SAFE_MAX_BYTES = 140 * 1024;
-    const IMAGE_MAX_DIMENSION = 896;
-    const IMAGE_MAX_PIXEL_COUNT = IMAGE_MAX_DIMENSION * IMAGE_MAX_DIMENSION;
-    const CPU_CLOCK_MAX_HZ_PI5 = 2_400_000_000;
-    const GPU_CLOCK_MAX_HZ_PI5 = 1_000_000_000;
-    const RUNTIME_METRIC_SEVERITY_CLASSES = [
-      "runtime-metric-normal",
-      "runtime-metric-warn",
-      "runtime-metric-high",
-      "runtime-metric-critical",
-    ];
+import { appState, defaultSettings, settingsKey, PREFILL_METRICS_KEY, PREFILL_PROGRESS_CAP, PREFILL_PROGRESS_TAIL_START, PREFILL_PROGRESS_FLOOR, PREFILL_TICK_MS, PREFILL_FINISH_DURATION_MS, PREFILL_FINISH_TICK_MS, PREFILL_FINISH_HOLD_MS, STATUS_CHIP_MIN_VISIBLE_MS, STATUS_POLL_TIMEOUT_MS, RUNTIME_RECONNECT_INTERVAL_MS, RUNTIME_RECONNECT_TIMEOUT_MS, RUNTIME_RECONNECT_MAX_ATTEMPTS, IMAGE_CANCEL_RECOVERY_DELAY_MS, IMAGE_CANCEL_RESTART_DELAY_MS, SESSIONS_DB_NAME, SESSIONS_DB_VERSION, SESSIONS_STORE, ACTIVE_SESSION_KEY, SESSION_TITLE_MAX_LENGTH, SESSION_LIST_MAX_VISIBLE, IMAGE_SAFE_MAX_BYTES, IMAGE_MAX_DIMENSION, IMAGE_MAX_PIXEL_COUNT, CPU_CLOCK_MAX_HZ_PI5, GPU_CLOCK_MAX_HZ_PI5, RUNTIME_METRIC_SEVERITY_CLASSES, DEFAULT_MODEL_VISION_SETTINGS } from "./state.js";
 
     // ── IndexedDB session storage ──────────────────────────────────────
 
@@ -225,38 +119,38 @@
     }
 
     async function saveActiveSession() {
-      if (chatHistory.length === 0) return;
+      if (appState.chatHistory.length === 0) return;
       const now = Date.now();
-      if (!activeSessionId) {
-        activeSessionId = "sess_" + generateId();
-        try { localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId); } catch (_e) { /* ignore */ }
+      if (!appState.activeSessionId) {
+        appState.activeSessionId = "sess_" + generateId();
+        try { localStorage.setItem(ACTIVE_SESSION_KEY, appState.activeSessionId); } catch (_e) { /* ignore */ }
       }
-      const firstUserMsg = chatHistory.find((m) => m.role === "user");
-      const existingMeta = sessionIndex.find((s) => s.id === activeSessionId);
+      const firstUserMsg = appState.chatHistory.find((m) => m.role === "user");
+      const existingMeta = appState.sessionIndex.find((s) => s.id === appState.activeSessionId);
       const title = existingMeta?.title || generateSessionTitle(firstUserMsg?.content || "");
       const session = {
-        id: activeSessionId,
+        id: appState.activeSessionId,
         title,
         createdAt: existingMeta?.createdAt || now,
         updatedAt: now,
-        messages: stripImagesForPersistence(chatHistory),
+        messages: stripImagesForPersistence(appState.chatHistory),
       };
       await putSession(session);
-      const metaIdx = sessionIndex.findIndex((s) => s.id === activeSessionId);
-      const meta = { id: session.id, title: session.title, createdAt: session.createdAt, updatedAt: now, messageCount: chatHistory.length };
+      const metaIdx = appState.sessionIndex.findIndex((s) => s.id === appState.activeSessionId);
+      const meta = { id: session.id, title: session.title, createdAt: session.createdAt, updatedAt: now, messageCount: appState.chatHistory.length };
       if (metaIdx >= 0) {
-        sessionIndex[metaIdx] = meta;
+        appState.sessionIndex[metaIdx] = meta;
       } else {
-        sessionIndex.unshift(meta);
+        appState.sessionIndex.unshift(meta);
       }
-      sessionIndex.sort((a, b) => b.updatedAt - a.updatedAt);
+      appState.sessionIndex.sort((a, b) => b.updatedAt - a.updatedAt);
       renderSessionList();
     }
 
     function clearChatState() {
-      chatHistory.length = 0;
-      conversationTurns.length = 0;
-      activeEditState = null;
+      appState.chatHistory.length = 0;
+      appState.conversationTurns.length = 0;
+      appState.activeEditState = null;
       const box = document.getElementById("messages");
       if (box) box.replaceChildren();
     }
@@ -267,7 +161,7 @@
       let historyIndex = 0;
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
-        chatHistory.push(sanitized[i]);
+        appState.chatHistory.push(sanitized[i]);
         if (msg.role === "user") {
           const hasStrippedImage = Array.isArray(msg.content) &&
             msg.content.some((p) => p?.type === "image_url" && p?.image_url?.url === "[stripped]");
@@ -283,15 +177,15 @@
           let assistantView = null;
           if (i + 1 < messages.length && messages[i + 1].role === "assistant") {
             i++;
-            chatHistory.push(sanitized[i]);
+            appState.chatHistory.push(sanitized[i]);
             assistantView = appendMessage("assistant", String(messages[i].content || ""));
             historyIndex++;
           }
           const turn = { baseHistoryLength, userText: textContent, userView, assistantView };
           userView.turnRef = turn;
           if (assistantView) assistantView.turnRef = turn;
-          conversationTurns.push(turn);
-        } else if (msg.role === "assistant" && conversationTurns.length === 0) {
+          appState.conversationTurns.push(turn);
+        } else if (msg.role === "assistant" && appState.conversationTurns.length === 0) {
           appendMessage("assistant", String(msg.content || ""));
           historyIndex++;
         }
@@ -299,32 +193,32 @@
     }
 
     async function loadSessionIntoView(sessionId) {
-      if (sessionSwitchInFlight || requestInFlight) return;
-      sessionSwitchInFlight = true;
+      if (appState.sessionSwitchInFlight || appState.requestInFlight) return;
+      appState.sessionSwitchInFlight = true;
       try {
-        if (chatHistory.length > 0 && activeSessionId) {
+        if (appState.chatHistory.length > 0 && appState.activeSessionId) {
           await saveActiveSession();
         }
         const session = await getSession(sessionId);
-        if (!session) { sessionSwitchInFlight = false; return; }
+        if (!session) { appState.sessionSwitchInFlight = false; return; }
         restoreMessagesFromHistory(session.messages || []);
-        activeSessionId = sessionId;
-        try { localStorage.setItem(ACTIVE_SESSION_KEY, activeSessionId); } catch (_e) { /* ignore */ }
+        appState.activeSessionId = sessionId;
+        try { localStorage.setItem(ACTIVE_SESSION_KEY, appState.activeSessionId); } catch (_e) { /* ignore */ }
         renderSessionList();
         const prompt = document.getElementById("userPrompt");
         if (prompt) prompt.focus({ preventScroll: true });
       } finally {
-        sessionSwitchInFlight = false;
+        appState.sessionSwitchInFlight = false;
       }
     }
 
     async function startNewChat() {
-      if (requestInFlight) return;
-      if (chatHistory.length > 0 && activeSessionId) {
+      if (appState.requestInFlight) return;
+      if (appState.chatHistory.length > 0 && appState.activeSessionId) {
         await saveActiveSession();
       }
       clearChatState();
-      activeSessionId = null;
+      appState.activeSessionId = null;
       try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_e) { /* ignore */ }
       renderSessionList();
       const prompt = document.getElementById("userPrompt");
@@ -332,12 +226,12 @@
     }
 
     async function deleteSession(sessionId) {
-      if (requestInFlight) return;
+      if (appState.requestInFlight) return;
       await deleteSessionFromDb(sessionId);
-      sessionIndex = sessionIndex.filter((s) => s.id !== sessionId);
-      if (activeSessionId === sessionId) {
+      appState.sessionIndex = appState.sessionIndex.filter((s) => s.id !== sessionId);
+      if (appState.activeSessionId === sessionId) {
         clearChatState();
-        activeSessionId = null;
+        appState.activeSessionId = null;
         try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_e) { /* ignore */ }
       }
       renderSessionList();
@@ -347,10 +241,10 @@
       const list = document.getElementById("chatSessionList");
       if (!list) return;
       list.replaceChildren();
-      const visible = sessionIndex.slice(0, SESSION_LIST_MAX_VISIBLE);
+      const visible = appState.sessionIndex.slice(0, SESSION_LIST_MAX_VISIBLE);
       for (const meta of visible) {
         const item = document.createElement("div");
-        item.className = "chat-session-item" + (meta.id === activeSessionId ? " active" : "");
+        item.className = "chat-session-item" + (meta.id === appState.activeSessionId ? " active" : "");
         item.dataset.sessionId = meta.id;
         const title = document.createElement("span");
         title.className = "chat-session-title";
@@ -369,12 +263,12 @@
     async function initSessionManager() {
       try {
         const sessions = await getAllSessions();
-        sessionIndex = sessions
+        appState.sessionIndex = sessions
           .map((s) => ({ id: s.id, title: s.title, createdAt: s.createdAt, updatedAt: s.updatedAt, messageCount: (s.messages || []).length }))
           .sort((a, b) => b.updatedAt - a.updatedAt);
         renderSessionList();
         const lastActiveId = localStorage.getItem(ACTIVE_SESSION_KEY);
-        if (lastActiveId && sessionIndex.some((s) => s.id === lastActiveId)) {
+        if (lastActiveId && appState.sessionIndex.some((s) => s.id === lastActiveId)) {
           await loadSessionIntoView(lastActiveId);
         }
       } catch (err) {
@@ -691,7 +585,7 @@
       };
     }
 
-    function resolveActiveRuntimeModel(statusPayload = latestStatus) {
+    function resolveActiveRuntimeModel(statusPayload = appState.latestStatus) {
       const topModel = statusPayload?.model && typeof statusPayload.model === "object"
         ? statusPayload.model
         : null;
@@ -713,19 +607,19 @@
       return active || topModel || null;
     }
 
-    function activeRuntimeVisionCapability(statusPayload = latestStatus) {
+    function activeRuntimeVisionCapability(statusPayload = appState.latestStatus) {
       const activeModel = resolveActiveRuntimeModel(statusPayload);
       const supportsVision = activeModel?.capabilities?.vision;
       return typeof supportsVision === "boolean" ? supportsVision : null;
     }
 
-    function formatTextOnlyImageNotice(statusPayload = latestStatus) {
+    function formatTextOnlyImageNotice(statusPayload = appState.latestStatus) {
       const activeModel = resolveActiveRuntimeModel(statusPayload);
       const modelName = String(activeModel?.filename || "The current model").trim();
       return `${modelName} is text-only. Switch to a vision-capable model in Settings to send images.`;
     }
 
-    function formatImageRejectedNotice(statusPayload = latestStatus) {
+    function formatImageRejectedNotice(statusPayload = appState.latestStatus) {
       if (activeRuntimeVisionCapability(statusPayload) === false) {
         return formatTextOnlyImageNotice(statusPayload);
       }
@@ -740,7 +634,7 @@
       notice.hidden = text.length === 0;
     }
 
-    function showTextOnlyImageBlockedState(statusPayload = latestStatus) {
+    function showTextOnlyImageBlockedState(statusPayload = appState.latestStatus) {
       const notice = formatTextOnlyImageNotice(statusPayload);
       setComposerVisionNotice(notice);
       setComposerActivity(notice);
@@ -750,7 +644,7 @@
       focusPromptInput();
     }
 
-    function renderComposerCapabilities(statusPayload = latestStatus) {
+    function renderComposerCapabilities(statusPayload = appState.latestStatus) {
       const attachBtn = document.getElementById("attachImageBtn");
       const clearBtn = document.getElementById("clearImageBtn");
       if (!attachBtn) return;
@@ -758,47 +652,47 @@
       const explicitTextOnly = visionCapability === false;
       const blockedMessage = explicitTextOnly ? formatTextOnlyImageNotice(statusPayload) : "";
       setComposerVisionNotice(blockedMessage);
-      attachBtn.disabled = requestInFlight || explicitTextOnly;
+      attachBtn.disabled = appState.requestInFlight || explicitTextOnly;
       attachBtn.setAttribute("aria-disabled", attachBtn.disabled ? "true" : "false");
       attachBtn.setAttribute("title", explicitTextOnly ? blockedMessage : "Attach image");
       attachBtn.setAttribute("aria-label", explicitTextOnly ? blockedMessage : "Attach image");
       if (clearBtn) {
-        clearBtn.disabled = requestInFlight;
+        clearBtn.disabled = appState.requestInFlight;
       }
-      if (explicitTextOnly && pendingImage) {
+      if (explicitTextOnly && appState.pendingImage) {
         clearPendingImage();
         setComposerActivity("Image removed.");
       }
     }
 
-    function getSettingsModels(statusPayload = latestStatus) {
+    function getSettingsModels(statusPayload = appState.latestStatus) {
       return Array.isArray(statusPayload?.models) ? statusPayload.models : [];
     }
 
-    function resolveSelectedSettingsModel(statusPayload = latestStatus) {
+    function resolveSelectedSettingsModel(statusPayload = appState.latestStatus) {
       const models = getSettingsModels(statusPayload);
       if (models.length === 0) return null;
-      if (selectedSettingsModelId) {
-        const exact = models.find((item) => String(item?.id || "") === selectedSettingsModelId);
+      if (appState.selectedSettingsModelId) {
+        const exact = models.find((item) => String(item?.id || "") === appState.selectedSettingsModelId);
         if (exact) return exact;
       }
       const activeModelId = String(statusPayload?.model?.active_model_id || "");
       const active = models.find((item) => String(item?.id || "") === activeModelId || item?.is_active === true);
       if (active) {
-        selectedSettingsModelId = String(active.id || "");
+        appState.selectedSettingsModelId = String(active.id || "");
         return active;
       }
-      selectedSettingsModelId = String(models[0]?.id || "");
+      appState.selectedSettingsModelId = String(models[0]?.id || "");
       return models[0];
     }
 
-    function getActiveChatSettings(statusPayload = latestStatus) {
+    function getActiveChatSettings(statusPayload = appState.latestStatus) {
       const activeChat = statusPayload?.model?.settings?.chat;
       return normalizeChatSettings(activeChat);
     }
 
     function collectSelectedModelSettings() {
-      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      const selectedModel = resolveSelectedSettingsModel(appState.latestStatus);
       const supportsVision = Boolean(selectedModel?.capabilities?.vision);
       const generationMode = normalizeGenerationMode(document.getElementById("generationMode").value);
       const seed = normalizeSeedValue(document.getElementById("seed").value, defaultSettings.seed);
@@ -827,9 +721,9 @@
     }
 
     function markModelSettingsDraftDirty() {
-      const selectedModel = resolveSelectedSettingsModel(latestStatus);
-      modelSettingsDraftDirty = true;
-      modelSettingsDraftModelId = String(selectedModel?.id || "");
+      const selectedModel = resolveSelectedSettingsModel(appState.latestStatus);
+      appState.modelSettingsDraftDirty = true;
+      appState.modelSettingsDraftModelId = String(selectedModel?.id || "");
       const statusEl = document.getElementById("modelSettingsStatus");
       const discardBtn = document.getElementById("discardModelSettingsBtn");
       if (statusEl) {
@@ -837,13 +731,13 @@
       }
       if (discardBtn) {
         discardBtn.hidden = false;
-        discardBtn.disabled = modelSettingsSaveInFlight;
+        discardBtn.disabled = appState.modelSettingsSaveInFlight;
       }
     }
 
     function clearModelSettingsDraftState() {
-      modelSettingsDraftDirty = false;
-      modelSettingsDraftModelId = "";
+      appState.modelSettingsDraftDirty = false;
+      appState.modelSettingsDraftModelId = "";
       const discardBtn = document.getElementById("discardModelSettingsBtn");
       if (discardBtn) {
         discardBtn.hidden = true;
@@ -893,9 +787,9 @@
     }
 
     function shouldPauseSelectedModelSettingsRender() {
-      return settingsModalOpen
-        && settingsWorkspaceTab === "model"
-        && (modelSettingsDraftDirty || isEditingModelSettingsField());
+      return appState.settingsModalOpen
+        && appState.settingsWorkspaceTab === "model"
+        && (appState.modelSettingsDraftDirty || isEditingModelSettingsField());
     }
 
     function modelSettingsFormHasUnsavedValues(chat, vision) {
@@ -929,16 +823,16 @@
       );
     }
 
-    function selectedModelHasUnsavedChanges(statusPayload = latestStatus) {
+    function selectedModelHasUnsavedChanges(statusPayload = appState.latestStatus) {
       const selectedModel = resolveSelectedSettingsModel(statusPayload);
       const selectedModelId = String(selectedModel?.id || "");
       if (!selectedModelId) return false;
       const chat = normalizeChatSettings(selectedModel?.settings?.chat);
       const vision = normalizeVisionSettings(selectedModel?.settings?.vision);
       return (
-        (modelSettingsDraftDirty && modelSettingsDraftModelId === selectedModelId)
+        (appState.modelSettingsDraftDirty && appState.modelSettingsDraftModelId === selectedModelId)
         || (
-          displayedSettingsModelId === selectedModelId
+          appState.displayedSettingsModelId === selectedModelId
           && modelSettingsFormHasUnsavedValues(chat, vision)
         )
       );
@@ -952,12 +846,12 @@
     }
 
     function discardSelectedModelSettings() {
-      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      const selectedModel = resolveSelectedSettingsModel(appState.latestStatus);
       if (!selectedModel) return;
       clearModelSettingsDraftState();
-      displayedSettingsModelId = "";
-      modelSettingsStatusModelId = "";
-      renderSelectedModelSettings(latestStatus);
+      appState.displayedSettingsModelId = "";
+      appState.modelSettingsStatusModelId = "";
+      renderSelectedModelSettings(appState.latestStatus);
       const statusEl = document.getElementById("modelSettingsStatus");
       if (statusEl) {
         statusEl.textContent = "Changes discarded.";
@@ -984,15 +878,15 @@
     }
 
     function cancelPendingImageWork() {
-      pendingImageToken += 1;
-      if (pendingImageReader) {
-        pendingImageReader.abort();
+      appState.pendingImageToken += 1;
+      if (appState.pendingImageReader) {
+        appState.pendingImageReader.abort();
       }
-      pendingImageReader = null;
+      appState.pendingImageReader = null;
     }
 
     function clearPendingImage() {
-      pendingImage = null;
+      appState.pendingImage = null;
       const fileInput = document.getElementById("imageInput");
       const attachBtn = document.getElementById("attachImageBtn");
       const preview = document.getElementById("imagePreview");
@@ -1022,8 +916,8 @@
     }
 
     function handleImageSelected(file) {
-      const selectionToken = pendingImageToken + 1;
-      pendingImageToken = selectionToken;
+      const selectionToken = appState.pendingImageToken + 1;
+      appState.pendingImageToken = selectionToken;
 
       if (!file) {
         clearPendingImage();
@@ -1033,9 +927,9 @@
         focusPromptInput();
         return;
       }
-      if (activeRuntimeVisionCapability(latestStatus) === false) {
+      if (activeRuntimeVisionCapability(appState.latestStatus) === false) {
         clearPendingImage();
-        showTextOnlyImageBlockedState(latestStatus);
+        showTextOnlyImageBlockedState(appState.latestStatus);
         return;
       }
       if (!String(file.type || "").startsWith("image/")) {
@@ -1048,11 +942,11 @@
         return;
       }
 
-      if (pendingImageReader) {
-        pendingImageReader.abort();
+      if (appState.pendingImageReader) {
+        appState.pendingImageReader.abort();
       }
       const reader = new FileReader();
-      pendingImageReader = reader;
+      appState.pendingImageReader = reader;
       setComposerActivity("Reading image...");
       setComposerStatusChip("Reading image • 0%", { phase: "image" });
       setCancelEnabled(true);
@@ -1067,14 +961,14 @@
         setComposerStatusChip("Reading image...", { phase: "image" });
       };
       reader.onload = async () => {
-        if (selectionToken !== pendingImageToken) {
+        if (selectionToken !== appState.pendingImageToken) {
           return;
         }
         const result = typeof reader.result === "string" ? reader.result : "";
         if (!result.startsWith("data:image/")) {
           appendMessage("assistant", "Invalid image encoding.");
           clearPendingImage();
-          pendingImageReader = null;
+          appState.pendingImageReader = null;
           setComposerActivity("");
           hideComposerStatusChip();
           setCancelEnabled(false);
@@ -1088,7 +982,7 @@
         } catch (_err) {
           appendMessage("assistant", "Could not optimize the selected image.");
           clearPendingImage();
-          pendingImageReader = null;
+          appState.pendingImageReader = null;
           setComposerActivity("");
           hideComposerStatusChip();
           setCancelEnabled(false);
@@ -1096,11 +990,11 @@
           return;
         }
 
-        if (selectionToken !== pendingImageToken) {
+        if (selectionToken !== appState.pendingImageToken) {
           return;
         }
 
-        pendingImage = {
+        appState.pendingImage = {
           name: file.name || "image",
           type: processedImage.type || file.type || "image/*",
           size: Number(processedImage.size) || 0,
@@ -1115,16 +1009,16 @@
         const clearBtn = document.getElementById("clearImageBtn");
         const attachBtn = document.getElementById("attachImageBtn");
         if (preview) {
-          preview.src = pendingImage.dataUrl;
+          preview.src = appState.pendingImage.dataUrl;
         }
         if (previewWrap) {
           previewWrap.hidden = false;
         }
         if (imageMeta) {
-          if (pendingImage.optimized && pendingImage.originalSize > pendingImage.size) {
-            imageMeta.textContent = `${pendingImage.name} (${formatBytes(pendingImage.size)}, optimized from ${formatBytes(pendingImage.originalSize)})`;
+          if (appState.pendingImage.optimized && appState.pendingImage.originalSize > appState.pendingImage.size) {
+            imageMeta.textContent = `${appState.pendingImage.name} (${formatBytes(appState.pendingImage.size)}, optimized from ${formatBytes(appState.pendingImage.originalSize)})`;
           } else {
-            imageMeta.textContent = `${pendingImage.name} (${formatBytes(pendingImage.size)})`;
+            imageMeta.textContent = `${appState.pendingImage.name} (${formatBytes(appState.pendingImage.size)})`;
           }
           imageMeta.hidden = false;
         }
@@ -1135,30 +1029,30 @@
           attachBtn.textContent = "Change image";
           attachBtn.classList.add("selected");
         }
-        pendingImageReader = null;
+        appState.pendingImageReader = null;
         setComposerActivity("");
         hideComposerStatusChip();
         setCancelEnabled(false);
         focusPromptInput();
       };
       reader.onerror = () => {
-        if (selectionToken !== pendingImageToken) {
+        if (selectionToken !== appState.pendingImageToken) {
           return;
         }
         appendMessage("assistant", "Could not read the selected image.");
         clearPendingImage();
-        pendingImageReader = null;
+        appState.pendingImageReader = null;
         setComposerActivity("");
         hideComposerStatusChip();
         setCancelEnabled(false);
         focusPromptInput();
       };
       reader.onabort = () => {
-        if (selectionToken !== pendingImageToken) {
+        if (selectionToken !== appState.pendingImageToken) {
           return;
         }
         clearPendingImage();
-        pendingImageReader = null;
+        appState.pendingImageReader = null;
         setComposerActivity("Image load cancelled.");
         hideComposerStatusChip();
         setCancelEnabled(false);
@@ -1168,19 +1062,19 @@
     }
 
     function buildUserMessageContent(content) {
-      if (!pendingImage) {
+      if (!appState.pendingImage) {
         return content;
       }
       const textPart = content || "Describe this image.";
       return [
         { type: "text", text: textPart },
-        { type: "image_url", image_url: { url: pendingImage.dataUrl } },
+        { type: "image_url", image_url: { url: appState.pendingImage.dataUrl } },
       ];
     }
 
     function buildUserBubblePayload(content) {
       const text = String(content || "");
-      if (!pendingImage) {
+      if (!appState.pendingImage) {
         return {
           text,
           imageDataUrl: "",
@@ -1189,8 +1083,8 @@
       }
       return {
         text,
-        imageDataUrl: pendingImage.dataUrl,
-        imageName: pendingImage.name || "image",
+        imageDataUrl: appState.pendingImage.dataUrl,
+        imageName: appState.pendingImage.name || "image",
       };
     }
 
@@ -1210,7 +1104,7 @@
           || normalized.includes("mmproj")
         )
       ) {
-        return formatImageRejectedNotice(latestStatus);
+        return formatImageRejectedNotice(appState.latestStatus);
       }
       if (apiMessage) {
         return `Request failed (${statusCode}): ${apiMessage}`;
@@ -1219,10 +1113,10 @@
     }
 
     function openImagePicker() {
-      if (requestInFlight) return;
-      if (activeRuntimeVisionCapability(latestStatus) === false) {
+      if (appState.requestInFlight) return;
+      if (activeRuntimeVisionCapability(appState.latestStatus) === false) {
         clearPendingImage();
-        showTextOnlyImageBlockedState(latestStatus);
+        showTextOnlyImageBlockedState(appState.latestStatus);
         return;
       }
       const input = document.getElementById("imageInput");
@@ -1232,10 +1126,10 @@
     }
 
     function isMobileSidebarViewport() {
-      if (!mobileSidebarMql) {
-        mobileSidebarMql = window.matchMedia("(max-width: 900px)");
+      if (!appState.mobileSidebarMql) {
+        appState.mobileSidebarMql = window.matchMedia("(max-width: 900px)");
       }
-      return mobileSidebarMql.matches;
+      return appState.mobileSidebarMql.matches;
     }
 
     function setSidebarOpen(open) {
@@ -1264,18 +1158,18 @@
     }
 
     function setSettingsModalOpen(open) {
-      settingsModalOpen = Boolean(open);
+      appState.settingsModalOpen = Boolean(open);
       const modal = document.getElementById("settingsModal");
       const backdrop = document.getElementById("settingsBackdrop");
-      document.body.classList.toggle("settings-modal-open", settingsModalOpen);
+      document.body.classList.toggle("settings-modal-open", appState.settingsModalOpen);
       if (modal) {
-        modal.hidden = !settingsModalOpen;
+        modal.hidden = !appState.settingsModalOpen;
       }
       if (backdrop) {
-        backdrop.hidden = !settingsModalOpen;
+        backdrop.hidden = !appState.settingsModalOpen;
       }
-      if (settingsModalOpen) {
-        settingsModalOpenedAtMs = performance.now();
+      if (appState.settingsModalOpen) {
+        appState.settingsModalOpenedAtMs = performance.now();
         setSidebarOpen(false);
       } else {
         closeLegacySettingsModal();
@@ -1283,28 +1177,28 @@
     }
 
     function setLegacySettingsModalOpen(open) {
-      legacySettingsModalOpen = Boolean(open);
+      appState.legacySettingsModalOpen = Boolean(open);
       const modal = document.getElementById("legacySettingsModal");
       const backdrop = document.getElementById("legacySettingsBackdrop");
-      document.body.classList.toggle("legacy-settings-modal-open", legacySettingsModalOpen);
+      document.body.classList.toggle("legacy-settings-modal-open", appState.legacySettingsModalOpen);
       if (modal) {
-        modal.hidden = !legacySettingsModalOpen;
+        modal.hidden = !appState.legacySettingsModalOpen;
       }
       if (backdrop) {
-        backdrop.hidden = !legacySettingsModalOpen;
+        backdrop.hidden = !appState.legacySettingsModalOpen;
       }
-      if (legacySettingsModalOpen) {
+      if (appState.legacySettingsModalOpen) {
         setSidebarOpen(false);
       }
     }
 
     function showSettingsWorkspaceTab(tabName) {
-      settingsWorkspaceTab = tabName === "yaml" ? "yaml" : "model";
+      appState.settingsWorkspaceTab = tabName === "yaml" ? "yaml" : "model";
       const modelPanel = document.getElementById("settingsModelWorkspace");
       const yamlPanel = document.getElementById("settingsYamlPanel");
       const modelTabBtn = document.getElementById("settingsWorkspaceTabModel");
       const yamlTabBtn = document.getElementById("settingsWorkspaceTabYaml");
-      const isYaml = settingsWorkspaceTab === "yaml";
+      const isYaml = appState.settingsWorkspaceTab === "yaml";
       if (modelPanel) modelPanel.hidden = isYaml;
       if (yamlPanel) yamlPanel.hidden = !isYaml;
       if (modelTabBtn) {
@@ -1315,14 +1209,14 @@
         yamlTabBtn.classList.toggle("active", isYaml);
         yamlTabBtn.setAttribute("aria-selected", isYaml ? "true" : "false");
       }
-      if (isYaml && !settingsYamlLoaded) {
+      if (isYaml && !appState.settingsYamlLoaded) {
         loadSettingsDocument();
       }
     }
 
     function openSettingsModal() {
-      showSettingsWorkspaceTab(settingsWorkspaceTab);
-      renderSettingsWorkspace(latestStatus);
+      showSettingsWorkspaceTab(appState.settingsWorkspaceTab);
+      renderSettingsWorkspace(appState.latestStatus);
       setSettingsModalOpen(true);
     }
 
@@ -1371,7 +1265,7 @@
       const visionEnabled = document.getElementById("visionEnabled");
       if (!selectedModel) {
         clearModelSettingsDraftState();
-        displayedSettingsModelId = "";
+        appState.displayedSettingsModelId = "";
         if (modelNameField) modelNameField.textContent = "No model selected";
         if (modelIdentityMeta) modelIdentityMeta.replaceChildren();
         if (capabilitiesText) capabilitiesText.textContent = "Register or upload a model to configure it.";
@@ -1392,9 +1286,9 @@
       const supportsVision = Boolean(selectedModel?.capabilities?.vision);
       const projector = normalizeProjectorStatus(selectedModel?.projector, vision);
       const preserveDraft = (
-        (modelSettingsDraftDirty && modelSettingsDraftModelId === selectedModelId)
+        (appState.modelSettingsDraftDirty && appState.modelSettingsDraftModelId === selectedModelId)
         || (
-          displayedSettingsModelId === selectedModelId
+          appState.displayedSettingsModelId === selectedModelId
           && modelSettingsFormHasUnsavedValues(chat, vision)
         )
         || isEditingModelSettingsField()
@@ -1457,7 +1351,7 @@
         } else {
           const currentText = String(statusEl.textContent || "");
           const keepRecentSuccess = (
-            modelSettingsStatusModelId === selectedModelId
+            appState.modelSettingsStatusModelId === selectedModelId
             && /updated|saved/i.test(currentText)
           );
           if (!keepRecentSuccess) {
@@ -1480,7 +1374,7 @@
         document.getElementById("max_tokens").value = String(chat.max_tokens);
         syncSegmentedControl("generationMode");
         updateSeedFieldState(chat.generation_mode);
-        displayedSettingsModelId = selectedModelId;
+        appState.displayedSettingsModelId = selectedModelId;
       }
 
       if (visionSection) {
@@ -1501,7 +1395,7 @@
       }
       if (projectorBtn) {
         projectorBtn.hidden = !supportsVision;
-        projectorBtn.disabled = !supportsVision || projectorDownloadInFlight;
+        projectorBtn.disabled = !supportsVision || appState.projectorDownloadInFlight;
         projectorBtn.dataset.modelId = String(selectedModel?.id || "");
         projectorBtn.dataset.projectorFilename = supportsVision
           ? String(projector.filename || vision.projector_filename || "")
@@ -1509,12 +1403,12 @@
         projectorBtn.textContent = projector.present ? "Re-download vision encoder" : "Download vision encoder";
       }
       if (saveBtn) {
-        saveBtn.disabled = modelSettingsSaveInFlight;
+        saveBtn.disabled = appState.modelSettingsSaveInFlight;
       }
       if (discardBtn) {
         const hasUnsavedChanges = selectedModelHasUnsavedChanges(statusPayload);
         discardBtn.hidden = !hasUnsavedChanges;
-        discardBtn.disabled = modelSettingsSaveInFlight || !hasUnsavedChanges;
+        discardBtn.disabled = appState.modelSettingsSaveInFlight || !hasUnsavedChanges;
       }
     }
 
@@ -1646,12 +1540,12 @@
       if (!shouldPauseSelectedModelSettingsRender()) {
         renderSelectedModelSettings(statusPayload);
       }
-      showSettingsWorkspaceTab(settingsWorkspaceTab);
+      showSettingsWorkspaceTab(appState.settingsWorkspaceTab);
     }
 
     async function loadSettingsDocument() {
-      if (settingsYamlRequestInFlight) return;
-      settingsYamlRequestInFlight = true;
+      if (appState.settingsYamlRequestInFlight) return;
+      appState.settingsYamlRequestInFlight = true;
       const statusEl = document.getElementById("settingsYamlStatus");
       if (statusEl) statusEl.textContent = "Loading YAML...";
       try {
@@ -1662,18 +1556,18 @@
           return;
         }
         document.getElementById("settingsYamlInput").value = String(body?.document || "");
-        settingsYamlLoaded = true;
+        appState.settingsYamlLoaded = true;
         if (statusEl) statusEl.textContent = "YAML loaded.";
       } catch (err) {
         if (statusEl) statusEl.textContent = `Could not load YAML: ${err}`;
       } finally {
-        settingsYamlRequestInFlight = false;
+        appState.settingsYamlRequestInFlight = false;
       }
     }
 
     async function applySettingsDocument() {
-      if (settingsYamlRequestInFlight) return;
-      settingsYamlRequestInFlight = true;
+      if (appState.settingsYamlRequestInFlight) return;
+      appState.settingsYamlRequestInFlight = true;
       const statusEl = document.getElementById("settingsYamlStatus");
       if (statusEl) statusEl.textContent = "Applying YAML...";
       try {
@@ -1684,25 +1578,25 @@
           return;
         }
         clearModelSettingsDraftState();
-        displayedSettingsModelId = "";
-        modelSettingsStatusModelId = "";
+        appState.displayedSettingsModelId = "";
+        appState.modelSettingsStatusModelId = "";
         if (body?.active_model_id) {
-          selectedSettingsModelId = String(body.active_model_id);
+          appState.selectedSettingsModelId = String(body.active_model_id);
         }
         if (statusEl) statusEl.textContent = "YAML applied.";
-        settingsYamlLoaded = true;
+        appState.settingsYamlLoaded = true;
         await pollStatus();
       } catch (err) {
         if (statusEl) statusEl.textContent = `Could not apply YAML: ${err}`;
       } finally {
-        settingsYamlRequestInFlight = false;
+        appState.settingsYamlRequestInFlight = false;
       }
     }
 
     async function saveSelectedModelSettings() {
-      const selectedModel = resolveSelectedSettingsModel(latestStatus);
-      if (!selectedModel || modelSettingsSaveInFlight) return;
-      modelSettingsSaveInFlight = true;
+      const selectedModel = resolveSelectedSettingsModel(appState.latestStatus);
+      if (!selectedModel || appState.modelSettingsSaveInFlight) return;
+      appState.modelSettingsSaveInFlight = true;
       const statusEl = document.getElementById("modelSettingsStatus");
       const saveBtn = document.getElementById("saveModelSettingsBtn");
       const discardBtn = document.getElementById("discardModelSettingsBtn");
@@ -1720,23 +1614,23 @@
           return;
         }
         clearModelSettingsDraftState();
-        displayedSettingsModelId = "";
-        modelSettingsStatusModelId = String(selectedModel?.id || "");
+        appState.displayedSettingsModelId = "";
+        appState.modelSettingsStatusModelId = String(selectedModel?.id || "");
         if (statusEl) statusEl.textContent = "Model settings updated.";
         await pollStatus();
       } catch (err) {
         if (statusEl) statusEl.textContent = `Could not save model settings: ${err}`;
       } finally {
-        modelSettingsSaveInFlight = false;
+        appState.modelSettingsSaveInFlight = false;
         if (saveBtn) saveBtn.disabled = false;
         if (discardBtn) discardBtn.disabled = false;
       }
     }
 
     async function downloadProjectorForSelectedModel() {
-      const selectedModel = resolveSelectedSettingsModel(latestStatus);
-      if (!selectedModel || projectorDownloadInFlight) return;
-      projectorDownloadInFlight = true;
+      const selectedModel = resolveSelectedSettingsModel(appState.latestStatus);
+      if (!selectedModel || appState.projectorDownloadInFlight) return;
+      appState.projectorDownloadInFlight = true;
       const statusEl = document.getElementById("projectorStatusText");
       const button = document.getElementById("downloadProjectorBtn");
       if (button) button.disabled = true;
@@ -1755,29 +1649,29 @@
       } catch (err) {
         if (statusEl) statusEl.textContent = `Could not download encoder: ${err}`;
       } finally {
-        projectorDownloadInFlight = false;
+        appState.projectorDownloadInFlight = false;
         if (button) button.disabled = false;
       }
     }
 
     function setEditModalOpen(open) {
-      editModalOpen = Boolean(open);
+      appState.editModalOpen = Boolean(open);
       const modal = document.getElementById("editModal");
       const backdrop = document.getElementById("editBackdrop");
-      document.body.classList.toggle("edit-modal-open", editModalOpen);
+      document.body.classList.toggle("edit-modal-open", appState.editModalOpen);
       if (modal) {
-        modal.hidden = !editModalOpen;
+        modal.hidden = !appState.editModalOpen;
       }
       if (backdrop) {
-        backdrop.hidden = !editModalOpen;
+        backdrop.hidden = !appState.editModalOpen;
       }
-      if (editModalOpen) {
+      if (appState.editModalOpen) {
         setSidebarOpen(false);
       }
     }
 
     function closeEditMessageModal(options = {}) {
-      activeEditState = null;
+      appState.activeEditState = null;
       setEditModalOpen(false);
       if (options.restoreFocus !== false) {
         focusPromptInput();
@@ -1819,11 +1713,11 @@
       const turn = messageView?.turnRef;
       if (!turn || messageView?.role !== "user") return;
       const input = document.getElementById("editMessageInput");
-      activeEditState = {
+      appState.activeEditState = {
         turn,
-        wasGenerating: Boolean(requestInFlight),
+        wasGenerating: Boolean(appState.requestInFlight),
       };
-      updateEditModalCopy(activeEditState);
+      updateEditModalCopy(appState.activeEditState);
       if (input) {
         input.value = String(turn.userText || messageView.editText || "");
       }
@@ -1848,7 +1742,7 @@
     }
 
     function setMessagesPinnedState(pinned) {
-      messagesPinnedToBottom = Boolean(pinned);
+      appState.messagesPinnedToBottom = Boolean(pinned);
     }
 
     function createMessageActionIcon(kind) {
@@ -1995,7 +1889,7 @@
       const box = getMessagesBox();
       if (!box) return;
       const forceFollow = options.forceFollow === true;
-      if (forceFollow || (shouldFollow && !messagePointerSelectionActive && !hasActiveMessageSelection(box))) {
+      if (forceFollow || (shouldFollow && !appState.messagePointerSelectionActive && !hasActiveMessageSelection(box))) {
         box.scrollTop = box.scrollHeight;
         setMessagesPinnedState(true);
       }
@@ -2006,18 +1900,18 @@
       if (!box) return;
       box.addEventListener("pointerdown", (event) => {
         if (event.target instanceof Element && event.target.closest(".message-bubble, .message-meta")) {
-          messagePointerSelectionActive = true;
+          appState.messagePointerSelectionActive = true;
         }
       });
       const clearPointerSelection = () => {
-        messagePointerSelectionActive = false;
+        appState.messagePointerSelectionActive = false;
       };
       box.addEventListener("pointerup", clearPointerSelection);
       box.addEventListener("pointercancel", clearPointerSelection);
       document.addEventListener("pointerup", clearPointerSelection);
       document.addEventListener("selectionchange", () => {
         if (!hasActiveMessageSelection(box) && !document.activeElement?.closest?.(".message-bubble, .message-meta")) {
-          messagePointerSelectionActive = false;
+          appState.messagePointerSelectionActive = false;
         }
       });
       box.addEventListener("scroll", () => {
@@ -2027,9 +1921,9 @@
     }
 
     function bindMobileSidebar() {
-      mobileSidebarMql = window.matchMedia("(max-width: 900px)");
+      appState.mobileSidebarMql = window.matchMedia("(max-width: 900px)");
       const sync = () => {
-        if (!mobileSidebarMql.matches) {
+        if (!appState.mobileSidebarMql.matches) {
           setSidebarOpen(false);
         } else {
           setSidebarOpen(document.body.classList.contains("sidebar-open"));
@@ -2039,27 +1933,27 @@
       const onViewportChange = () => {
         sync();
       };
-      if (typeof mobileSidebarMql.addEventListener === "function") {
-        mobileSidebarMql.addEventListener("change", onViewportChange);
-      } else if (typeof mobileSidebarMql.addListener === "function") {
-        mobileSidebarMql.addListener(onViewportChange);
+      if (typeof appState.mobileSidebarMql.addEventListener === "function") {
+        appState.mobileSidebarMql.addEventListener("change", onViewportChange);
+      } else if (typeof appState.mobileSidebarMql.addListener === "function") {
+        appState.mobileSidebarMql.addListener(onViewportChange);
       }
 
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
-          if (modelSwitcherOpen) {
+          if (appState.modelSwitcherOpen) {
             closeModelSwitcher();
             return;
           }
-          if (editModalOpen) {
+          if (appState.editModalOpen) {
             closeEditMessageModal();
             return;
           }
-          if (legacySettingsModalOpen) {
+          if (appState.legacySettingsModalOpen) {
             closeLegacySettingsModal();
             return;
           }
-          if (settingsModalOpen) {
+          if (appState.settingsModalOpen) {
             closeSettingsModal();
             return;
           }
@@ -2171,18 +2065,18 @@
 
     function setSendEnabled() {
       const sendBtn = document.getElementById("sendBtn");
-      const ready = latestStatus && latestStatus.state === "READY";
-      if (requestInFlight) {
+      const ready = appState.latestStatus && appState.latestStatus.state === "READY";
+      if (appState.requestInFlight) {
         sendBtn.disabled = false;
         sendBtn.textContent = "Stop";
         sendBtn.classList.add("stop-mode");
-        renderComposerCapabilities(latestStatus);
+        renderComposerCapabilities(appState.latestStatus);
         return;
       }
       sendBtn.textContent = "Send";
       sendBtn.classList.remove("stop-mode");
       sendBtn.disabled = !ready;
-      renderComposerCapabilities(latestStatus);
+      renderComposerCapabilities(appState.latestStatus);
     }
 
     function setComposerActivity(message) {
@@ -2195,9 +2089,9 @@
       const chip = document.getElementById("composerStatusChip");
       const text = document.getElementById("composerStatusText");
       if (!chip || !text) return;
-      if (statusChipHideTimer) {
-        window.clearTimeout(statusChipHideTimer);
-        statusChipHideTimer = null;
+      if (appState.statusChipHideTimer) {
+        window.clearTimeout(appState.statusChipHideTimer);
+        appState.statusChipHideTimer = null;
       }
 
       const label = String(message || "").trim();
@@ -2205,12 +2099,12 @@
         chip.hidden = true;
         text.textContent = "";
         chip.dataset.phase = "idle";
-        statusChipVisibleAtMs = 0;
+        appState.statusChipVisibleAtMs = 0;
         return;
       }
 
       if (chip.hidden) {
-        statusChipVisibleAtMs = performance.now();
+        appState.statusChipVisibleAtMs = performance.now();
       }
       chip.hidden = false;
       text.textContent = label;
@@ -2221,13 +2115,13 @@
       const chip = document.getElementById("composerStatusChip");
       if (!chip) return;
       const immediate = options.immediate === true;
-      const elapsedMs = statusChipVisibleAtMs > 0 ? (performance.now() - statusChipVisibleAtMs) : STATUS_CHIP_MIN_VISIBLE_MS;
+      const elapsedMs = appState.statusChipVisibleAtMs > 0 ? (performance.now() - appState.statusChipVisibleAtMs) : STATUS_CHIP_MIN_VISIBLE_MS;
       const delayMs = immediate ? 0 : Math.max(0, STATUS_CHIP_MIN_VISIBLE_MS - elapsedMs);
-      if (statusChipHideTimer) {
-        window.clearTimeout(statusChipHideTimer);
+      if (appState.statusChipHideTimer) {
+        window.clearTimeout(appState.statusChipHideTimer);
       }
-      statusChipHideTimer = window.setTimeout(() => {
-        statusChipHideTimer = null;
+      appState.statusChipHideTimer = window.setTimeout(() => {
+        appState.statusChipHideTimer = null;
         setComposerStatusChip("");
       }, delayMs);
     }
@@ -2313,7 +2207,7 @@
       const estimate = estimatePrefillEtaMs(hasImage, promptTokens, imageBytes, bucket);
       const initialProgress = hasImage ? 14 : PREFILL_PROGRESS_FLOOR;
 
-      activePrefillProgress = {
+      appState.activePrefillProgress = {
         requestCtx,
         bucket,
         startedAtMs: performance.now(),
@@ -2328,8 +2222,8 @@
       setComposerActivity("Preparing prompt...");
       applyPrefillProgressState(requestCtx, initialProgress);
 
-      activePrefillProgress.timerId = window.setInterval(() => {
-        const active = activePrefillProgress;
+      appState.activePrefillProgress.timerId = window.setInterval(() => {
+        const active = appState.activePrefillProgress;
         if (!active || active.requestCtx !== requestCtx) return;
         const elapsedMs = Math.max(0, performance.now() - active.startedAtMs);
         const normalized = Math.max(0, elapsedMs / Math.max(active.etaMs, 1));
@@ -2353,7 +2247,7 @@
     }
 
     function markPrefillGenerationStarted(requestCtx) {
-      const active = activePrefillProgress;
+      const active = appState.activePrefillProgress;
       if (!active || active.requestCtx !== requestCtx) return Promise.resolve({ cancelled: false });
       if (active.finishPromise) {
         return active.finishPromise;
@@ -2377,8 +2271,8 @@
           }
           active.finishResolve = null;
           active.finishPromise = null;
-          if (activePrefillProgress && activePrefillProgress.requestCtx === requestCtx) {
-            activePrefillProgress = null;
+          if (appState.activePrefillProgress && appState.activePrefillProgress.requestCtx === requestCtx) {
+            appState.activePrefillProgress = null;
           }
           if (cancelled) {
             resolve({ cancelled: true });
@@ -2419,7 +2313,7 @@
     }
 
     function stopPrefillProgress(options = {}) {
-      const active = activePrefillProgress;
+      const active = appState.activePrefillProgress;
       if (active && active.timerId !== null) {
         window.clearInterval(active.timerId);
       }
@@ -2429,7 +2323,7 @@
       if (active && typeof active.finishResolve === "function") {
         active.finishResolve({ cancelled: true });
       }
-      activePrefillProgress = null;
+      appState.activePrefillProgress = null;
       if (options.resetUi !== false) {
         hideComposerStatusChip();
       }
@@ -2482,19 +2376,19 @@
       cancelBtn.disabled = !show;
     }
 
-    let markdownRendererConfigured = false;
+    let appState.markdownRendererConfigured = false;
 
     function renderAssistantMarkdownToHtml(text) {
       const source = String(text || "");
       if (!window.marked?.parse || !window.DOMPurify?.sanitize) {
         return null;
       }
-      if (!markdownRendererConfigured && typeof window.marked.setOptions === "function") {
+      if (!appState.markdownRendererConfigured && typeof window.marked.setOptions === "function") {
         window.marked.setOptions({
           gfm: true,
           breaks: true,
         });
-        markdownRendererConfigured = true;
+        appState.markdownRendererConfigured = true;
       }
       const renderedHtml = window.marked?.parse(source) || "";
       return window.DOMPurify?.sanitize(renderedHtml, {
@@ -2694,8 +2588,8 @@
       const deadline = performance.now() + Math.max(250, Number(timeoutMs) || 6000);
       return new Promise((resolve) => {
         const tick = () => {
-          if (!requestInFlight || performance.now() >= deadline) {
-            resolve(!requestInFlight);
+          if (!appState.requestInFlight || performance.now() >= deadline) {
+            resolve(!appState.requestInFlight);
             return;
           }
           window.setTimeout(tick, 40);
@@ -2706,11 +2600,11 @@
 
     function rollbackConversationFromTurn(targetTurn) {
       if (!targetTurn) return;
-      const startIndex = conversationTurns.indexOf(targetTurn);
+      const startIndex = appState.conversationTurns.indexOf(targetTurn);
       if (startIndex < 0) return;
-      chatHistory.length = Math.max(0, Number(targetTurn.baseHistoryLength) || 0);
-      for (let index = conversationTurns.length - 1; index >= startIndex; index -= 1) {
-        const turn = conversationTurns[index];
+      appState.chatHistory.length = Math.max(0, Number(targetTurn.baseHistoryLength) || 0);
+      for (let index = appState.conversationTurns.length - 1; index >= startIndex; index -= 1) {
+        const turn = appState.conversationTurns[index];
         if (turn?.assistantView) {
           removeMessage(turn.assistantView);
         }
@@ -2718,11 +2612,11 @@
           removeMessage(turn.userView);
         }
       }
-      conversationTurns.splice(startIndex);
+      appState.conversationTurns.splice(startIndex);
     }
 
     async function submitEditMessageModal() {
-      if (!activeEditState?.turn) {
+      if (!appState.activeEditState?.turn) {
         closeEditMessageModal();
         return;
       }
@@ -2735,11 +2629,11 @@
         return;
       }
 
-      const { turn } = activeEditState;
+      const { turn } = appState.activeEditState;
       setEditModalBusy(true);
 
-      if (requestInFlight && activeRequest) {
-        const current = activeRequest;
+      if (appState.requestInFlight && appState.activeRequest) {
+        const current = appState.activeRequest;
         current.hideProcessingBubbleOnCancel = true;
         if (current.assistantView) {
           removeMessage(current.assistantView);
@@ -2839,7 +2733,7 @@
     function populateModelSwitcher() {
       const list = document.getElementById("modelSwitcherList");
       if (!list) return;
-      const models = Array.isArray(latestStatus?.models) ? latestStatus.models : [];
+      const models = Array.isArray(appState.latestStatus?.models) ? appState.latestStatus.models : [];
       list.innerHTML = "";
       if (models.length === 0) {
         const li = document.createElement("li");
@@ -2891,7 +2785,7 @@
         el.focus();
       });
       if (badge) badge.setAttribute("aria-expanded", "true");
-      modelSwitcherOpen = true;
+      appState.modelSwitcherOpen = true;
     }
 
     function closeModelSwitcher() {
@@ -2901,11 +2795,11 @@
       el.classList.remove("open");
       el.hidden = true;
       if (badge) badge.setAttribute("aria-expanded", "false");
-      modelSwitcherOpen = false;
+      appState.modelSwitcherOpen = false;
     }
 
     function toggleModelSwitcher() {
-      if (modelSwitcherOpen) {
+      if (appState.modelSwitcherOpen) {
         closeModelSwitcher();
       } else {
         openModelSwitcher();
@@ -2952,7 +2846,7 @@
         hint.textContent = "Auto-download starts soon if idle.";
       }
 
-      if (downloadStartInFlight) {
+      if (appState.downloadStartInFlight) {
         startBtn.textContent = resumableFailedModel ? "Resuming..." : "Starting...";
         startBtn.disabled = true;
       } else {
@@ -2971,24 +2865,24 @@
       const resumableFailedModel = findResumableFailedModel(statusPayload);
       const showResume = hasModel && state === "READY" && downloadError === "download_failed" && !!resumableFailedModel;
       actions.hidden = !showResume;
-      resumeBtn.disabled = downloadStartInFlight;
-      resumeBtn.textContent = downloadStartInFlight ? "Resuming..." : "Resume";
+      resumeBtn.disabled = appState.downloadStartInFlight;
+      resumeBtn.textContent = appState.downloadStartInFlight ? "Resuming..." : "Resume";
     }
 
     function setRuntimeDetailsExpanded(expanded) {
-      runtimeDetailsExpanded = Boolean(expanded);
+      appState.runtimeDetailsExpanded = Boolean(expanded);
       const details = document.getElementById("runtimeDetails");
       const toggle = document.getElementById("runtimeViewToggle");
       const compact = document.getElementById("runtimeCompact");
       if (details) {
-        details.hidden = !runtimeDetailsExpanded;
+        details.hidden = !appState.runtimeDetailsExpanded;
       }
       if (compact) {
-        compact.hidden = runtimeDetailsExpanded;
+        compact.hidden = appState.runtimeDetailsExpanded;
       }
       if (toggle) {
-        toggle.textContent = runtimeDetailsExpanded ? "Hide details" : "Show details";
-        toggle.setAttribute("aria-expanded", runtimeDetailsExpanded ? "true" : "false");
+        toggle.textContent = appState.runtimeDetailsExpanded ? "Hide details" : "Show details";
+        toggle.setAttribute("aria-expanded", appState.runtimeDetailsExpanded ? "true" : "false");
       }
     }
 
@@ -3416,14 +3310,14 @@
         setLlamaRuntimeSwitchStatus("No runtime switch in progress.");
       }
 
-      setLlamaRuntimeSwitchButtonState(llamaRuntimeSwitchInFlight || switchState?.active === true);
-      setLlamaMemoryLoadingButtonState(llamaMemoryLoadingApplyInFlight);
-      setLargeModelOverrideButtonState(largeModelOverrideApplyInFlight);
-      setPowerCalibrationButtonsState(powerCalibrationActionInFlight);
+      setLlamaRuntimeSwitchButtonState(appState.llamaRuntimeSwitchInFlight || switchState?.active === true);
+      setLlamaMemoryLoadingButtonState(appState.llamaMemoryLoadingApplyInFlight);
+      setLargeModelOverrideButtonState(appState.largeModelOverrideApplyInFlight);
+      setPowerCalibrationButtonsState(appState.powerCalibrationActionInFlight);
     }
 
     function findModelInLatestStatus(modelId) {
-      const models = Array.isArray(latestStatus?.models) ? latestStatus.models : [];
+      const models = Array.isArray(appState.latestStatus?.models) ? appState.latestStatus.models : [];
       return models.find((item) => String(item?.id || "") === String(modelId || "")) || null;
     }
 
@@ -3477,7 +3371,7 @@
     }
 
     async function switchLlamaRuntimeBundle() {
-      if (llamaRuntimeSwitchInFlight) return;
+      if (appState.llamaRuntimeSwitchInFlight) return;
       const select = document.getElementById("llamaRuntimeFamilySelect");
       const family = String(select?.value || "").trim();
       if (!family) {
@@ -3490,7 +3384,7 @@
       );
       if (!confirmed) return;
 
-      llamaRuntimeSwitchInFlight = true;
+      appState.llamaRuntimeSwitchInFlight = true;
       setLlamaRuntimeSwitchButtonState(true);
       setLlamaRuntimeSwitchStatus("Switching runtime...");
       setComposerActivity("Switching llama runtime...");
@@ -3505,14 +3399,14 @@
       } catch (err) {
         appendMessage("assistant", `Could not switch llama runtime: ${err}`);
       } finally {
-        llamaRuntimeSwitchInFlight = false;
+        appState.llamaRuntimeSwitchInFlight = false;
         setLlamaRuntimeSwitchButtonState(false);
         await pollStatus();
       }
     }
 
     async function applyLlamaMemoryLoadingMode() {
-      if (llamaMemoryLoadingApplyInFlight) return;
+      if (appState.llamaMemoryLoadingApplyInFlight) return;
       const select = document.getElementById("llamaMemoryLoadingMode");
       const mode = String(select?.value || "auto").trim() || "auto";
       const label = select?.selectedOptions?.[0]?.textContent || mode;
@@ -3522,7 +3416,7 @@
       );
       if (!confirmed) return;
 
-      llamaMemoryLoadingApplyInFlight = true;
+      appState.llamaMemoryLoadingApplyInFlight = true;
       setLlamaMemoryLoadingButtonState(true);
       setLlamaMemoryLoadingStatus(`Applying memory loading mode: ${label}...`);
       try {
@@ -3545,14 +3439,14 @@
         appendMessage("assistant", `Could not update model memory loading: ${err}`);
         setLlamaMemoryLoadingStatus(`Last memory loading update error: ${err}`);
       } finally {
-        llamaMemoryLoadingApplyInFlight = false;
+        appState.llamaMemoryLoadingApplyInFlight = false;
         setLlamaMemoryLoadingButtonState(false);
       }
     }
 
     async function applyLargeModelCompatibilityOverride(enabled) {
-      if (largeModelOverrideApplyInFlight) return;
-      largeModelOverrideApplyInFlight = true;
+      if (appState.largeModelOverrideApplyInFlight) return;
+      appState.largeModelOverrideApplyInFlight = true;
       setLargeModelOverrideButtonState(true);
       setLargeModelOverrideStatus(
         enabled
@@ -3581,7 +3475,7 @@
         appendMessage("assistant", `Could not update compatibility override: ${err}`);
         setLargeModelOverrideStatus(`Last compatibility override error: ${err}`);
       } finally {
-        largeModelOverrideApplyInFlight = false;
+        appState.largeModelOverrideApplyInFlight = false;
         setLargeModelOverrideButtonState(false);
         await pollStatus();
       }
@@ -3593,7 +3487,7 @@
     }
 
     async function capturePowerCalibrationSample() {
-      if (powerCalibrationActionInFlight) return;
+      if (appState.powerCalibrationActionInFlight) return;
       const input = document.getElementById("powerCalibrationWallWatts");
       const wallWatts = Number(input?.value);
       if (!Number.isFinite(wallWatts) || wallWatts <= 0) {
@@ -3602,7 +3496,7 @@
         return;
       }
 
-      powerCalibrationActionInFlight = true;
+      appState.powerCalibrationActionInFlight = true;
       setPowerCalibrationButtonsState(true);
       setPowerCalibrationStatus("Capturing power calibration sample...");
       try {
@@ -3620,15 +3514,15 @@
         appendMessage("assistant", `Could not capture power calibration sample: ${err}`);
         setPowerCalibrationStatus(`Power calibration error: ${err}`);
       } finally {
-        powerCalibrationActionInFlight = false;
+        appState.powerCalibrationActionInFlight = false;
         setPowerCalibrationButtonsState(false);
         await pollStatus();
       }
     }
 
     async function fitPowerCalibrationModel() {
-      if (powerCalibrationActionInFlight) return;
-      powerCalibrationActionInFlight = true;
+      if (appState.powerCalibrationActionInFlight) return;
+      appState.powerCalibrationActionInFlight = true;
       setPowerCalibrationButtonsState(true);
       setPowerCalibrationStatus("Computing power calibration...");
       try {
@@ -3647,20 +3541,20 @@
         appendMessage("assistant", `Could not compute power calibration: ${err}`);
         setPowerCalibrationStatus(`Power calibration error: ${err}`);
       } finally {
-        powerCalibrationActionInFlight = false;
+        appState.powerCalibrationActionInFlight = false;
         setPowerCalibrationButtonsState(false);
         await pollStatus();
       }
     }
 
     async function resetPowerCalibrationModel() {
-      if (powerCalibrationActionInFlight) return;
+      if (appState.powerCalibrationActionInFlight) return;
       const confirmed = window.confirm(
         "Reset power calibration to the default correction model? Saved wall-meter samples will be cleared."
       );
       if (!confirmed) return;
 
-      powerCalibrationActionInFlight = true;
+      appState.powerCalibrationActionInFlight = true;
       setPowerCalibrationButtonsState(true);
       setPowerCalibrationStatus("Resetting power calibration...");
       try {
@@ -3675,7 +3569,7 @@
         appendMessage("assistant", `Could not reset power calibration: ${err}`);
         setPowerCalibrationStatus(`Power calibration error: ${err}`);
       } finally {
-        powerCalibrationActionInFlight = false;
+        appState.powerCalibrationActionInFlight = false;
         setPowerCalibrationButtonsState(false);
         await pollStatus();
       }
@@ -3716,14 +3610,14 @@
     }
 
     async function registerModelFromUrl() {
-      if (modelActionInFlight) return;
+      if (appState.modelActionInFlight) return;
       const input = document.getElementById("modelUrlInput");
       const sourceUrl = String(input?.value || "").trim();
       if (!sourceUrl) {
         setModelUrlStatus("Enter an HTTPS model URL ending with .gguf.");
         return;
       }
-      modelActionInFlight = true;
+      appState.modelActionInFlight = true;
       setModelUrlStatus("Adding model URL...");
       try {
         const { res, body } = await postJson("/internal/models/register", { source_url: sourceUrl });
@@ -3740,15 +3634,15 @@
       } catch (err) {
         setModelUrlStatus(`Could not add model URL: ${err}`);
       } finally {
-        modelActionInFlight = false;
+        appState.modelActionInFlight = false;
         await pollStatus();
       }
     }
 
     async function startModelDownloadForModel(modelId) {
       if (!modelId) return;
-      if (modelActionInFlight) return;
-      modelActionInFlight = true;
+      if (appState.modelActionInFlight) return;
+      appState.modelActionInFlight = true;
       try {
         const { res, body } = await postJson("/internal/models/download", { model_id: modelId });
         if (!res.ok) {
@@ -3761,18 +3655,18 @@
       } catch (err) {
         appendMessage("assistant", `Could not start model download: ${err}`);
       } finally {
-        modelActionInFlight = false;
+        appState.modelActionInFlight = false;
         await pollStatus();
       }
     }
 
     async function cancelActiveModelDownload(modelId = null) {
-      if (modelActionInFlight) return;
-      const targetModel = findModelInLatestStatus(modelId) || findModelInLatestStatus(latestStatus?.download?.current_model_id);
+      if (appState.modelActionInFlight) return;
+      const targetModel = findModelInLatestStatus(modelId) || findModelInLatestStatus(appState.latestStatus?.download?.current_model_id);
       const targetName = String(targetModel?.filename || "this model");
       const confirmed = window.confirm(`Stop the current download for ${targetName}?`);
       if (!confirmed) return;
-      modelActionInFlight = true;
+      appState.modelActionInFlight = true;
       try {
         const { res, body } = await postJson("/internal/models/cancel-download", {});
         if (!res.ok) {
@@ -3781,15 +3675,15 @@
       } catch (err) {
         appendMessage("assistant", `Could not cancel model download: ${err}`);
       } finally {
-        modelActionInFlight = false;
+        appState.modelActionInFlight = false;
         await pollStatus();
       }
     }
 
     async function activateSelectedModel(modelId) {
       if (!modelId) return;
-      if (modelActionInFlight) return;
-      modelActionInFlight = true;
+      if (appState.modelActionInFlight) return;
+      appState.modelActionInFlight = true;
       try {
         const { res, body } = await postJson("/internal/models/activate", { model_id: modelId });
         if (!res.ok) {
@@ -3800,20 +3694,20 @@
       } catch (err) {
         appendMessage("assistant", `Could not activate model: ${err}`);
       } finally {
-        modelActionInFlight = false;
+        appState.modelActionInFlight = false;
         await pollStatus();
       }
     }
 
     async function moveModelToSsd(modelId) {
       if (!modelId) return;
-      if (modelActionInFlight) return;
+      if (appState.modelActionInFlight) return;
       const targetModel = findModelInLatestStatus(modelId);
       const targetName = String(targetModel?.filename || "this model");
-      const targetLabel = String(latestStatus?.storage_targets?.ssd?.label || "attached SSD");
+      const targetLabel = String(appState.latestStatus?.storage_targets?.ssd?.label || "attached SSD");
       const confirmed = window.confirm(`Move ${targetName} onto ${targetLabel} now?`);
       if (!confirmed) return;
-      modelActionInFlight = true;
+      appState.modelActionInFlight = true;
       try {
         const { res, body } = await postJson("/internal/models/move-to-ssd", { model_id: modelId });
         if (!res.ok) {
@@ -3824,14 +3718,14 @@
       } catch (err) {
         appendMessage("assistant", `Could not move model to SSD: ${err}`);
       } finally {
-        modelActionInFlight = false;
+        appState.modelActionInFlight = false;
         await pollStatus();
       }
     }
 
     async function deleteSelectedModel(modelId) {
       if (!modelId) return;
-      if (modelActionInFlight) return;
+      if (appState.modelActionInFlight) return;
       const targetModel = findModelInLatestStatus(modelId);
       const targetName = String(targetModel?.filename || "this model");
       const isDownloading = targetModel?.status === "downloading";
@@ -3840,7 +3734,7 @@
         : `Delete ${targetName} and remove it from the model list?`;
       const confirmed = window.confirm(confirmMessage);
       if (!confirmed) return;
-      modelActionInFlight = true;
+      appState.modelActionInFlight = true;
       try {
         const { res, body } = await postJson("/internal/models/delete", { model_id: modelId });
         if (!res.ok) {
@@ -3850,18 +3744,18 @@
       } catch (err) {
         appendMessage("assistant", `Could not delete model: ${err}`);
       } finally {
-        modelActionInFlight = false;
+        appState.modelActionInFlight = false;
         await pollStatus();
       }
     }
 
     async function purgeAllModels() {
-      if (modelActionInFlight) return;
+      if (appState.modelActionInFlight) return;
       const confirmed = window.confirm(
         "Delete ALL model files and clear model/download metadata now?"
       );
       if (!confirmed) return;
-      modelActionInFlight = true;
+      appState.modelActionInFlight = true;
       try {
         const { res, body } = await postJson("/internal/models/purge", { reset_bootstrap_flag: false });
         if (!res.ok || body?.purged !== true) {
@@ -3872,13 +3766,13 @@
       } catch (err) {
         appendMessage("assistant", `Could not purge models: ${err}`);
       } finally {
-        modelActionInFlight = false;
+        appState.modelActionInFlight = false;
         await pollStatus();
       }
     }
 
     async function uploadLocalModel() {
-      if (uploadRequest) return;
+      if (appState.uploadRequest) return;
       const input = document.getElementById("modelUploadInput");
       const file = input?.files?.[0];
       if (!file) {
@@ -3891,7 +3785,7 @@
       }
 
       const xhr = new XMLHttpRequest();
-      uploadRequest = xhr;
+      appState.uploadRequest = xhr;
       const cancelBtn = document.getElementById("cancelUploadBtn");
       if (cancelBtn) cancelBtn.hidden = false;
       setModelUploadStatus("Uploading model... 0%");
@@ -3907,20 +3801,20 @@
         }
       };
       xhr.onerror = async () => {
-        uploadRequest = null;
+        appState.uploadRequest = null;
         if (cancelBtn) cancelBtn.hidden = true;
         setModelUploadStatus("Upload failed.");
         await pollStatus();
       };
       xhr.onabort = async () => {
-        uploadRequest = null;
+        appState.uploadRequest = null;
         if (cancelBtn) cancelBtn.hidden = true;
         setModelUploadStatus("Upload cancelled.");
         await postJson("/internal/models/cancel-upload", {});
         await pollStatus();
       };
       xhr.onload = async () => {
-        uploadRequest = null;
+        appState.uploadRequest = null;
         if (cancelBtn) cancelBtn.hidden = true;
         const body = (() => {
           try {
@@ -3943,17 +3837,17 @@
     }
 
     function cancelLocalModelUpload() {
-      if (!uploadRequest) return;
-      uploadRequest.abort();
+      if (!appState.uploadRequest) return;
+      appState.uploadRequest.abort();
     }
 
     async function startModelDownload() {
-      if (downloadStartInFlight) return;
-      downloadStartInFlight = true;
-      renderDownloadPrompt(latestStatus || { download: { auto_start_remaining_seconds: 0 } });
+      if (appState.downloadStartInFlight) return;
+      appState.downloadStartInFlight = true;
+      renderDownloadPrompt(appState.latestStatus || { download: { auto_start_remaining_seconds: 0 } });
       try {
-        const resumableFailedModel = findResumableFailedModel(latestStatus);
-        const failedDownload = String(latestStatus?.download?.error || "") === "download_failed";
+        const resumableFailedModel = findResumableFailedModel(appState.latestStatus);
+        const failedDownload = String(appState.latestStatus?.download?.error || "") === "download_failed";
         let res;
         let body;
         if (resumableFailedModel && failedDownload) {
@@ -3985,10 +3879,10 @@
       } catch (err) {
         appendMessage(
           "assistant",
-          `Could not ${String(latestStatus?.download?.error || "") === "download_failed" ? "resume" : "start"} model download: ${err}`
+          `Could not ${String(appState.latestStatus?.download?.error || "") === "download_failed" ? "resume" : "start"} model download: ${err}`
         );
       } finally {
-        downloadStartInFlight = false;
+        appState.downloadStartInFlight = false;
         await pollStatus();
       }
     }
@@ -4003,29 +3897,29 @@
     }
 
     function stopRuntimeReconnectWatch() {
-      if (runtimeReconnectWatchTimer) {
-        window.clearTimeout(runtimeReconnectWatchTimer);
-        runtimeReconnectWatchTimer = null;
+      if (appState.runtimeReconnectWatchTimer) {
+        window.clearTimeout(appState.runtimeReconnectWatchTimer);
+        appState.runtimeReconnectWatchTimer = null;
       }
-      runtimeReconnectWatchActive = false;
-      runtimeReconnectAttempts = 0;
+      appState.runtimeReconnectWatchActive = false;
+      appState.runtimeReconnectAttempts = 0;
     }
 
     async function stepRuntimeReconnectWatch() {
-      if (!runtimeReconnectWatchActive) return;
-      runtimeReconnectAttempts += 1;
+      if (!appState.runtimeReconnectWatchActive) return;
+      appState.runtimeReconnectAttempts += 1;
       const statusPayload = await pollStatus({ timeoutMs: RUNTIME_RECONNECT_TIMEOUT_MS });
       if (isLocalModelConnected(statusPayload)) {
         stopRuntimeReconnectWatch();
         setComposerActivity("Runtime reconnected.");
         window.setTimeout(() => {
-          if (!runtimeReconnectWatchActive && !requestInFlight) {
+          if (!appState.runtimeReconnectWatchActive && !appState.requestInFlight) {
             setComposerActivity("");
           }
         }, 1500);
         return;
       }
-      if (runtimeReconnectAttempts >= RUNTIME_RECONNECT_MAX_ATTEMPTS) {
+      if (appState.runtimeReconnectAttempts >= RUNTIME_RECONNECT_MAX_ATTEMPTS) {
         stopRuntimeReconnectWatch();
         setComposerActivity("");
         appendMessage(
@@ -4035,26 +3929,26 @@
         );
         return;
       }
-      runtimeReconnectWatchTimer = window.setTimeout(stepRuntimeReconnectWatch, RUNTIME_RECONNECT_INTERVAL_MS);
+      appState.runtimeReconnectWatchTimer = window.setTimeout(stepRuntimeReconnectWatch, RUNTIME_RECONNECT_INTERVAL_MS);
     }
 
     function startRuntimeReconnectWatch() {
       stopRuntimeReconnectWatch();
-      runtimeReconnectWatchActive = true;
-      runtimeReconnectAttempts = 0;
+      appState.runtimeReconnectWatchActive = true;
+      appState.runtimeReconnectAttempts = 0;
       setComposerActivity("Runtime reset in progress. Reconnecting...");
       stepRuntimeReconnectWatch();
     }
 
     async function resetRuntimeHeavy() {
-      if (runtimeResetInFlight) return;
+      if (appState.runtimeResetInFlight) return;
       const confirmed = window.confirm(
         "Unload the model, reclaim memory/swap, and restart Potato runtime now? " +
         "The chat will disconnect briefly."
       );
       if (!confirmed) return;
 
-      runtimeResetInFlight = true;
+      appState.runtimeResetInFlight = true;
       let shouldTrackReconnect = false;
       setRuntimeResetButtonState(true);
       setComposerActivity("Scheduling runtime reset...");
@@ -4082,7 +3976,7 @@
       } catch (err) {
         appendMessage("assistant", `Could not start runtime reset: ${err}`);
       } finally {
-        runtimeResetInFlight = false;
+        appState.runtimeResetInFlight = false;
         setRuntimeResetButtonState(false);
         if (shouldTrackReconnect) {
           startRuntimeReconnectWatch();
@@ -4232,7 +4126,7 @@
     }
 
     function setStatus(statusPayload) {
-      latestStatus = statusPayload;
+      appState.latestStatus = statusPayload;
       const downloadText = formatSidebarStatusDetail(statusPayload);
       const text = `State: ${statusPayload.state} | ${downloadText}`;
       document.getElementById("statusText").textContent = text;
@@ -4248,7 +4142,7 @@
         countdownSelect.value = statusPayload?.download?.countdown_enabled === false ? "false" : "true";
       }
       updateLlamaIndicator(statusPayload);
-      if (modelSwitcherOpen) populateModelSwitcher();
+      if (appState.modelSwitcherOpen) populateModelSwitcher();
       renderDownloadPrompt(statusPayload);
       renderCompatibilityWarnings(statusPayload);
       renderLlamaRuntimeStatus(statusPayload);
@@ -4260,7 +4154,7 @@
 
     async function pollStatus(options = {}) {
       const timeoutMs = Math.max(500, Number(options?.timeoutMs || STATUS_POLL_TIMEOUT_MS));
-      const seq = ++statusPollSeq;
+      const seq = ++appState.statusPollSeq;
       const controller = new AbortController();
       const timeoutHandle = window.setTimeout(() => {
         controller.abort();
@@ -4268,24 +4162,24 @@
       try {
         const res = await fetch("/status", { cache: "no-store", signal: controller.signal });
         const body = await res.json();
-        if (seq < statusPollAppliedSeq) {
-          return latestStatus;
+        if (seq < appState.statusPollAppliedSeq) {
+          return appState.latestStatus;
         }
-        statusPollAppliedSeq = seq;
+        appState.statusPollAppliedSeq = seq;
         setStatus(body);
         return body;
       } catch (err) {
-        if (seq < statusPollAppliedSeq) {
-          return latestStatus;
+        if (seq < appState.statusPollAppliedSeq) {
+          return appState.latestStatus;
         }
-        statusPollAppliedSeq = seq;
+        appState.statusPollAppliedSeq = seq;
         const statusErrText = err?.name === "AbortError" ? "request timeout" : String(err);
-        if (latestStatus && typeof latestStatus === "object" && latestStatus.state && latestStatus.state !== "DOWN") {
+        if (appState.latestStatus && typeof appState.latestStatus === "object" && appState.latestStatus.state && appState.latestStatus.state !== "DOWN") {
           document.getElementById("statusText").textContent = `Status warning: ${statusErrText}`;
           renderStatusActions({});
-          return latestStatus;
+          return appState.latestStatus;
         }
-        latestStatus = {
+        appState.latestStatus = {
           state: "DOWN",
           model_present: false,
           model: { filename: "Unknown model", active_model_id: null },
@@ -4353,39 +4247,39 @@
         if (modelNameField) {
           modelNameField.textContent = "Unknown model (status unavailable)";
         }
-        updateLlamaIndicator(latestStatus);
-        renderDownloadPrompt(latestStatus);
-        renderCompatibilityWarnings(latestStatus);
-        renderSystemRuntime(latestStatus.system);
-        renderSettingsWorkspace(latestStatus);
-        renderUploadState(latestStatus);
+        updateLlamaIndicator(appState.latestStatus);
+        renderDownloadPrompt(appState.latestStatus);
+        renderCompatibilityWarnings(appState.latestStatus);
+        renderSystemRuntime(appState.latestStatus.system);
+        renderSettingsWorkspace(appState.latestStatus);
+        renderUploadState(appState.latestStatus);
         setSendEnabled();
-        return latestStatus;
+        return appState.latestStatus;
       } finally {
         window.clearTimeout(timeoutHandle);
       }
     }
 
     async function sendChat() {
-      if (requestInFlight) return;
-      if (imageCancelRecoveryTimer) {
-        window.clearTimeout(imageCancelRecoveryTimer);
-        imageCancelRecoveryTimer = null;
+      if (appState.requestInFlight) return;
+      if (appState.imageCancelRecoveryTimer) {
+        window.clearTimeout(appState.imageCancelRecoveryTimer);
+        appState.imageCancelRecoveryTimer = null;
       }
-      if (imageCancelRestartTimer) {
-        window.clearTimeout(imageCancelRestartTimer);
-        imageCancelRestartTimer = null;
+      if (appState.imageCancelRestartTimer) {
+        window.clearTimeout(appState.imageCancelRestartTimer);
+        appState.imageCancelRestartTimer = null;
       }
       const userPrompt = document.getElementById("userPrompt");
-      if (pendingImage && activeRuntimeVisionCapability(latestStatus) === false) {
+      if (appState.pendingImage && activeRuntimeVisionCapability(appState.latestStatus) === false) {
         clearPendingImage();
-        showTextOnlyImageBlockedState(latestStatus);
+        showTextOnlyImageBlockedState(appState.latestStatus);
         return;
       }
       const content = userPrompt.value.trim();
-      if (!content && !pendingImage) return;
-      const hasImageRequest = Boolean(pendingImage);
-      const selectedImageSize = pendingImage ? (Number(pendingImage.size) || 0) : 0;
+      if (!content && !appState.pendingImage) return;
+      const hasImageRequest = Boolean(appState.pendingImage);
+      const selectedImageSize = appState.pendingImage ? (Number(appState.pendingImage.size) || 0) : 0;
       const userMessage = { role: "user", content: buildUserMessageContent(content) };
       const userBubblePayload = buildUserBubblePayload(content);
       const requestStartMs = performance.now();
@@ -4399,11 +4293,11 @@
       };
       const streamStats = { timings: null, finish_reason: null };
       let activeAssistantView = null;
-      activeRequest = requestCtx;
+      appState.activeRequest = requestCtx;
 
       const settings = collectSettings();
 
-      const baseHistoryLength = chatHistory.length;
+      const baseHistoryLength = appState.chatHistory.length;
       const userView = appendMessage("user", userBubblePayload.text, {
         imageDataUrl: userBubblePayload.imageDataUrl,
         imageName: userBubblePayload.imageName,
@@ -4418,13 +4312,13 @@
       };
       userView.turnRef = turn;
       activeAssistantView.turnRef = turn;
-      conversationTurns.push(turn);
+      appState.conversationTurns.push(turn);
       requestCtx.turn = turn;
       requestCtx.assistantView = activeAssistantView;
       userPrompt.value = "";
       clearPendingImage();
       focusPromptInput();
-      requestInFlight = true;
+      appState.requestInFlight = true;
       setSendEnabled();
       setCancelEnabled(true);
 
@@ -4448,9 +4342,9 @@
         if (settings.system_prompt) {
           reqBody.messages.push({ role: "system", content: settings.system_prompt });
         }
-        reqBody.messages = reqBody.messages.concat(chatHistory);
+        reqBody.messages = reqBody.messages.concat(appState.chatHistory);
         reqBody.messages.push(userMessage);
-        chatHistory.push(userMessage);
+        appState.chatHistory.push(userMessage);
 
         const promptTokens = estimatePromptTokens(reqBody.messages);
         requestCtx.prefillBucket = choosePrefillBucket(hasImageRequest, promptTokens, selectedImageSize);
@@ -4551,7 +4445,7 @@
           }
           const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);
           updateMessage(activeAssistantView, finalAssistantText, { showActions: true });
-          chatHistory.push({ role: "assistant", content: finalAssistantText });
+          appState.chatHistory.push({ role: "assistant", content: finalAssistantText });
           const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
           if (requestCtx.stoppedByUser) {
             streamStats.finish_reason = "cancelled";
@@ -4574,7 +4468,7 @@
         const message = body?.choices?.[0]?.message || {};
         const messageContent = typeof message?.content === "string" ? message.content.trim() : "";
         const msg = messageContent || formatReasoningOnlyMessage(message?.reasoning_content) || JSON.stringify(body);
-        chatHistory.push({ role: "assistant", content: msg });
+        appState.chatHistory.push({ role: "assistant", content: msg });
         updateMessage(activeAssistantView, msg, { showActions: true });
         const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
         setMessageMeta(activeAssistantView, formatAssistantStats(body, elapsedSeconds, requestCtx.firstTokenLatencyMs));
@@ -4593,7 +4487,7 @@
             if (!partial) {
               updateMessage(activeAssistantView, "(stopped)", { showActions: true });
             } else {
-              chatHistory.push({ role: "assistant", content: partial });
+              appState.chatHistory.push({ role: "assistant", content: partial });
             }
             streamStats.finish_reason = "cancelled";
             setMessageMeta(activeAssistantView, formatAssistantStats(streamStats, elapsedSeconds, requestCtx.firstTokenLatencyMs));
@@ -4609,11 +4503,11 @@
           }
         }
       } finally {
-        if (chatHistory.length > 0) {
+        if (appState.chatHistory.length > 0) {
           try { await saveActiveSession(); } catch (_e) { /* IndexedDB write failed — degrade gracefully */ }
         }
-        requestInFlight = false;
-        activeRequest = null;
+        appState.requestInFlight = false;
+        appState.activeRequest = null;
         setSendEnabled();
         stopPrefillProgress();
         setComposerActivity("");
@@ -4623,9 +4517,9 @@
     }
 
     function stopGeneration() {
-      if (!requestInFlight || !activeRequest) return;
-      activeRequest.stoppedByUser = true;
-      activeRequest.controller.abort();
+      if (!appState.requestInFlight || !appState.activeRequest) return;
+      appState.activeRequest.stoppedByUser = true;
+      appState.activeRequest.controller.abort();
     }
 
     async function requestLlamaCancelRecovery(reason = "cancelled") {
@@ -4669,12 +4563,12 @@
     }
 
     function scheduleImageCancelRestartFallback() {
-      if (imageCancelRestartTimer) {
-        window.clearTimeout(imageCancelRestartTimer);
+      if (appState.imageCancelRestartTimer) {
+        window.clearTimeout(appState.imageCancelRestartTimer);
       }
-      imageCancelRestartTimer = window.setTimeout(async () => {
-        imageCancelRestartTimer = null;
-        if (requestInFlight) {
+      appState.imageCancelRestartTimer = window.setTimeout(async () => {
+        appState.imageCancelRestartTimer = null;
+        if (appState.requestInFlight) {
           return;
         }
         const healthy = await checkLlamaHealthStrict();
@@ -4694,12 +4588,12 @@
       if (!requestCtx?.hasImageRequest) {
         return;
       }
-      if (imageCancelRecoveryTimer) {
-        window.clearTimeout(imageCancelRecoveryTimer);
+      if (appState.imageCancelRecoveryTimer) {
+        window.clearTimeout(appState.imageCancelRecoveryTimer);
       }
-      imageCancelRecoveryTimer = window.setTimeout(async () => {
-        imageCancelRecoveryTimer = null;
-        if (requestInFlight) {
+      appState.imageCancelRecoveryTimer = window.setTimeout(async () => {
+        appState.imageCancelRecoveryTimer = null;
+        if (appState.requestInFlight) {
           return;
         }
         const healthy = await checkLlamaHealthStrict();
@@ -4728,7 +4622,7 @@
     }
 
     function cancelCurrentWork() {
-      if (pendingImageReader) {
+      if (appState.pendingImageReader) {
         cancelPendingImageWork();
         clearPendingImage();
         setComposerActivity("Image load cancelled.");
@@ -4736,8 +4630,8 @@
         setCancelEnabled(false);
         return;
       }
-      if (requestInFlight) {
-        const current = activeRequest;
+      if (appState.requestInFlight) {
+        const current = appState.activeRequest;
         stopPrefillProgress({ resetUi: false });
         setComposerActivity("Cancelling...");
         setComposerStatusChip("Cancelling...", { phase: "cancel" });
@@ -4766,7 +4660,7 @@
     setRuntimeDetailsExpanded(true);
     initSessionManager().catch(() => {});
     setInterval(() => {
-      if (settingsModalOpen) return;
+      if (appState.settingsModalOpen) return;
       pollStatus();
     }, 2000);
     pollStatus();
@@ -4819,7 +4713,7 @@
       }
     });
     document.addEventListener("click", (event) => {
-      if (!modelSwitcherOpen) return;
+      if (!appState.modelSwitcherOpen) return;
       const anchor = document.querySelector(".model-switcher-anchor");
       if (anchor && !anchor.contains(event.target)) {
         closeModelSwitcher();
@@ -4834,7 +4728,7 @@
         return;
       }
       const item = event.target.closest(".chat-session-item");
-      if (item?.dataset?.sessionId && item.dataset.sessionId !== activeSessionId) {
+      if (item?.dataset?.sessionId && item.dataset.sessionId !== appState.activeSessionId) {
         loadSessionIntoView(item.dataset.sessionId);
         if (isMobileSidebarViewport()) setSidebarOpen(false);
       }
@@ -4850,7 +4744,7 @@
       setSidebarOpen(false);
     });
     document.getElementById("runtimeViewToggle").addEventListener("click", () => {
-      setRuntimeDetailsExpanded(!runtimeDetailsExpanded);
+      setRuntimeDetailsExpanded(!appState.runtimeDetailsExpanded);
     });
     document.getElementById("startDownloadBtn").addEventListener("click", startModelDownload);
     document.getElementById("statusResumeDownloadBtn").addEventListener("click", startModelDownload);
@@ -4871,7 +4765,7 @@
       const action = target.dataset?.action;
       const row = target.closest(".model-row");
       const modelId = row?.dataset?.modelId;
-      const selectedModel = resolveSelectedSettingsModel(latestStatus);
+      const selectedModel = resolveSelectedSettingsModel(appState.latestStatus);
       const selectedModelId = String(selectedModel?.id || "");
       const targetDiffers = Boolean(modelId) && String(modelId) !== selectedModelId;
       if (targetDiffers && selectedModelHasUnsavedChanges()) {
@@ -4880,8 +4774,8 @@
       }
       if (!action) {
         if (modelId) {
-          selectedSettingsModelId = String(modelId);
-          renderSettingsWorkspace(latestStatus);
+          appState.selectedSettingsModelId = String(modelId);
+          renderSettingsWorkspace(appState.latestStatus);
         }
         return;
       }
@@ -4910,7 +4804,7 @@
     });
     document.getElementById("sendBtn").addEventListener("click", (event) => {
       event.preventDefault();
-      if (requestInFlight) {
+      if (appState.requestInFlight) {
         cancelCurrentWork();
         return;
       }
