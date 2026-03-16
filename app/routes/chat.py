@@ -1,0 +1,102 @@
+"""Chat completions proxy route."""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
+
+try:
+    from app.deps import get_runtime, get_chat_repository
+    from app.model_state import apply_model_chat_defaults
+    from app.repositories.chat_repository import BackendProxyError, ChatRepositoryManager
+    from app.runtime_state import RuntimeConfig
+    from app.settings import merge_active_model_chat_defaults, merge_chat_defaults
+except ModuleNotFoundError:
+    from deps import get_runtime, get_chat_repository  # type: ignore[no-redef]
+    from model_state import apply_model_chat_defaults  # type: ignore[no-redef]
+    from repositories.chat_repository import BackendProxyError, ChatRepositoryManager  # type: ignore[no-redef]
+    from runtime_state import RuntimeConfig  # type: ignore[no-redef]
+    from settings import merge_active_model_chat_defaults, merge_chat_defaults  # type: ignore[no-redef]
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# Late-bound references set by main.py during app creation
+_build_status = None
+_get_status_download_context = None
+_forward_headers = None
+
+
+def register_chat_helpers(*, build_status, get_status_download_context, forward_headers):
+    global _build_status, _get_status_download_context, _forward_headers
+    _build_status = build_status
+    _get_status_download_context = get_status_download_context
+    _forward_headers = forward_headers
+
+
+@router.post("/v1/chat/completions")
+async def chat_completions(
+    request: Request,
+    runtime_cfg: RuntimeConfig = Depends(get_runtime),
+    chat_repository: ChatRepositoryManager = Depends(get_chat_repository),
+) -> Response:
+    download_active, auto_start_remaining = _get_status_download_context(request.app, runtime_cfg)
+    status_payload = await _build_status(
+        runtime_cfg,
+        app=request.app,
+        download_active=download_active,
+        auto_start_remaining_seconds=auto_start_remaining,
+        system_snapshot=request.app.state.system_metrics_snapshot,
+    )
+    if status_payload["state"] != "READY":
+        return JSONResponse(status_code=503, content=status_payload)
+
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+
+    payload = merge_active_model_chat_defaults(payload, runtime=runtime_cfg)
+    payload = merge_chat_defaults(payload)
+    payload = apply_model_chat_defaults(
+        payload,
+        active_model_filename=str(status_payload.get("model", {}).get("filename") or ""),
+    )
+    headers = _forward_headers(request)
+    active_backend = status_payload["backend"]["active"]
+
+    try:
+        backend_response = await chat_repository.create_chat_completion(
+            backend=active_backend,
+            payload=payload,
+            forward_headers=headers,
+        )
+    except BackendProxyError as exc:
+        if runtime_cfg.chat_backend_mode == "auto" and active_backend == "llama":
+            backend_response = await chat_repository.create_chat_completion(
+                backend="fake",
+                payload=payload,
+                forward_headers=headers,
+            )
+        else:
+            logger.exception("Backend proxy error")
+            raise HTTPException(status_code=502, detail=f"backend unavailable: {exc}") from exc
+
+    if backend_response.stream is not None:
+        return StreamingResponse(
+            backend_response.stream,
+            status_code=backend_response.status_code,
+            headers=backend_response.headers,
+            background=backend_response.background,
+        )
+
+    return Response(
+        content=backend_response.body or b"",
+        status_code=backend_response.status_code,
+        headers=backend_response.headers,
+    )

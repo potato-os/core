@@ -2336,67 +2336,18 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
             content={"cancelled": False, "restarted": False, "method": "none", "reason": "slot_action_unavailable"},
         )
 
-    @app.post("/v1/chat/completions")
-    async def chat_completions(
-        request: Request,
-        runtime_cfg: RuntimeConfig = Depends(get_runtime),
-        chat_repository: ChatRepositoryManager = Depends(get_chat_repository),
-    ) -> Response:
-        download_active, auto_start_remaining = get_status_download_context(request.app, runtime_cfg)
-        status_payload = await build_status(
-            runtime_cfg,
-            app=request.app,
-            download_active=download_active,
-            auto_start_remaining_seconds=auto_start_remaining,
-            system_snapshot=request.app.state.system_metrics_snapshot,
-        )
-        if status_payload["state"] != "READY":
-            return JSONResponse(status_code=503, content=status_payload)
+    # Chat completions route — extracted to app/routes/chat.py
+    try:
+        from app.routes.chat import router as chat_router, register_chat_helpers
+    except ModuleNotFoundError:
+        from routes.chat import router as chat_router, register_chat_helpers  # type: ignore[no-redef]
 
-        try:
-            payload = await request.json()
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
-
-        payload = _merge_active_model_chat_defaults(payload, runtime=runtime_cfg)
-        payload = _merge_defaults(payload)
-        payload = apply_model_chat_defaults(
-            payload,
-            active_model_filename=str(status_payload.get("model", {}).get("filename") or ""),
-        )
-        headers = _forward_headers(request)
-        active_backend = status_payload["backend"]["active"]
-
-        try:
-            backend_response = await chat_repository.create_chat_completion(
-                backend=active_backend,
-                payload=payload,
-                forward_headers=headers,
-            )
-        except BackendProxyError as exc:
-            if runtime_cfg.chat_backend_mode == "auto" and active_backend == "llama":
-                backend_response = await chat_repository.create_chat_completion(
-                    backend="fake",
-                    payload=payload,
-                    forward_headers=headers,
-                )
-            else:
-                logger.exception("Backend proxy error")
-                raise HTTPException(status_code=502, detail=f"backend unavailable: {exc}") from exc
-
-        if backend_response.stream is not None:
-            return StreamingResponse(
-                backend_response.stream,
-                status_code=backend_response.status_code,
-                headers=backend_response.headers,
-                background=backend_response.background,
-            )
-
-        return Response(
-            content=backend_response.body or b"",
-            status_code=backend_response.status_code,
-            headers=backend_response.headers,
-        )
+    register_chat_helpers(
+        build_status=build_status,
+        get_status_download_context=get_status_download_context,
+        forward_headers=_forward_headers,
+    )
+    app.include_router(chat_router)
 
     return app
 
