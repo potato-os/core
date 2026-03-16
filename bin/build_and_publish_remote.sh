@@ -117,15 +117,21 @@ log_step "[2/5] Syncing repo to Pi"
 log_detail "Source:  ${REPO_ROOT}"
 log_detail "Target:  ${PI_USER}@${PI_HOST}:${REMOTE_REPO_DIR}"
 
+# Only sync what the build actually needs: bin/, app/, image/, systemd/, nginx/, tests/, configs
+# Everything else (models, projectors, references, images, caches) stays behind
 _rsync --delete \
-  --exclude '.git' \
-  --exclude 'node_modules' \
-  --exclude '.venv' \
-  --exclude 'models/' \
-  --exclude 'output/' \
-  --exclude 'references/' \
-  --exclude '.cache/' \
-  --exclude 'test-results/' \
+  --include 'bin/***' \
+  --include 'app/***' \
+  --include 'image/***' \
+  --include 'systemd/***' \
+  --include 'nginx/***' \
+  --include 'tests/***' \
+  --include 'pyproject.toml' \
+  --include 'playwright.config.js' \
+  --include 'package.json' \
+  --include 'AGENTS.md' \
+  --include 'WORKFLOW.md' \
+  --exclude '*' \
   "${REPO_ROOT}/" "${PI_USER}@${PI_HOST}:${REMOTE_REPO_DIR}/"
 
 log_info "Repo synced"
