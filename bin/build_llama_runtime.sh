@@ -150,10 +150,11 @@ else
   REPO_BRANCH="master"
 fi
 
-# Fetch source: clone if missing, pull latest if present
+# Fetch source: clone if missing or not a git repo, pull latest if present
 if [ "${FETCH_SOURCE}" = "1" ]; then
-  if [ ! -d "${SOURCE_DIR}" ]; then
+  if [ ! -d "${SOURCE_DIR}/.git" ]; then
     printf 'Cloning %s into %s\n' "${REPO_URL}" "${SOURCE_DIR}"
+    rm -rf "${SOURCE_DIR}"
     mkdir -p "$(dirname "${SOURCE_DIR}")"
     git clone --depth 1 --branch "${REPO_BRANCH}" "${REPO_URL}" "${SOURCE_DIR}"
   else

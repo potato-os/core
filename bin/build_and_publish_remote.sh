@@ -120,6 +120,8 @@ log_detail "Target:  ${PI_USER}@${PI_HOST}:${REMOTE_REPO_DIR}"
 # Only sync what the build actually needs: bin/, app/, image/, systemd/, nginx/, tests/, configs
 # Everything else (models, projectors, references, images, caches) stays behind
 _rsync --delete \
+  --exclude '__pycache__' \
+  --exclude '*.pyc' \
   --include 'bin/***' \
   --include 'app/***' \
   --include 'image/***' \
@@ -131,7 +133,6 @@ _rsync --delete \
   --include 'package.json' \
   --include 'AGENTS.md' \
   --include 'WORKFLOW.md' \
-  --exclude '*' \
   "${REPO_ROOT}/" "${PI_USER}@${PI_HOST}:${REMOTE_REPO_DIR}/"
 
 log_info "Repo synced"
