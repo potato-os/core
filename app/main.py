@@ -50,6 +50,7 @@ try:
         delete_model,
         describe_model_storage,
         ensure_models_state,
+        any_model_ready,
         get_model_by_id,
         is_qwen35_a3b_filename,
         model_file_present,
@@ -154,6 +155,7 @@ except ModuleNotFoundError:
         delete_model,
         describe_model_storage,
         ensure_models_state,
+        any_model_ready,
         get_model_by_id,
         is_qwen35_a3b_filename,
         model_file_present,
@@ -1125,11 +1127,13 @@ async def _cancel_model_download_locked(
     else:
         state["current_download_model_id"] = None
         save_models_state(runtime, state)
-    # Mark bootstrap as consumed so the auto-download never retries
-    updated = ensure_models_state(runtime)
-    if not updated.get("default_model_downloaded_once"):
-        updated["default_model_downloaded_once"] = True
-        save_models_state(runtime, updated)
+    # Mark bootstrap as consumed only when cancelling the default starter model
+    if current_model_id_str is not None:
+        updated = ensure_models_state(runtime)
+        default_id = str(updated.get("default_model_id") or "default")
+        if current_model_id_str == default_id and not updated.get("default_model_downloaded_once"):
+            updated["default_model_downloaded_once"] = True
+            save_models_state(runtime, updated)
     return True, "cancelled"
 
 
@@ -1387,9 +1391,10 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                 default_model_present = model_file_present(runtime, default_filename)
                 default_model_is_bootstrap_target = default_filename == MODEL_FILENAME
 
+            any_ready = any_model_ready(runtime)
             if should_auto_start_download(
                 runtime,
-                model_present=default_model_present,
+                model_present=default_model_present or any_ready,
                 download_active=download_active,
                 startup_monotonic=app.state.startup_monotonic,
                 now_monotonic=get_monotonic_time(),

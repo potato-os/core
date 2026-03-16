@@ -279,6 +279,17 @@ def model_file_present(runtime: RuntimeConfig, filename: str) -> bool:
         return False
 
 
+def any_model_ready(runtime: RuntimeConfig) -> bool:
+    """Return True if any model in the models state has a file on disk."""
+    state = ensure_models_state(runtime)
+    models = state.get("models") or []
+    for model in models:
+        filename = str(model.get("filename") or "").strip()
+        if filename and model_file_present(runtime, filename):
+            return True
+    return False
+
+
 def resolve_model_runtime_path(runtime: RuntimeConfig, filename: str) -> Path:
     path = _model_file_path(runtime, filename)
     try:
