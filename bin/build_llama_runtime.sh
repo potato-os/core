@@ -6,19 +6,25 @@ FAMILY="${POTATO_LLAMA_RUNTIME_FAMILY:-ik_llama}"
 OUTPUT_ROOT="${POTATO_LLAMA_RUNTIME_OUTPUT:-${REPO_ROOT}/references/old_reference_design/llama_cpp_binary/runtimes}"
 JOBS="${POTATO_LLAMA_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 CLEAN_BUILD="${POTATO_LLAMA_BUILD_CLEAN:-0}"
+FETCH_SOURCE="${POTATO_LLAMA_BUILD_FETCH:-0}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./bin/build_llama_runtime.sh --family ik_llama|llama_cpp [--jobs N] [--clean]
+  ./bin/build_llama_runtime.sh --family ik_llama|llama_cpp|both [--jobs N] [--clean] [--fetch]
 
 Builds a portable llama-server runtime on a Raspberry Pi 5 (aarch64).
 
 Families:
   ik_llama   ik_llama.cpp with IQK optimizations (default)
   llama_cpp  Upstream llama.cpp
+  both       Build both families in sequence
+
+Options:
+  --fetch    Clone source repos if missing, pull latest main if present
 
 Source is expected in references/ik_llama.cpp or references/llama.cpp respectively.
+Use --fetch to auto-clone/pull from GitHub.
 
 Environment overrides:
   POTATO_LLAMA_RUNTIME_FAMILY
@@ -96,6 +102,10 @@ while [ "$#" -gt 0 ]; do
       CLEAN_BUILD="1"
       shift
       ;;
+    --fetch)
+      FETCH_SOURCE="1"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -107,9 +117,22 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "${FAMILY}" in
-  ik_llama|llama_cpp) ;;
-  *) die "Invalid --family. Use ik_llama or llama_cpp." ;;
+  ik_llama|llama_cpp|both) ;;
+  *) die "Invalid --family. Use ik_llama, llama_cpp, or both." ;;
 esac
+
+# Handle --family both by re-invoking this script for each family
+if [ "${FAMILY}" = "both" ]; then
+  printf '=== Building both runtime families ===\n\n'
+  build_args=()
+  [ "${CLEAN_BUILD}" = "1" ] && build_args+=(--clean)
+  [ "${FETCH_SOURCE}" = "1" ] && build_args+=(--fetch)
+  [ -n "${JOBS}" ] && build_args+=(--jobs "${JOBS}")
+  "${BASH_SOURCE[0]}" --family ik_llama "${build_args[@]}"
+  printf '\n'
+  "${BASH_SOURCE[0]}" --family llama_cpp "${build_args[@]}"
+  exit $?
+fi
 
 require_cmd cmake
 require_cmd git
@@ -120,12 +143,27 @@ require_cmd awk
 if [ "${FAMILY}" = "ik_llama" ]; then
   SOURCE_DIR="${POTATO_LLAMA_CPP_SOURCE:-${REPO_ROOT}/references/ik_llama.cpp}"
   REPO_URL="https://github.com/ikawrakow/ik_llama.cpp"
+  REPO_BRANCH="main"
 else
   SOURCE_DIR="${POTATO_LLAMA_CPP_SOURCE:-${REPO_ROOT}/references/llama.cpp}"
   REPO_URL="https://github.com/ggerganov/llama.cpp"
+  REPO_BRANCH="master"
 fi
 
-[ -d "${SOURCE_DIR}" ] || die "Source directory not found: ${SOURCE_DIR}"
+# Fetch source: clone if missing, pull latest if present
+if [ "${FETCH_SOURCE}" = "1" ]; then
+  if [ ! -d "${SOURCE_DIR}" ]; then
+    printf 'Cloning %s into %s\n' "${REPO_URL}" "${SOURCE_DIR}"
+    mkdir -p "$(dirname "${SOURCE_DIR}")"
+    git clone --depth 1 --branch "${REPO_BRANCH}" "${REPO_URL}" "${SOURCE_DIR}"
+  else
+    printf 'Pulling latest %s in %s\n' "${REPO_BRANCH}" "${SOURCE_DIR}"
+    git -C "${SOURCE_DIR}" fetch origin "${REPO_BRANCH}" --depth 1
+    git -C "${SOURCE_DIR}" checkout FETCH_HEAD
+  fi
+fi
+
+[ -d "${SOURCE_DIR}" ] || die "Source directory not found: ${SOURCE_DIR}. Use --fetch to clone it."
 [ -f "${SOURCE_DIR}/CMakeLists.txt" ] || die "Not a llama.cpp source tree: ${SOURCE_DIR}"
 
 arch="$(uname -m)"
