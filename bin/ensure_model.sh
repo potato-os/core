@@ -2,9 +2,9 @@
 set -euo pipefail
 
 POTATO_BASE_DIR="${POTATO_BASE_DIR:-/opt/potato}"
-MODEL_PATH="${POTATO_MODEL_PATH:-${POTATO_BASE_DIR}/models/Qwen3-VL-4B-Instruct-Q4_K_M.gguf}"
+MODEL_PATH="${POTATO_MODEL_PATH:-${POTATO_BASE_DIR}/models/Qwen3.5-2B-Q4_K_M.gguf}"
 STATE_PATH="${POTATO_DOWNLOAD_STATE_PATH:-${POTATO_BASE_DIR}/state/download.json}"
-MODEL_URL="${POTATO_MODEL_URL:-https://huggingface.co/unsloth/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3-VL-4B-Instruct-Q4_K_M.gguf}"
+MODEL_URL="${POTATO_MODEL_URL:-https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf}"
 
 mkdir -p "$(dirname "${MODEL_PATH}")" "$(dirname "${STATE_PATH}")"
 TMP_PATH="${MODEL_PATH}.part"

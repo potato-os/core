@@ -92,7 +92,7 @@ class RuntimeConfig:
                 base_dir = preferred
             else:
                 base_dir = Path.home() / ".cache" / "potato-os"
-        model_path = Path(os.getenv("POTATO_MODEL_PATH", str(base_dir / "models" / "Qwen3-VL-4B-Instruct-Q4_K_M.gguf")))
+        model_path = Path(os.getenv("POTATO_MODEL_PATH", str(base_dir / "models" / "Qwen3.5-2B-Q4_K_M.gguf")))
         download_state_path = Path(
             os.getenv("POTATO_DOWNLOAD_STATE_PATH", str(base_dir / "state" / "download.json"))
         )

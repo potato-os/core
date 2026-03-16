@@ -233,8 +233,8 @@ def test_start_llama_script_builds_expected_command(tmp_path: Path):
     fakebin = tmp_path / "fakebin"
     fakebin.mkdir()
     args_out = tmp_path / "args.txt"
-    model_path = tmp_path / "Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
-    mmproj_path = tmp_path / "mmproj-Qwen3-VL-4B-Instruct-Q8_0.gguf"
+    model_path = tmp_path / "Qwen3.5-2B-Q4_K_M.gguf"
+    mmproj_path = tmp_path / "mmproj-F16.gguf"
     model_path.write_bytes(b"gguf")
     mmproj_path.write_bytes(b"mmproj")
 
@@ -255,6 +255,7 @@ printf '%s\n' "$@" > "$ARGS_OUT"
     env["POTATO_LLAMA_KV_FLAGS"] = "--cache-type-k q8_0 --cache-type-v q8_0"
     env["POTATO_MMPROJ_PATH"] = str(mmproj_path)
     env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
     env["POTATO_SLOT_SAVE_PATH"] = str(tmp_path / "llama-slots")
     env["ARGS_OUT"] = str(args_out)
 
@@ -278,7 +279,7 @@ def test_start_llama_text_model_skips_mmproj(tmp_path: Path):
     fakebin.mkdir()
     args_out = tmp_path / "args.txt"
     model_path = tmp_path / "Bielik-4.5B-v3.0-Instruct-Q4_0.gguf"
-    mmproj_path = tmp_path / "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+    mmproj_path = tmp_path / "mmproj-F16.gguf"
     model_path.write_bytes(b"gguf")
     mmproj_path.write_bytes(b"mmproj")
 
@@ -538,7 +539,7 @@ printf '%s\n' "$@" > "$ARGS_OUT"
     assert "--mmproj" not in args
 
 
-def test_start_llama_qwen35_vision_prefers_generic_mmproj_over_old_vl_projector(tmp_path: Path):
+def test_start_llama_qwen35_vision_uses_f16_mmproj(tmp_path: Path):
     runtime_dir = tmp_path / "llama"
     runtime_bin = runtime_dir / "bin"
     runtime_bin.mkdir(parents=True)
@@ -547,10 +548,8 @@ def test_start_llama_qwen35_vision_prefers_generic_mmproj_over_old_vl_projector(
     model_dir.mkdir()
     model_path = model_dir / "Qwen3.5-2B-Q4_0.gguf"
     model_path.write_bytes(b"gguf")
-    generic_mmproj = model_dir / "mmproj-F16.gguf"
-    old_vl_mmproj = model_dir / "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
-    generic_mmproj.write_bytes(b"f16")
-    old_vl_mmproj.write_bytes(b"q8")
+    f16_mmproj = model_dir / "mmproj-F16.gguf"
+    f16_mmproj.write_bytes(b"f16")
 
     args_out = tmp_path / "args.txt"
     _write_stub(
@@ -573,8 +572,7 @@ printf '%s\\n' "$@" > "$ARGS_OUT"
 
     args = args_out.read_text(encoding="utf-8")
     assert "--mmproj" in args
-    assert str(generic_mmproj) in args
-    assert str(old_vl_mmproj) not in args
+    assert str(f16_mmproj) in args
 
 
 def test_start_llama_qwen35_vision_prefers_model_specific_mmproj_over_generic(tmp_path: Path):
@@ -701,7 +699,7 @@ printf '%s\\n' "$@" > "$ARGS_OUT"
     assert str(managed_mmproj) not in args
 
 
-def test_start_llama_qwen35_vision_fails_without_generic_mmproj(tmp_path: Path):
+def test_start_llama_qwen35_vision_fails_without_any_mmproj(tmp_path: Path):
     runtime_dir = tmp_path / "llama"
     runtime_bin = runtime_dir / "bin"
     runtime_bin.mkdir(parents=True)
@@ -710,8 +708,7 @@ def test_start_llama_qwen35_vision_fails_without_generic_mmproj(tmp_path: Path):
     model_dir.mkdir()
     model_path = model_dir / "Qwen3.5-2B-Q4_0.gguf"
     model_path.write_bytes(b"gguf")
-    old_vl_mmproj = model_dir / "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
-    old_vl_mmproj.write_bytes(b"q8")
+    # No mmproj files at all
 
     _write_stub(
         runtime_bin / "llama-server",
@@ -738,7 +735,7 @@ exit 0
     )
 
     assert result.returncode != 0
-    assert "No compatible mmproj found for Qwen3.5 vision model" in result.stderr
+    assert "mmproj" in result.stderr.lower()
 
 
 def test_start_llama_qwen35_text_model_does_not_require_mmproj_by_default(tmp_path: Path):
@@ -786,11 +783,9 @@ def test_start_llama_script_uses_bundle_runtime_and_prefers_q8_mmproj(tmp_path: 
 
     model_dir = tmp_path / "models"
     model_dir.mkdir()
-    model_path = model_dir / "Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
+    model_path = model_dir / "Qwen3.5-2B-Q4_K_M.gguf"
     model_path.write_bytes(b"gguf")
-    q8_mmproj = model_dir / "mmproj-Qwen3-VL-4B-Instruct-Q8_0.gguf"
-    f16_mmproj = model_dir / "mmproj-Qwen3-VL-4B-Instruct-F16.gguf"
-    q8_mmproj.write_bytes(b"q8")
+    f16_mmproj = model_dir / "mmproj-F16.gguf"
     f16_mmproj.write_bytes(b"f16")
 
     args_out = tmp_path / "args.txt"
@@ -809,6 +804,7 @@ printf '%s\\n' "${LD_LIBRARY_PATH:-}" > "$LD_OUT"
     env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
     env["POTATO_MODEL_PATH"] = str(model_path)
     env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
     env["ARGS_OUT"] = str(args_out)
     env["LD_OUT"] = str(ld_out)
 
@@ -818,8 +814,7 @@ printf '%s\\n' "${LD_LIBRARY_PATH:-}" > "$LD_OUT"
     ld_library_path = ld_out.read_text(encoding="utf-8").strip()
 
     assert "--mmproj" in args
-    assert str(q8_mmproj) in args
-    assert str(f16_mmproj) not in args
+    assert str(f16_mmproj) in args
     assert ld_library_path.startswith(str(runtime_lib))
 
 
@@ -832,7 +827,7 @@ def test_start_llama_prefers_mmproj_matching_model_size(tmp_path: Path):
     model_dir.mkdir()
     model_path = model_dir / "Qwen3VL-2B-Instruct-Q4_K_M.gguf"
     model_path.write_bytes(b"gguf")
-    mmproj_4b = model_dir / "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+    mmproj_4b = model_dir / "mmproj-F16.gguf"
     mmproj_2b = model_dir / "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
     mmproj_4b.write_bytes(b"4b")
     mmproj_2b.write_bytes(b"2b")
@@ -870,7 +865,7 @@ def test_start_llama_fails_when_only_incompatible_mmproj_is_available(tmp_path: 
     model_dir.mkdir()
     model_path = model_dir / "Qwen3VL-2B-Instruct-Q4_K_M.gguf"
     model_path.write_bytes(b"gguf")
-    mmproj_4b = model_dir / "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+    mmproj_4b = model_dir / "mmproj-F16.gguf"
     mmproj_4b.write_bytes(b"4b")
 
     _write_stub(

@@ -18,7 +18,7 @@ def runtime(tmp_path: Path) -> RuntimeConfig:
 
     return RuntimeConfig(
         base_dir=base,
-        model_path=model_dir / "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+        model_path=model_dir / "Qwen3.5-2B-Q4_K_M.gguf",
         download_state_path=state_dir / "download.json",
         models_state_path=state_dir / "models.json",
         llama_base_url="http://llama.test:8080",

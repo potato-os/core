@@ -50,6 +50,7 @@ try:
         delete_model,
         describe_model_storage,
         ensure_models_state,
+        any_model_ready,
         get_model_by_id,
         is_qwen35_a3b_filename,
         model_file_present,
@@ -154,6 +155,7 @@ except ModuleNotFoundError:
         delete_model,
         describe_model_storage,
         ensure_models_state,
+        any_model_ready,
         get_model_by_id,
         is_qwen35_a3b_filename,
         model_file_present,
@@ -247,9 +249,9 @@ logging.basicConfig(level=logging.INFO)
 MAX_MODEL_UPLOAD_BYTES = MODEL_UPLOAD_LIMIT_16GB_BYTES
 MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS = 20.0
 MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
-# Temporarily pause implicit bootstrap model downloads until the new model-first
-# settings flow is in place. Manual downloads remain supported.
-AUTO_DOWNLOAD_BOOTSTRAP_ENABLED = False
+# One-off auto-download: on first start with no model, downloads the default
+# starter model (Qwen3.5-2B-Q4_K_M) after a 5-minute idle countdown.
+AUTO_DOWNLOAD_BOOTSTRAP_ENABLED = True
 LLAMA_READY_HEALTH_POLLS_REQUIRED = 2
 LLAMA_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
@@ -767,7 +769,11 @@ async def build_status(
     download_payload["active"] = bool(download_active)
     download_payload["auto_start_seconds"] = int(max(0, runtime.auto_download_idle_seconds))
     download_payload["auto_start_remaining_seconds"] = int(max(0, auto_start_remaining_seconds))
-    download_payload["countdown_enabled"] = bool(models_state.get("countdown_enabled", True)) and AUTO_DOWNLOAD_BOOTSTRAP_ENABLED
+    download_payload["countdown_enabled"] = (
+        bool(models_state.get("countdown_enabled", True))
+        and AUTO_DOWNLOAD_BOOTSTRAP_ENABLED
+        and not bool(models_state.get("default_model_downloaded_once", False))
+    )
     download_payload["auto_download_completed_once"] = bool(models_state.get("default_model_downloaded_once", False))
     download_payload["current_model_id"] = current_download_model_id
     download_payload["auto_download_paused"] = not AUTO_DOWNLOAD_BOOTSTRAP_ENABLED
@@ -1053,6 +1059,16 @@ async def start_model_download(
                 ):
                     updated_state["default_model_downloaded_once"] = True
                     save_models_state(runtime, updated_state)
+                # Auto-download projector for vision-capable bootstrap model
+                if model_supports_vision_filename(target_filename):
+                    try:
+                        downloaded, reason, proj_name = download_default_projector_for_model(
+                            runtime=runtime, model_id=selected_model_id,
+                        )
+                        if downloaded:
+                            logger.info("Auto-downloaded projector %s for bootstrap model", proj_name)
+                    except Exception:
+                        logger.warning("Failed to auto-download projector for bootstrap model", exc_info=True)
             else:
                 failure_state = read_download_progress(runtime)
                 failure_reason = str(failure_state.get("error") or "download_failed")
@@ -1125,6 +1141,13 @@ async def _cancel_model_download_locked(
     else:
         state["current_download_model_id"] = None
         save_models_state(runtime, state)
+    # Mark bootstrap as consumed only when cancelling the default starter model
+    if current_model_id_str is not None:
+        updated = ensure_models_state(runtime)
+        default_id = str(updated.get("default_model_id") or "default")
+        if current_model_id_str == default_id and not updated.get("default_model_downloaded_once"):
+            updated["default_model_downloaded_once"] = True
+            save_models_state(runtime, updated)
     return True, "cancelled"
 
 
@@ -1382,9 +1405,10 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                 default_model_present = model_file_present(runtime, default_filename)
                 default_model_is_bootstrap_target = default_filename == MODEL_FILENAME
 
+            any_ready = any_model_ready(runtime)
             if should_auto_start_download(
                 runtime,
-                model_present=default_model_present,
+                model_present=default_model_present or any_ready,
                 download_active=download_active,
                 startup_monotonic=app.state.startup_monotonic,
                 now_monotonic=get_monotonic_time(),
@@ -2060,12 +2084,15 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 status_code=409,
                 content={"updated": False, "reason": "orchestrator_disabled"},
             )
+        payload = await request.json()
+        enabled = bool(payload.get("enabled", True))
+        updated_state = set_download_countdown_enabled(runtime_cfg, enabled)
         return JSONResponse(
             status_code=200,
             content={
-                "updated": False,
-                "reason": "temporarily_disabled",
-                "countdown_enabled": False,
+                "updated": True,
+                "reason": "countdown_updated",
+                "countdown_enabled": bool(updated_state.get("countdown_enabled", enabled)),
             },
         )
 

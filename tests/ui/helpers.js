@@ -58,7 +58,7 @@ function makeStatusPayload(overrides = {}) {
     state: "READY",
     model_present: true,
     model: {
-      filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+      filename: "Qwen3.5-2B-Q4_K_M.gguf",
       active_model_id: "default",
       settings: {
         chat: {
@@ -90,7 +90,7 @@ function makeStatusPayload(overrides = {}) {
     models: [
       {
         id: "default",
-        filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+        filename: "Qwen3.5-2B-Q4_K_M.gguf",
         source_url: null,
         source_type: "local_file",
         status: "ready",
@@ -152,7 +152,7 @@ function makeStatusPayload(overrides = {}) {
 function makeMultiModelStatusPayload({ activeId = "default", extraModels = [] } = {}) {
   const defaultModel = {
     id: "default",
-    filename: "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+    filename: "Qwen3.5-2B-Q4_K_M.gguf",
     source_url: null,
     source_type: "local_file",
     status: "ready",

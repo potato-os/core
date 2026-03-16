@@ -2,7 +2,7 @@
 set -euo pipefail
 
 POTATO_BASE_DIR="${POTATO_BASE_DIR:-/opt/potato}"
-MODEL_PATH="${POTATO_MODEL_PATH:-${POTATO_BASE_DIR}/models/Qwen3-VL-4B-Instruct-Q4_K_M.gguf}"
+MODEL_PATH="${POTATO_MODEL_PATH:-${POTATO_BASE_DIR}/models/Qwen3.5-2B-Q4_K_M.gguf}"
 LLAMA_RUNTIME_DIR="${POTATO_LLAMA_RUNTIME_DIR:-${POTATO_BASE_DIR}/llama}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-${LLAMA_RUNTIME_DIR}/bin/llama-server}"
 LLAMA_HOST="${POTATO_LLAMA_HOST:-0.0.0.0}"
@@ -237,7 +237,8 @@ resolve_mmproj_repo() {
     return 0
   fi
 
-  printf 'Qwen/Qwen3-VL-4B-Instruct-GGUF'
+  # Default fallback for unrecognized vision models
+  printf 'unsloth/Qwen3.5-2B-GGUF'
 }
 
 qwen35_mmproj_name_candidates() {
@@ -256,10 +257,7 @@ qwen35_mmproj_name_candidates() {
     printf 'mmproj-%s-f16.gguf\n' "${trimmed_stem}"
   done
 
-  printf '%s\n' \
-    "mmproj-F16.gguf" \
-    "mmproj-BF16.gguf" \
-    "mmproj-F32.gguf"
+  printf '%s\n' "mmproj-F16.gguf"
 }
 
 mmproj_filename_candidates() {
@@ -282,10 +280,7 @@ mmproj_filename_candidates() {
     fi
   fi
   if model_is_qwen35_vision; then
-    printf '%s\n' \
-      "mmproj-F16.gguf" \
-      "mmproj-BF16.gguf" \
-      "mmproj-F32.gguf"
+    printf '%s\n' "mmproj-F16.gguf"
   fi
 
   case "${repo}" in
@@ -388,7 +383,7 @@ pick_mmproj() {
 
     for candidate in "${mmproj_candidates[@]}"; do
       candidate_base="$(basename "${candidate}" | tr '[:upper:]' '[:lower:]')"
-      if [[ "${candidate_base}" == mmproj-f16.gguf || "${candidate_base}" == mmproj-bf16.gguf || "${candidate_base}" == mmproj-f32.gguf || "${candidate_base}" == *qwen*3.5* ]]; then
+      if [[ "${candidate_base}" == mmproj-f16.gguf || "${candidate_base}" == *qwen*3.5* ]]; then
         compatible_candidates+=("${candidate}")
       fi
     done
@@ -425,16 +420,24 @@ pick_mmproj() {
     return 0
   fi
 
-  q8_candidate="$(printf '%s\n' "${mmproj_candidates[@]}" | grep -i 'Q8_0' | head -n 1 || true)"
-  if [ -n "${q8_candidate}" ]; then
-    MMPROJ_PATH="${q8_candidate}"
-    return 0
-  fi
-
+  # Qwen3.5 models: prefer F16 projectors only
+  # Qwen3-VL models: prefer Q8_0, then F16
   f16_candidate="$(printf '%s\n' "${mmproj_candidates[@]}" | grep -i 'F16' | head -n 1 || true)"
-  if [ -n "${f16_candidate}" ]; then
-    MMPROJ_PATH="${f16_candidate}"
-    return 0
+  if model_is_qwen35_vision; then
+    if [ -n "${f16_candidate}" ]; then
+      MMPROJ_PATH="${f16_candidate}"
+      return 0
+    fi
+  else
+    q8_candidate="$(printf '%s\n' "${mmproj_candidates[@]}" | grep -i 'Q8_0' | head -n 1 || true)"
+    if [ -n "${q8_candidate}" ]; then
+      MMPROJ_PATH="${q8_candidate}"
+      return 0
+    fi
+    if [ -n "${f16_candidate}" ]; then
+      MMPROJ_PATH="${f16_candidate}"
+      return 0
+    fi
   fi
 
   MMPROJ_PATH="${mmproj_candidates[0]}"

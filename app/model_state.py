@@ -16,10 +16,10 @@ except ModuleNotFoundError:
 
 logger = logging.getLogger("potato")
 
-MODEL_FILENAME = "Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
+MODEL_FILENAME = "Qwen3.5-2B-Q4_K_M.gguf"
 MODEL_URL = (
-    "https://huggingface.co/unsloth/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
-    "Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
+    "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/"
+    "Qwen3.5-2B-Q4_K_M.gguf"
 )
 MODELS_STATE_VERSION = 1
 
@@ -277,6 +277,17 @@ def model_file_present(runtime: RuntimeConfig, filename: str) -> bool:
         return path.exists() and path.stat().st_size > 0
     except OSError:
         return False
+
+
+def any_model_ready(runtime: RuntimeConfig) -> bool:
+    """Return True if any model in the models state has a file on disk."""
+    state = ensure_models_state(runtime)
+    models = state.get("models") or []
+    for model in models:
+        filename = str(model.get("filename") or "").strip()
+        if filename and model_file_present(runtime, filename):
+            return True
+    return False
 
 
 def resolve_model_runtime_path(runtime: RuntimeConfig, filename: str) -> Path:

@@ -89,11 +89,39 @@ All feature tickets are implemented TDD-first:
 
 ## Local Dev Environment Rule
 
-For all local development work on this computer, always use `uv`.
+For all local development work, always use `uv`.
 
 - Use `uv` to create/sync/run the local development environment instead of ad hoc `.venv/bin/python ...` or direct `pip install ...` commands.
 - Keep local development and test dependencies declared in repo-managed dependency files; do not rely on one-off manual installs outside tracked files.
 - This rule is for local machine workflows only. Raspberry Pi/runtime packaging may follow different operational constraints and is not changed by this rule.
+
+## Running Tests Locally (Required Before Push)
+
+All tests **must** pass locally before pushing. Do not rely on CI to catch failures — run the same test commands CI uses.
+
+### Python tests (unit + API)
+
+```bash
+uv run python -m pytest tests/unit tests/api -q
+```
+
+The `-m pytest` flag is required so Python adds the project root to `sys.path`, matching CI behavior.
+
+### Playwright UI tests
+
+```bash
+npx playwright test
+```
+
+Requires Chromium installed (`npx playwright install chromium` on first run). The test server starts automatically via `playwright.config.js`.
+
+### Running both before push
+
+```bash
+uv run python -m pytest tests/unit tests/api -q && npx playwright test
+```
+
+If either suite fails, fix the issue before pushing. Include summarized test output in the PR description.
 
 ## PR Readiness Checklist
 

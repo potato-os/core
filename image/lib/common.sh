@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_FILENAME="Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
-MODEL_URL_DEFAULT="https://huggingface.co/unsloth/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
-MMPROJ_URL_Q8_DEFAULT="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3-VL-4B-Instruct-Q8_0.gguf"
-MMPROJ_URL_F16_DEFAULT="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3-VL-4B-Instruct-F16.gguf"
+MODEL_FILENAME="Qwen3.5-2B-Q4_K_M.gguf"
+MODEL_URL_DEFAULT="https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf"
+MMPROJ_URL_F16_DEFAULT="https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/mmproj-F16.gguf"
 # Output artifacts are named as potato-lite-<timestamp> and potato-full-<timestamp>.
 
 info() {
@@ -76,7 +75,6 @@ resolve_mmproj_file_for_full() {
   local cache_dir="$1"
   local repo_root="$2"
   local mmproj_path="${POTATO_FULL_MMPROJ_PATH:-}"
-  local url_q8="${POTATO_MMPROJ_URL_Q8:-${MMPROJ_URL_Q8_DEFAULT}}"
   local url_f16="${POTATO_MMPROJ_URL_F16:-${MMPROJ_URL_F16_DEFAULT}}"
 
   if [ -n "${mmproj_path}" ]; then
@@ -85,25 +83,13 @@ resolve_mmproj_file_for_full() {
     return
   fi
 
-  local local_q8="${repo_root}/models/mmproj-Qwen3-VL-4B-Instruct-Q8_0.gguf"
-  local local_f16="${repo_root}/models/mmproj-Qwen3-VL-4B-Instruct-F16.gguf"
-  if [ -f "${local_q8}" ]; then
-    printf '%s\n' "${local_q8}"
-    return
-  fi
+  local local_f16="${repo_root}/models/mmproj-F16.gguf"
   if [ -f "${local_f16}" ]; then
     printf '%s\n' "${local_f16}"
     return
   fi
 
-  local q8_target="${cache_dir}/$(basename "${url_q8%%\?*}")"
   local f16_target="${cache_dir}/$(basename "${url_f16%%\?*}")"
-
-  if download_to_cache "${url_q8}" "${q8_target}"; then
-    printf '%s\n' "${q8_target}"
-    return
-  fi
-
   download_to_cache "${url_f16}" "${f16_target}"
   printf '%s\n' "${f16_target}"
 }

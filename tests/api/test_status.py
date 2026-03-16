@@ -17,7 +17,7 @@ def test_status_booting_when_model_missing(client, monkeypatch):
 
     assert body["state"] == "BOOTING"
     assert body["model_present"] is False
-    assert body["model"]["filename"] == "Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
+    assert body["model"]["filename"] == "Qwen3.5-2B-Q4_K_M.gguf"
     assert body["download"]["bytes_downloaded"] == 0
 
 
@@ -510,10 +510,10 @@ def test_status_includes_auto_start_countdown(runtime, monkeypatch):
     body = response.json()
     assert body["download"]["active"] is False
     assert body["download"]["auto_start_seconds"] == 300
-    assert body["download"]["auto_start_remaining_seconds"] == 0
+    assert body["download"]["auto_start_remaining_seconds"] == 160
     assert body["download"]["auto_download_completed_once"] is False
-    assert body["download"]["countdown_enabled"] is False
-    assert body["download"]["auto_download_paused"] is True
+    assert body["download"]["countdown_enabled"] is True
+    assert body["download"]["auto_download_paused"] is False
 
 
 def test_status_disables_auto_start_when_default_model_was_downloaded_once(runtime, monkeypatch):
@@ -531,8 +531,8 @@ def test_status_disables_auto_start_when_default_model_was_downloaded_once(runti
                 "models": [
                     {
                         "id": "default",
-                        "filename": "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
-                        "source_url": "https://example.com/Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
+                        "filename": "Qwen3.5-2B-Q4_K_M.gguf",
+                        "source_url": "https://example.com/Qwen3.5-2B-Q4_K_M.gguf",
                         "source_type": "url",
                         "status": "not_downloaded",
                         "error": None,
@@ -556,7 +556,7 @@ def test_status_disables_auto_start_when_default_model_was_downloaded_once(runti
     assert body["download"]["auto_download_completed_once"] is True
     assert body["download"]["auto_start_remaining_seconds"] == 0
     assert body["download"]["countdown_enabled"] is False
-    assert body["download"]["auto_download_paused"] is True
+    assert body["download"]["auto_download_paused"] is False
 
 
 def test_status_falls_back_download_target_model_when_missing(runtime, monkeypatch):
