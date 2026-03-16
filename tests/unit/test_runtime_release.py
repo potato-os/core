@@ -151,6 +151,9 @@ def test_runtime_release_lib_provides_download_helpers():
     assert "resolve_latest_runtime_release_url" in script
     assert "POTATO_LLAMA_RELEASE_URL" in script
     assert "POTATO_GITHUB_REPO" in script
+    # P1 fix: curl-only fallback so auto-detect works without gh CLI
+    assert "api.github.com" in script
+    assert "browser_download_url" in script
 
 
 def test_install_dev_supports_release_download_fallback():

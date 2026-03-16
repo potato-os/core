@@ -6,17 +6,39 @@ POTATO_GITHUB_REPO="${POTATO_GITHUB_REPO:-slomin/potato-os}"
 
 resolve_latest_runtime_release_url() {
   local family="$1"
-  if ! command -v gh >/dev/null 2>&1; then
-    return
+  local repo="${POTATO_GITHUB_REPO}"
+
+  # Prefer gh CLI if available (handles auth, private repos)
+  if command -v gh >/dev/null 2>&1; then
+    local tag
+    tag="$(gh release list --repo "${repo}" --limit 20 \
+      --json tagName --jq "[.[] | select(.tagName | startswith(\"runtime/${family}-\"))] | .[0].tagName" 2>/dev/null || true)"
+    if [ -n "${tag}" ]; then
+      gh release view "${tag}" --repo "${repo}" \
+        --json assets --jq '.assets[0].url' 2>/dev/null || true
+      return
+    fi
   fi
-  local tag
-  tag="$(gh release list --repo "${POTATO_GITHUB_REPO}" --limit 20 \
-    --json tagName --jq "[.[] | select(.tagName | startswith(\"runtime/${family}-\"))] | .[0].tagName" 2>/dev/null || true)"
-  if [ -z "${tag}" ]; then
-    return
+
+  # Fallback: curl-only path using GitHub REST API (no gh needed)
+  if command -v curl >/dev/null 2>&1; then
+    local api_url="https://api.github.com/repos/${repo}/releases"
+    local releases_json
+    releases_json="$(curl -sL --fail "${api_url}?per_page=20" 2>/dev/null || true)"
+    if [ -z "${releases_json}" ]; then
+      return
+    fi
+    # Find first release whose tag starts with runtime/<family>- and extract asset URL
+    if command -v jq >/dev/null 2>&1; then
+      local asset_url
+      asset_url="$(printf '%s' "${releases_json}" | jq -r \
+        "[.[] | select(.tag_name | startswith(\"runtime/${family}-\"))] | .[0].assets[0].browser_download_url // empty" 2>/dev/null || true)"
+      if [ -n "${asset_url}" ]; then
+        printf '%s' "${asset_url}"
+        return
+      fi
+    fi
   fi
-  gh release view "${tag}" --repo "${POTATO_GITHUB_REPO}" \
-    --json assets --jq '.assets[0].url' 2>/dev/null || true
 }
 
 download_and_extract_runtime() {

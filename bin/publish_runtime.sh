@@ -113,9 +113,19 @@ if git tag -l "${TAG_NAME}" | grep -q "${TAG_NAME}"; then
   exit 1
 fi
 
-printf 'Creating git tag: %s\n' "${TAG_NAME}"
+# Resolve the git remote that matches the target GitHub repo
+PUSH_REMOTE="origin"
+for _remote in $(git remote 2>/dev/null); do
+  _remote_url="$(git remote get-url "${_remote}" 2>/dev/null || true)"
+  if printf '%s' "${_remote_url}" | grep -q "${GITHUB_REPO}"; then
+    PUSH_REMOTE="${_remote}"
+    break
+  fi
+done
+
+printf 'Creating git tag: %s (pushing to remote %s)\n' "${TAG_NAME}" "${PUSH_REMOTE}"
 git tag "${TAG_NAME}"
-git push origin "${TAG_NAME}"
+git push "${PUSH_REMOTE}" "${TAG_NAME}"
 
 RELEASE_NOTES="$(cat <<NOTES
 ## ${FAMILY} runtime (${COMMIT})
