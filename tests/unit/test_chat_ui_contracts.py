@@ -12,7 +12,10 @@ CHAT_SESSION_JS = (WEB_ASSETS_DIR / "session-manager.js").read_text(encoding="ut
 CHAT_STATUS_JS = (WEB_ASSETS_DIR / "status.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "status.js").exists() else ""
 CHAT_RUNTIME_UI_JS = (WEB_ASSETS_DIR / "runtime-ui.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "runtime-ui.js").exists() else ""
 CHAT_MESSAGES_JS = (WEB_ASSETS_DIR / "messages.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "messages.js").exists() else ""
-CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS + CHAT_RUNTIME_UI_JS + CHAT_MESSAGES_JS
+CHAT_IMAGE_HANDLER_JS = (WEB_ASSETS_DIR / "image-handler.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "image-handler.js").exists() else ""
+CHAT_SETTINGS_UI_JS = (WEB_ASSETS_DIR / "settings-ui.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "settings-ui.js").exists() else ""
+CHAT_ENGINE_JS = (WEB_ASSETS_DIR / "chat-engine.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "chat-engine.js").exists() else ""
+CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS + CHAT_RUNTIME_UI_JS + CHAT_MESSAGES_JS + CHAT_IMAGE_HANDLER_JS + CHAT_SETTINGS_UI_JS + CHAT_ENGINE_JS
 
 
 def test_chat_ui_streaming_parses_sse_and_ignores_done_marker():
@@ -250,7 +253,7 @@ def test_chat_ui_uses_continuous_chat_history_in_openai_messages_format():
     assert "reqBody.messages = reqBody.messages.concat(appState.chatHistory);" in CHAT_UI
     assert "const userMessage = { role: \"user\", content: buildUserMessageContent(content) };" in CHAT_UI
     assert "appState.chatHistory.push(userMessage);" in CHAT_UI
-    assert CHAT_JS.index("reqBody.messages.push(userMessage);") < CHAT_JS.index("appState.chatHistory.push(userMessage);")
+    assert CHAT_ENGINE_JS.index("reqBody.messages.push(userMessage);") < CHAT_ENGINE_JS.index("appState.chatHistory.push(userMessage);")
     assert "const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);" in CHAT_UI
     assert "appState.chatHistory.push({ role: \"assistant\", content: finalAssistantText });" in CHAT_UI
     assert "appState.chatHistory.push({ role: \"assistant\", content: msg });" in CHAT_UI

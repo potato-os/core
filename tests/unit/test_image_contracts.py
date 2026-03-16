@@ -12,7 +12,10 @@ CHAT_SESSION_JS = (WEB_ASSETS_DIR / "session-manager.js").read_text(encoding="ut
 CHAT_STATUS_JS = (WEB_ASSETS_DIR / "status.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "status.js").exists() else ""
 CHAT_RUNTIME_UI_JS = (WEB_ASSETS_DIR / "runtime-ui.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "runtime-ui.js").exists() else ""
 CHAT_MESSAGES_JS = (WEB_ASSETS_DIR / "messages.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "messages.js").exists() else ""
-CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS + CHAT_RUNTIME_UI_JS + CHAT_MESSAGES_JS
+CHAT_IMAGE_HANDLER_JS = (WEB_ASSETS_DIR / "image-handler.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "image-handler.js").exists() else ""
+CHAT_SETTINGS_UI_JS = (WEB_ASSETS_DIR / "settings-ui.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "settings-ui.js").exists() else ""
+CHAT_ENGINE_JS = (WEB_ASSETS_DIR / "chat-engine.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "chat-engine.js").exists() else ""
+CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS + CHAT_RUNTIME_UI_JS + CHAT_MESSAGES_JS + CHAT_IMAGE_HANDLER_JS + CHAT_SETTINGS_UI_JS + CHAT_ENGINE_JS
 
 def test_nginx_config_allows_large_streaming_uploads():
     conf = Path("nginx/potato.conf").read_text(encoding="utf-8")
@@ -95,16 +98,16 @@ def test_clean_image_build_artifacts_script_cleans_outputs_and_optional_caches()
 def test_chat_html_loads_local_markdown_assets_and_renders_assistant_markdown():
     assert '<script src="/assets/vendor/marked.umd.js"></script>' in CHAT_HTML
     assert '<script src="/assets/vendor/purify.min.js"></script>' in CHAT_HTML
-    assert "function renderAssistantMarkdownToHtml(text)" in CHAT_JS
-    assert "window.marked?.parse" in CHAT_JS
-    assert "window.DOMPurify?.sanitize" in CHAT_JS
-    assert "ALLOWED_TAGS" in CHAT_JS
-    assert "ALLOWED_ATTR" in CHAT_JS
-    assert '"img",' not in CHAT_JS
-    assert "'img'," not in CHAT_JS
-    assert "USE_PROFILES: { html: true }" not in CHAT_JS
-    assert "bubble.innerHTML = sanitizedHtml;" in CHAT_JS
-    assert "renderBubbleContent(bubble, content, { ...options, role });" in CHAT_JS
+    assert "function renderAssistantMarkdownToHtml(text)" in CHAT_UI
+    assert "window.marked?.parse" in CHAT_UI
+    assert "window.DOMPurify?.sanitize" in CHAT_UI
+    assert "ALLOWED_TAGS" in CHAT_UI
+    assert "ALLOWED_ATTR" in CHAT_UI
+    assert '"img",' not in CHAT_MESSAGES_JS
+    assert "'img'," not in CHAT_MESSAGES_JS
+    assert "USE_PROFILES: { html: true }" not in CHAT_MESSAGES_JS
+    assert "bubble.innerHTML = sanitizedHtml;" in CHAT_UI
+    assert "renderBubbleContent(bubble, content, { ...options, role });" in CHAT_UI
 
 
 def test_imager_manifest_generator_is_pi5_only():
