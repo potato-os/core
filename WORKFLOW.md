@@ -102,7 +102,7 @@ All tests **must** pass locally before pushing. Do not rely on CI to catch failu
 ### Python tests (unit + API)
 
 ```bash
-uv run python -m pytest tests/unit tests/api -q
+uv run python -m pytest tests/unit tests/api -q -n auto
 ```
 
 The `-m pytest` flag is required so Python adds the project root to `sys.path`, matching CI behavior.
@@ -118,7 +118,7 @@ Requires Chromium installed (`npx playwright install chromium` on first run). Th
 ### Running both before push
 
 ```bash
-uv run python -m pytest tests/unit tests/api -q && npx playwright test
+uv run python -m pytest tests/unit tests/api -q -n auto && npx playwright test
 ```
 
 If either suite fails, fix the issue before pushing. Include summarized test output in the PR description.

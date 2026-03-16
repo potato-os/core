@@ -25,7 +25,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run unit and API tests
-        run: python -m pytest -q tests/unit tests/api
+        run: python -m pytest -q -n auto tests/unit tests/api
 
   ui-tests:
     runs-on: ubuntu-latest

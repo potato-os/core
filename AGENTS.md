@@ -36,9 +36,9 @@ Tests are organized under `tests/`:
 - `POTATO_ENABLE_ORCHESTRATOR=0 uv run uvicorn app.main:app --host 0.0.0.0 --port 1983`: Run API locally.
 
 ### Running tests (required before every push)
-- Python (unit + API): `uv run python -m pytest tests/unit tests/api -q`
+- Python (unit + API): `uv run python -m pytest tests/unit tests/api -q -n auto`
 - Playwright (UI): `npx playwright test --reporter=dot --timeout=15000 --workers=3`
-- Both together: `uv run python -m pytest tests/unit tests/api -q && npx playwright test --reporter=dot --timeout=15000 --workers=3`
+- Both together: `uv run python -m pytest tests/unit tests/api -q -n auto && npx playwright test --reporter=dot --timeout=15000 --workers=3`
 - First-time Playwright setup: `npx playwright install chromium`
 
 ### Pi deployment
