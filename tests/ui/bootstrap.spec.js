@@ -1,16 +1,7 @@
 const { test, expect } = require("@playwright/test");
 const {
   waitUntilReady,
-  openSettingsModal,
-  closeSettingsModal,
-  openAdvancedSettingsModal,
-  closeAdvancedSettingsModal,
-  saveModelSettings,
-  chooseModelSegment,
-  fulfillStreamingChat,
   makeStatusPayload,
-  makeMultiModelStatusPayload,
-  sendAndWaitForReply,
 } = require("./helpers");
 
 
@@ -32,6 +23,7 @@ test("download prompt shows countdown when no model is present", async ({ page }
   });
   await page.route("**/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(noModelStatus) }));
   await page.goto("/");
+  await expect(page.locator("#statusText")).toContainText("State: BOOTING");
   await expect(page.locator("#downloadPrompt")).toBeVisible();
   await expect(page.locator("#downloadPromptHint")).toContainText(/auto-download starts in/i);
 });
@@ -54,6 +46,7 @@ test("start download button sends request to backend", async ({ page }) => {
   });
   await page.route("**/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(noModelStatus) }));
   await page.goto("/");
+  await expect(page.locator("#statusText")).toContainText("State: BOOTING");
   await expect(page.locator("#downloadPrompt")).toBeVisible();
 
   let downloadRequested = false;
@@ -70,4 +63,3 @@ test("download prompt is hidden when model is present", async ({ page }) => {
   await waitUntilReady(page);
   await expect(page.locator("#downloadPrompt")).toBeHidden();
 });
-
