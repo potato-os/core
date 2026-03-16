@@ -1,6 +1,7 @@
 "use strict";
 
 import { appState, defaultSettings, settingsKey, PREFILL_METRICS_KEY, PREFILL_PROGRESS_CAP, PREFILL_PROGRESS_TAIL_START, PREFILL_PROGRESS_FLOOR, PREFILL_TICK_MS, PREFILL_FINISH_DURATION_MS, PREFILL_FINISH_TICK_MS, PREFILL_FINISH_HOLD_MS, STATUS_CHIP_MIN_VISIBLE_MS, STATUS_POLL_TIMEOUT_MS, RUNTIME_RECONNECT_INTERVAL_MS, RUNTIME_RECONNECT_TIMEOUT_MS, RUNTIME_RECONNECT_MAX_ATTEMPTS, IMAGE_CANCEL_RECOVERY_DELAY_MS, IMAGE_CANCEL_RESTART_DELAY_MS, SESSIONS_DB_NAME, SESSIONS_DB_VERSION, SESSIONS_STORE, ACTIVE_SESSION_KEY, SESSION_TITLE_MAX_LENGTH, SESSION_LIST_MAX_VISIBLE, IMAGE_SAFE_MAX_BYTES, IMAGE_MAX_DIMENSION, IMAGE_MAX_PIXEL_COUNT, CPU_CLOCK_MAX_HZ_PI5, GPU_CLOCK_MAX_HZ_PI5, RUNTIME_METRIC_SEVERITY_CLASSES, DEFAULT_MODEL_VISION_SETTINGS } from "./state.js";
+import { formatBytes, formatPercent, formatClockMHz, normalizePercent, percentFromRatio, runtimeMetricSeverityClass, applyRuntimeMetricSeverity, formatCountdownSeconds, estimateDataUrlBytes, postJson } from "./utils.js";
 
     // ── IndexedDB session storage ──────────────────────────────────────
 
@@ -347,79 +348,9 @@ import { appState, defaultSettings, settingsKey, PREFILL_METRICS_KEY, PREFILL_PR
       return normalizeSeedValue(settings?.seed, defaultSettings.seed);
     }
 
-    function formatBytes(rawBytes) {
-      const bytes = Number(rawBytes);
-      if (!Number.isFinite(bytes) || bytes <= 0) {
-        return "0 B";
-      }
-      const units = ["B", "KB", "MB", "GB", "TB"];
-      let value = bytes;
-      let unitIndex = 0;
-      while (value >= 1000 && unitIndex < units.length - 1) {
-        value /= 1000;
-        unitIndex += 1;
-      }
-      const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-      return `${value.toFixed(precision)} ${units[unitIndex]}`;
-    }
-
-    function formatPercent(rawValue, digits = 0) {
-      const value = Number(rawValue);
-      if (!Number.isFinite(value)) return "--";
-      return `${value.toFixed(digits)}%`;
-    }
-
-    function formatClockMHz(rawHz) {
-      const hz = Number(rawHz);
-      if (!Number.isFinite(hz) || hz <= 0) return "--";
-      return `${Math.round(hz / 1_000_000)} MHz`;
-    }
-
-    function normalizePercent(rawValue) {
-      const value = Number(rawValue);
-      if (!Number.isFinite(value)) return Number.NaN;
-      return Math.min(100, Math.max(0, value));
-    }
-
-    function percentFromRatio(rawCurrent, rawMax) {
-      const current = Number(rawCurrent);
-      const max = Number(rawMax);
-      if (!Number.isFinite(current) || !Number.isFinite(max) || current < 0 || max <= 0) {
-        return Number.NaN;
-      }
-      return normalizePercent((current / max) * 100);
-    }
-
-    function runtimeMetricSeverityClass(rawPercent) {
-      const percent = normalizePercent(rawPercent);
-      if (!Number.isFinite(percent)) return "runtime-metric-normal";
-      if (percent >= 90) return "runtime-metric-critical";
-      if (percent >= 75) return "runtime-metric-high";
-      if (percent >= 60) return "runtime-metric-warn";
-      return "runtime-metric-normal";
-    }
-
-    function applyRuntimeMetricSeverity(element, rawPercent) {
-      if (!element) return;
-      element.classList.remove(...RUNTIME_METRIC_SEVERITY_CLASSES);
-      element.classList.add(runtimeMetricSeverityClass(rawPercent));
-    }
-
-    function formatCountdownSeconds(rawSeconds) {
-      const totalSeconds = Math.max(0, Math.floor(Number(rawSeconds) || 0));
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = totalSeconds % 60;
-      return `${minutes}:${String(seconds).padStart(2, "0")}`;
-    }
-
-    function estimateDataUrlBytes(dataUrl) {
-      const marker = "base64,";
-      const idx = dataUrl.indexOf(marker);
-      if (idx < 0) return 0;
-      const base64Payload = dataUrl.slice(idx + marker.length);
-      const padding = base64Payload.endsWith("==") ? 2 : base64Payload.endsWith("=") ? 1 : 0;
-      return Math.floor((base64Payload.length * 3) / 4) - padding;
-    }
+    // formatBytes, formatPercent, formatClockMHz, normalizePercent, percentFromRatio,
+    // runtimeMetricSeverityClass, applyRuntimeMetricSeverity, formatCountdownSeconds,
+    // estimateDataUrlBytes — extracted to utils.js
 
     function dataUrlToImage(dataUrl) {
       return new Promise((resolve, reject) => {
@@ -3360,15 +3291,7 @@ import { appState, defaultSettings, settingsKey, PREFILL_METRICS_KEY, PREFILL_PR
         .join(" ");
     }
 
-    async function postJson(url, payload) {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload || {}),
-      });
-      const body = await res.json().catch(() => ({}));
-      return { res, body };
-    }
+    // postJson — extracted to utils.js
 
     async function switchLlamaRuntimeBundle() {
       if (appState.llamaRuntimeSwitchInFlight) return;
