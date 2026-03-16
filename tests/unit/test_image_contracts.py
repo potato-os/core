@@ -10,7 +10,9 @@ CHAT_STATE_JS = (WEB_ASSETS_DIR / "state.js").read_text(encoding="utf-8") if (WE
 CHAT_UTILS_JS = (WEB_ASSETS_DIR / "utils.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "utils.js").exists() else ""
 CHAT_SESSION_JS = (WEB_ASSETS_DIR / "session-manager.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "session-manager.js").exists() else ""
 CHAT_STATUS_JS = (WEB_ASSETS_DIR / "status.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "status.js").exists() else ""
-CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS
+CHAT_RUNTIME_UI_JS = (WEB_ASSETS_DIR / "runtime-ui.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "runtime-ui.js").exists() else ""
+CHAT_MESSAGES_JS = (WEB_ASSETS_DIR / "messages.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "messages.js").exists() else ""
+CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS + CHAT_RUNTIME_UI_JS + CHAT_MESSAGES_JS
 
 def test_nginx_config_allows_large_streaming_uploads():
     conf = Path("nginx/potato.conf").read_text(encoding="utf-8")
