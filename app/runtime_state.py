@@ -7,6 +7,7 @@ import math
 import os
 import platform
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -855,7 +856,7 @@ async def install_llama_runtime_bundle(runtime: RuntimeConfig, bundle_dir: Path)
     install_dir = _llama_runtime_install_dir(runtime)
     install_dir.mkdir(parents=True, exist_ok=True)
 
-    rsync = shutil_which("rsync")
+    rsync = shutil.which("rsync")
     if not rsync:
         return {"ok": False, "reason": "rsync_not_available", "install_dir": str(install_dir)}
 
