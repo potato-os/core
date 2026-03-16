@@ -1422,7 +1422,8 @@ def _forward_headers(request: Request) -> dict[str, str]:
     return forward
 
 
-CHAT_HTML = (Path(__file__).resolve().parent / "assets" / "chat.html").read_text(encoding="utf-8")
+_CHAT_HTML_PATH = Path(__file__).resolve().parent / "assets" / "chat.html"
+CHAT_HTML = _CHAT_HTML_PATH.read_text(encoding="utf-8")
 
 
 def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool | None = None) -> FastAPI:
@@ -1502,7 +1503,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
 
     @app.get("/", response_class=HTMLResponse)
     async def root() -> HTMLResponse:
-        return HTMLResponse(CHAT_HTML)
+        return HTMLResponse(_CHAT_HTML_PATH.read_text(encoding="utf-8"))
 
     @app.get("/status")
     async def status(request: Request, runtime_cfg: RuntimeConfig = Depends(get_runtime)) -> JSONResponse:
