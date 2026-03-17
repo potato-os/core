@@ -253,6 +253,50 @@ def test_firstboot_script_enforces_potato_hostname_and_avahi_refresh():
     assert 'chmod 0755 "${POTATO_BASE_DIR}"' in firstboot
 
 
+def test_image_build_guide_exists_with_required_sections():
+    guide = Path("docs/building-images.md").read_text(encoding="utf-8")
+
+    # Key sections exist
+    assert "# Building Potato OS Images" in guide
+    assert "Prerequisites" in guide
+    assert "Build a Potato OS image" in guide
+    assert "Flash the image" in guide
+
+    # Primary entry point is build_local_image.sh
+    assert "build_local_image.sh" in guide
+    assert "--setup-docker" in guide
+
+    # Flashing methods documented
+    assert "dd " in guide or "Raspberry Pi Imager" in guide
+    assert "rpi-imager-manifest" in guide
+
+    # Default image is "Potato OS", not leading with "lite"
+    assert guide.index("Potato OS") < guide.index("lite")
+
+    # Variants explained
+    assert "full" in guide
+    assert "--variant full" in guide
+
+    # Cleanup documented
+    assert "clean_image_build_artifacts" in guide
+
+    # Troubleshooting section
+    assert "Troubleshoot" in guide or "troubleshoot" in guide
+
+
+def test_readme_links_to_image_build_guide():
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "docs/building-images.md" in readme
+    assert "build_local_image.sh" in readme
+
+
+def test_build_local_image_defaults_to_lite_variant():
+    script = Path("bin/build_local_image.sh").read_text(encoding="utf-8")
+
+    assert 'VARIANT="lite"' in script
+
+
 def test_gitignore_excludes_large_artifacts_and_model_downloads():
     ignore = Path(".gitignore").read_text(encoding="utf-8")
 
