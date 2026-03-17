@@ -291,7 +291,7 @@ Generated at: ${timestamp}
 6. Select \`Potato OS (${target_variant}, Raspberry Pi 5)\` and flash.
 
 ## Important
-- This bundle is Pi 5-only (`pi5-64bit`).
+- This bundle is Pi 5-only (\`pi5-64bit\`).
 - Do not use \`METADATA.json\` or \`potato-${target_variant}-build-info.json\` in Imager.
 
 ## Files
