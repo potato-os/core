@@ -16,7 +16,6 @@ CACHE_RAM_MIB="${POTATO_LLAMA_CACHE_RAM_MIB:-1024}"
 MMPROJ_PATH="${POTATO_MMPROJ_PATH:-}"
 AUTO_DOWNLOAD_MMPROJ="${POTATO_AUTO_DOWNLOAD_MMPROJ:-1}"
 HF_MMPROJ_REPO="${POTATO_HF_MMPROJ_REPO:-}"
-VISION_MODEL_NAME_PATTERN_VL="${POTATO_VISION_MODEL_NAME_PATTERN_VL:-1}"
 # Plain Qwen3.5 2B/4B filenames are ambiguous across text-only and multimodal GGUFs.
 # Keep this opt-in so text models are not forced into mmproj by default.
 VISION_MODEL_NAME_PATTERN_QWEN35="${POTATO_VISION_MODEL_NAME_PATTERN_QWEN35:-0}"
@@ -150,12 +149,6 @@ mmproj_search_dirs() {
   fi
 }
 
-model_is_qwen3vl() {
-  local model_name
-  model_name="$(model_filename_lower)"
-  [[ "${model_name}" == *qwen3*vl* ]]
-}
-
 model_is_qwen35_a3b() {
   local model_name
   model_name="$(model_filename_lower)"
@@ -178,30 +171,7 @@ model_requires_mmproj() {
   if [ "${VISION_MODEL_NAME_PATTERN_QWEN35}" = "1" ] && model_is_qwen35_vision; then
     return 0
   fi
-  if [ "${VISION_MODEL_NAME_PATTERN_VL}" = "1" ] && model_has_vl_name; then
-    return 0
-  fi
   return 1
-}
-
-qwen3vl_size_tag() {
-  local model_name
-  model_name="$(model_filename_lower)"
-  if [[ "${model_name}" =~ qwen3[-_]*vl[-_]*([0-9]+b) ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-    return 0
-  fi
-  return 1
-}
-
-qwen3vl_variant() {
-  local model_name
-  model_name="$(model_filename_lower)"
-  if [[ "${model_name}" == *thinking* ]]; then
-    printf 'Thinking'
-  else
-    printf 'Instruct'
-  fi
 }
 
 resolve_mmproj_repo() {
@@ -212,22 +182,6 @@ resolve_mmproj_repo() {
     return 0
   fi
 
-  if [[ "${model_name}" == *qwen3*vl*2b*thinking* ]]; then
-    printf 'Qwen/Qwen3-VL-2B-Thinking-GGUF'
-    return 0
-  fi
-  if [[ "${model_name}" == *qwen3*vl*2b* ]]; then
-    printf 'Qwen/Qwen3-VL-2B-Instruct-GGUF'
-    return 0
-  fi
-  if [[ "${model_name}" == *qwen3*vl*4b*thinking* ]]; then
-    printf 'Qwen/Qwen3-VL-4B-Thinking-GGUF'
-    return 0
-  fi
-  if [[ "${model_name}" == *qwen3*vl*4b* ]]; then
-    printf 'Qwen/Qwen3-VL-4B-Instruct-GGUF'
-    return 0
-  fi
   if [[ "${model_name}" == *qwen*3.5*2b* ]]; then
     printf 'unsloth/Qwen3.5-2B-GGUF'
     return 0
@@ -261,42 +215,9 @@ qwen35_mmproj_name_candidates() {
 }
 
 mmproj_filename_candidates() {
-  local model_name
-  local repo
-  local size_tag=''
-  local size_upper=''
-  local variant='Instruct'
-  model_name="$(model_filename_lower)"
-  repo="$(resolve_mmproj_repo)"
-
-  if model_is_qwen3vl; then
-    size_tag="$(qwen3vl_size_tag || true)"
-    if [ -n "${size_tag}" ]; then
-      size_upper="$(printf '%s' "${size_tag}" | tr '[:lower:]' '[:upper:]')"
-      variant="$(qwen3vl_variant)"
-      printf '%s\n' \
-        "mmproj-Qwen3VL-${size_upper}-${variant}-Q8_0.gguf" \
-        "mmproj-Qwen3VL-${size_upper}-${variant}-F16.gguf"
-    fi
-  fi
   if model_is_qwen35_vision; then
     printf '%s\n' "mmproj-F16.gguf"
   fi
-
-  case "${repo}" in
-    *Qwen3-VL-2B-*)
-      printf '%s\n' \
-        "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf" \
-        "mmproj-Qwen3VL-2B-Instruct-F16.gguf"
-      ;;
-    *Qwen3-VL-4B-*)
-      printf '%s\n' \
-        "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf" \
-        "mmproj-Qwen3-VL-4B-Instruct-Q8_0.gguf" \
-        "mmproj-Qwen3VL-4B-Instruct-F16.gguf" \
-        "mmproj-Qwen3-VL-4B-Instruct-F16.gguf"
-      ;;
-  esac
 }
 
 download_mmproj() {
@@ -334,9 +255,7 @@ download_mmproj() {
 
 pick_mmproj() {
   local model_dir
-  local model_size_tag=''
   local candidate_base=''
-  local q8_candidate=''
   local f16_candidate=''
   local search_dir=''
   local candidate=''
@@ -358,10 +277,6 @@ pick_mmproj() {
     done
   done < <(mmproj_search_dirs)
   shopt -u nullglob
-
-  if model_is_qwen3vl; then
-    model_size_tag="$(qwen3vl_size_tag || true)"
-  fi
 
   if [ "${#mmproj_candidates[@]}" -eq 0 ]; then
     if [ "${AUTO_DOWNLOAD_MMPROJ}" = "1" ] && download_mmproj; then
@@ -397,47 +312,16 @@ pick_mmproj() {
     fi
   fi
 
-  if [ -n "${model_size_tag}" ]; then
-    for candidate in "${mmproj_candidates[@]}"; do
-      candidate_base="$(basename "${candidate}" | tr '[:upper:]' '[:lower:]')"
-      if [[ "${candidate_base}" == *"${model_size_tag}"* ]]; then
-        compatible_candidates+=("${candidate}")
-      fi
-    done
-  fi
-
-  if [ "${#compatible_candidates[@]}" -gt 0 ]; then
-    mmproj_candidates=("${compatible_candidates[@]}")
-  elif [ -n "${model_size_tag}" ]; then
-    if [ "${AUTO_DOWNLOAD_MMPROJ}" = "1" ] && download_mmproj; then
-      return 0
-    fi
-    die "No compatible mmproj found for model size ${model_size_tag} (model: $(basename "${MODEL_PATH}"))."
-  fi
-
   if [ "${#mmproj_candidates[@]}" -eq 1 ]; then
     MMPROJ_PATH="${mmproj_candidates[0]}"
     return 0
   fi
 
-  # Qwen3.5 models: prefer F16 projectors only
-  # Qwen3-VL models: prefer Q8_0, then F16
+  # Qwen3.5 models: prefer F16 projectors
   f16_candidate="$(printf '%s\n' "${mmproj_candidates[@]}" | grep -i 'F16' | head -n 1 || true)"
-  if model_is_qwen35_vision; then
-    if [ -n "${f16_candidate}" ]; then
-      MMPROJ_PATH="${f16_candidate}"
-      return 0
-    fi
-  else
-    q8_candidate="$(printf '%s\n' "${mmproj_candidates[@]}" | grep -i 'Q8_0' | head -n 1 || true)"
-    if [ -n "${q8_candidate}" ]; then
-      MMPROJ_PATH="${q8_candidate}"
-      return 0
-    fi
-    if [ -n "${f16_candidate}" ]; then
-      MMPROJ_PATH="${f16_candidate}"
-      return 0
-    fi
+  if [ -n "${f16_candidate}" ]; then
+    MMPROJ_PATH="${f16_candidate}"
+    return 0
   fi
 
   MMPROJ_PATH="${mmproj_candidates[0]}"

@@ -35,7 +35,6 @@ except ModuleNotFoundError:
 try:
     from app.constants import (
         is_qwen35_filename,
-        is_qwen3_vl_filename,
         projector_repo_for_model,
     )
     from app.model_state import (
@@ -143,7 +142,6 @@ try:
 except ModuleNotFoundError:
     from constants import (  # type: ignore[no-redef]
         is_qwen35_filename,
-        is_qwen3_vl_filename,
         projector_repo_for_model,
     )
     from model_state import (  # type: ignore[no-redef]
@@ -764,7 +762,6 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env["POTATO_LLAMA_PORT"] = str(runtime.llama_port)
     env["POTATO_LLAMA_NO_MMAP"] = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
     env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
-    env["POTATO_VISION_MODEL_NAME_PATTERN_VL"] = "0"
     env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "0"
     env.pop("POTATO_MMPROJ_PATH", None)
     try:
@@ -781,8 +778,6 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
             if mmproj_repo:
                 env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "1"
                 env["POTATO_HF_MMPROJ_REPO"] = mmproj_repo
-            if is_qwen3_vl_filename(active_filename):
-                env["POTATO_VISION_MODEL_NAME_PATTERN_VL"] = "1"
             if is_qwen35_filename(active_filename):
                 env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
             projector_status = build_model_projector_status(runtime, active_model)

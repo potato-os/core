@@ -15,30 +15,9 @@ def _normalized_model_name(filename: str | None) -> str:
     return str(filename or "").strip().lower()
 
 
-def is_qwen3_vl_filename(filename: str | None) -> bool:
-    model_name = _normalized_model_name(filename)
-    return bool(model_name) and "qwen3" in model_name and "vl" in model_name
-
-
 def is_qwen35_filename(filename: str | None) -> bool:
     model_name = _normalized_model_name(filename)
     return bool(model_name) and "qwen" in model_name and "3.5" in model_name
-
-
-def _qwen3_vl_projector_repo(filename: str | None) -> str | None:
-    model_name = _normalized_model_name(filename)
-    if not is_qwen3_vl_filename(model_name):
-        return None
-
-    if "2b" in model_name:
-        size = "2B"
-    elif "4b" in model_name:
-        size = "4B"
-    else:
-        return None
-
-    variant = "Thinking" if "thinking" in model_name else "Instruct"
-    return f"Qwen/Qwen3-VL-{size}-{variant}-GGUF"
 
 
 def _qwen35_projector_repo(filename: str | None) -> str | None:
@@ -53,4 +32,4 @@ def _qwen35_projector_repo(filename: str | None) -> str | None:
 
 
 def projector_repo_for_model(filename: str | None) -> str | None:
-    return _qwen3_vl_projector_repo(filename) or _qwen35_projector_repo(filename)
+    return _qwen35_projector_repo(filename)

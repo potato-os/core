@@ -151,7 +151,7 @@ def test_runtime_env_disables_vl_projector_heuristic_when_vision_is_off(runtime)
                             "vision": {
                                 "enabled": False,
                                 "projector_mode": "default",
-                                "projector_filename": "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+                                "projector_filename": "mmproj-test-Q8_0.gguf",
                             }
                         },
                     }
@@ -163,7 +163,7 @@ def test_runtime_env_disables_vl_projector_heuristic_when_vision_is_off(runtime)
 
     env = _runtime_env(runtime)
 
-    assert env["POTATO_VISION_MODEL_NAME_PATTERN_VL"] == "0"
+    assert "POTATO_VISION_MODEL_NAME_PATTERN_VL" not in env
     assert env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] == "0"
     assert env["POTATO_AUTO_DOWNLOAD_MMPROJ"] == "0"
     assert "POTATO_MMPROJ_PATH" not in env
