@@ -4,9 +4,11 @@
 
 Experimental Raspberry Pi 5 Linux mod with optimised local LLM inference. Runs quantised models on-device with a browser chat UI — no cloud, no GPU, just a Pi.
 
-**Hardware:** Raspberry Pi 5 (8GB / 16GB) | **Runtime:** [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (IQK-optimised) + upstream [llama.cpp](https://github.com/ggerganov/llama.cpp) | **Default model:** Qwen3.5-2B
+![Potato OS Raspberry Pi next to a real potato](docs/assets/potato_os_next_to_a_real_spud.jpg)
 
-> **Experimental software.** Potato OS is provided "as is" without warranty of any kind. Back up your SD card and data before flashing images or running install scripts. The authors and contributors are not liable for damage, data loss, or other issues arising from use. See [LICENSE](LICENSE) for the full terms.
+*Potato sold separately.*
+
+**Hardware:** Raspberry Pi 5 (8GB / 16GB) | **Runtime:** [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (IQK-optimised) + upstream [llama.cpp](https://github.com/ggerganov/llama.cpp) | **Default model:** Qwen3.5-2B
 
 ## Install (recommended)
 
@@ -17,6 +19,8 @@ Experimental Raspberry Pi 5 Linux mod with optimised local LLM inference. Runs q
 
 A starter model (~1.8 GB) downloads automatically on first boot. Chat is ready once the download finishes and the status shows CONNECTED.
 
+Before you start, back up any SD card or Pi data you may want to keep. Potato OS is currently a reflash-first MVP: there is no OTA update flow, no one-click rollback, and the safest way to recover or move to a newer version is to reflash the card.
+
 ### What you need
 
 - Raspberry Pi 5 (8 GB or 16 GB)
@@ -24,17 +28,12 @@ A starter model (~1.8 GB) downloads automatically on first boot. Chat is ready o
 - Power supply (27W USB-C recommended)
 - Ethernet or Wi-Fi connection (for first-boot model download)
 
-## Alternative: install on existing Raspberry Pi OS
+## Recovery and rollback
 
-If you already have Raspberry Pi OS running, clone the repo and run the installer:
+Need to back out or recover from a failed setup? See [docs/recovery.md](docs/recovery.md) for the practical rollback paths for:
 
-```bash
-git clone https://github.com/slomin/potato-os.git /tmp/potato-os
-cd /tmp/potato-os
-sudo ./bin/install_dev.sh
-```
-
-Open `http://potato.local` in a browser after the install completes.
+- restoring a previous Raspberry Pi OS or other system image
+- reflashing to a newer Potato OS image
 
 ---
 
