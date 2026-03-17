@@ -4,17 +4,55 @@ Experimental Raspberry Pi 5 Linux mod with optimised local LLM inference. Runs q
 
 **Hardware:** Raspberry Pi 5 (8GB / 16GB) | **Runtime:** [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (IQK-optimised) + upstream [llama.cpp](https://github.com/ggerganov/llama.cpp) | **Default model:** Qwen3.5-2B
 
-## Quick start
+## Install (recommended)
 
-Flash Raspberry Pi OS, copy the repo to the Pi, and install:
+1. Download the latest SD card image from [Releases](https://github.com/slomin/potato-os/releases)
+2. Flash it to a microSD card with [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
+3. Insert the card, power on the Pi, and wait for first boot to complete
+4. Open `http://potato.local` in a browser
+
+A starter model (~1.8 GB) downloads automatically on first boot. Chat is ready once the download finishes and the status shows CONNECTED.
+
+### What you need
+
+- Raspberry Pi 5 (8 GB or 16 GB)
+- microSD card (16 GB minimum, 32 GB recommended)
+- Power supply (27W USB-C recommended)
+- Ethernet or Wi-Fi connection (for first-boot model download)
+
+## Alternative: install on existing Raspberry Pi OS
+
+If you already have Raspberry Pi OS running, clone the repo and run the installer:
 
 ```bash
-./bin/install_dev.sh
+git clone https://github.com/slomin/potato-os.git /tmp/potato-os
+cd /tmp/potato-os
+sudo ./bin/install_dev.sh
 ```
 
-Open `http://potato.local` in a browser. A starter model downloads automatically on first boot.
+Open `http://potato.local` in a browser after the install completes.
 
-## Building llama runtimes
+---
+
+## Development
+
+Everything below is for contributors and developers.
+
+### Local dev
+
+```bash
+uv sync
+POTATO_ENABLE_ORCHESTRATOR=0 uv run uvicorn app.main:app --host 0.0.0.0 --port 1983
+```
+
+### Tests
+
+```bash
+uv run python -m pytest tests/unit tests/api -q -n auto
+npx playwright test --reporter=dot --timeout=15000 --workers=3
+```
+
+### Building llama runtimes
 
 Runtimes are built on the Pi (aarch64, no cross-compilation). From your Mac:
 
@@ -43,21 +81,7 @@ Published runtimes are available at [GitHub Releases](https://github.com/slomin/
 POTATO_LLAMA_RELEASE_AUTO=1 ./bin/install_dev.sh
 ```
 
-## Local dev
-
-```bash
-uv sync
-POTATO_ENABLE_ORCHESTRATOR=0 uv run uvicorn app.main:app --host 0.0.0.0 --port 1983
-```
-
-## Tests
-
-```bash
-uv run python -m pytest tests/unit tests/api -q -n auto
-npx playwright test --reporter=dot --timeout=15000 --workers=3
-```
-
-## SD card images
+### SD card images
 
 ```bash
 # Single-flash image (pi-gen)
@@ -67,7 +91,7 @@ npx playwright test --reporter=dot --timeout=15000 --workers=3
 ./bin/prepare_imager_bundle.sh --boot-path /Volumes/bootfs
 ```
 
-## Project
+### Project
 
 - Board: [github.com/users/slomin/projects/8](https://github.com/users/slomin/projects/8)
 - Process: [`WORKFLOW.md`](WORKFLOW.md)
