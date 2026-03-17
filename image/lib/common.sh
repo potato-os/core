@@ -367,6 +367,7 @@ run_build() {
   case "${out_image}" in
     *.img|*.img.xz)
       info "Generating Raspberry Pi Imager manifest (this may take a minute for xz decompression)..."
+      rm -f "${output_dir}/potato-${variant}.rpi-imager-manifest"
       if python3 "${repo_root}/bin/generate_imager_manifest.py" \
         --image "${out_image}" \
         --output "${output_dir}/potato-${variant}.rpi-imager-manifest" \
