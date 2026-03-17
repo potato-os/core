@@ -290,6 +290,16 @@ def test_status_reconciles_active_model_from_runtime_path_when_state_is_missing(
     assert saved_state["active_model_id"] == "custom-ready"
 
 
+def test_status_includes_canonical_version(client):
+    from app.__version__ import __version__
+
+    response = client.get("/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert "version" in body
+    assert body["version"] == __version__
+
+
 def test_status_includes_platform_version_and_power_fields_under_system(client):
     response = client.get("/status")
     assert response.status_code == 200

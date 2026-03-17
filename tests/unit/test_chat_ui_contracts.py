@@ -75,11 +75,13 @@ def test_chat_ui_keeps_theme_toggle_clear_of_status_badge():
 
 def test_chat_ui_copy_and_stats_footnote_contract():
     assert 'id="sidebarNote"' in CHAT_UI
-    assert "Pre-Alpha" in CHAT_UI
     assert "function classifyPi5MemoryTier(" in CHAT_UI
     assert "function setSidebarNote(" in CHAT_UI
-    assert "statusPayload?.system" in CHAT_UI
-    assert "Pre-Alpha · ${piModelName} · ${memoryTier}" in CHAT_UI
+    # Version must come from status payload, not be hardcoded
+    assert "statusPayload?.version" in CHAT_UI
+    assert "V0.3 Pre-Alpha" not in CHAT_UI
+    assert "V0.3" not in CHAT_JS
+    assert "Pre-Alpha" not in CHAT_JS
     assert "Potato OS is online. Ask anything to get started." not in CHAT_UI
     assert "Local-first chat frontend on your Pi." not in CHAT_UI
     assert "Local-first chat front end on your Pi." not in CHAT_UI
