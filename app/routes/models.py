@@ -75,7 +75,12 @@ async def start_model_download_now(request: Request, runtime_cfg: RuntimeConfig 
 
     started, reason = await _main.start_model_download(request.app, runtime_cfg, trigger="manual")
     status_code = 202 if started else 200
-    return JSONResponse(status_code=status_code, content={"started": started, "reason": reason})
+    content: dict[str, Any] = {"started": started, "reason": reason}
+    if reason == "insufficient_storage":
+        dl = _main.read_download_progress(runtime_cfg)
+        content["free_bytes"] = dl.get("free_bytes")
+        content["required_bytes"] = dl.get("required_bytes")
+    return JSONResponse(status_code=status_code, content=content)
 
 
 @router.post("/internal/download-countdown")
@@ -152,7 +157,12 @@ async def start_selected_model_download(
         model_id=model_id,
     )
     status_code = 202 if started else 200
-    return JSONResponse(status_code=status_code, content={"started": started, "reason": reason, "model_id": model_id})
+    content: dict[str, Any] = {"started": started, "reason": reason, "model_id": model_id}
+    if reason == "insufficient_storage":
+        dl = _main.read_download_progress(runtime_cfg)
+        content["free_bytes"] = dl.get("free_bytes")
+        content["required_bytes"] = dl.get("required_bytes")
+    return JSONResponse(status_code=status_code, content=content)
 
 
 @router.post("/internal/models/settings")

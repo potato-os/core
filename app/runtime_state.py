@@ -1392,6 +1392,10 @@ def read_download_progress(runtime: RuntimeConfig) -> dict[str, Any]:
     progress["speed_bps"] = _safe_int(raw.get("speed_bps"), 0)
     progress["eta_seconds"] = _safe_int(raw.get("eta_seconds"), 0)
     progress["error"] = raw.get("error")
+    if raw.get("free_bytes") is not None:
+        progress["free_bytes"] = _safe_int(raw.get("free_bytes"), 0)
+    if raw.get("required_bytes") is not None:
+        progress["required_bytes"] = _safe_int(raw.get("required_bytes"), 0)
 
     if progress["bytes_total"] > 0 and progress["percent"] == 0:
         progress["percent"] = int(progress["bytes_downloaded"] * 100 / progress["bytes_total"])
