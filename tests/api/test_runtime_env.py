@@ -257,6 +257,9 @@ def test_runtime_env_enables_mmproj_auto_download_when_vision_on_and_no_mmproj(r
     assert env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] == "1"
     assert env["POTATO_AUTO_DOWNLOAD_MMPROJ"] == "1"
     assert "POTATO_MMPROJ_PATH" not in env
+    # Must pass the curated HF repo so start_llama.sh downloads the right projector
+    assert "POTATO_HF_MMPROJ_REPO" in env
+    assert "unsloth" in env["POTATO_HF_MMPROJ_REPO"] or "huggingface" in env["POTATO_HF_MMPROJ_REPO"].lower()
 
 
 
