@@ -49,8 +49,9 @@ Tests are organized under `tests/`:
 - Restart service: `sshpass -e ssh pi@potato.local "sudo systemctl restart potato"`
 
 ### Image building
-- `./bin/prepare_imager_bundle.sh`: Package SD card image payload.
-- `./image/build-all.sh`: Full image build (requires pi-gen / Docker).
+- `./bin/build_local_image.sh --setup-docker`: Build Potato OS image from macOS (recommended entry point).
+- `./bin/prepare_imager_bundle.sh`: Package SD card image payload (patch existing card).
+- See [`docs/building-images.md`](docs/building-images.md) for the full build guide.
 
 ## Runtime Architecture
 

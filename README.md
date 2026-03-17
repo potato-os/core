@@ -59,13 +59,13 @@ npx playwright test --reporter=dot --timeout=15000 --workers=3
 
 ## SD card images
 
-```bash
-# Single-flash image (pi-gen)
-./image/build-all.sh
+Build a flashable Potato OS image from macOS:
 
-# Bootfs bundle (patch existing Raspberry Pi OS card)
-./bin/prepare_imager_bundle.sh --boot-path /Volumes/bootfs
+```bash
+./bin/build_local_image.sh --setup-docker
 ```
+
+See [Building Images](docs/building-images.md) for prerequisites, variants, and flashing instructions.
 
 ## Project
 
