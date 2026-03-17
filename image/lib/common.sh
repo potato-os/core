@@ -366,10 +366,16 @@ run_build() {
   sha256_file "${out_image}" > "${output_dir}/SHA256SUMS"
   case "${out_image}" in
     *.img|*.img.xz)
-      python3 "${repo_root}/bin/generate_imager_manifest.py" \
+      info "Generating Raspberry Pi Imager manifest (this may take a minute for xz decompression)..."
+      if python3 "${repo_root}/bin/generate_imager_manifest.py" \
         --image "${out_image}" \
         --output "${output_dir}/potato-${variant}.rpi-imager-manifest" \
-        --name "Potato OS (${variant}, Raspberry Pi 5)"
+        --name "Potato OS (${variant}, Raspberry Pi 5)"; then
+        info "Manifest generated: ${output_dir}/potato-${variant}.rpi-imager-manifest"
+      else
+        info "WARNING: Manifest generation failed. You can regenerate it manually:"
+        info "  python3 bin/generate_imager_manifest.py --image ${out_image} --output ${output_dir}/potato-${variant}.rpi-imager-manifest"
+      fi
       ;;
     *)
       info "Skipping Raspberry Pi Imager manifest generation for unsupported artifact type: ${out_image}"

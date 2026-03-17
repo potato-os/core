@@ -246,10 +246,19 @@ collect_variant_bundle() {
   printf '%s  %s\n' "${actual_sha}" "${image_name}" > "${bundle_dir}/SHA256SUMS"
 
   local imager_manifest="${bundle_dir}/potato-${target_variant}.rpi-imager-manifest"
-  python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
-    --image "${bundle_dir}/${image_name}" \
-    --output "${imager_manifest}" \
-    --name "Potato OS (${target_variant}, Raspberry Pi 5)"
+  local source_manifest="${OUTPUT_DIR}/potato-${target_variant}.rpi-imager-manifest"
+  if [ -f "${source_manifest}" ]; then
+    cp -f "${source_manifest}" "${imager_manifest}"
+  else
+    echo "[potato-local-build] Generating Raspberry Pi Imager manifest (this may take a minute)..."
+    if ! python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
+      --image "${bundle_dir}/${image_name}" \
+      --output "${imager_manifest}" \
+      --name "Potato OS (${target_variant}, Raspberry Pi 5)"; then
+      echo "[potato-local-build] WARNING: Manifest generation failed. Regenerate manually:"
+      echo "  python3 bin/generate_imager_manifest.py --image ${bundle_dir}/${image_name} --output ${imager_manifest}"
+    fi
+  fi
 
   local image_size_bytes
   image_size_bytes="$(wc -c < "${image_path}" | tr -d ' ')"
