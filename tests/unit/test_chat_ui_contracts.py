@@ -434,14 +434,18 @@ def test_chat_ui_insufficient_storage_shows_visible_error():
     # Must call appendMessage for a visible chat bubble, not just setComposerActivity
     # Find the insufficient_storage block in startModelDownloadForModel and verify appendMessage
     idx = CHAT_JS.index("startModelDownloadForModel")
-    block = CHAT_JS[idx:idx + 600]
+    block = CHAT_JS[idx:idx + 800]
     assert "appendMessage(" in block
     assert "storage" in block.lower()
+    # Storage figures must come from the POST response body, not stale appState.latestStatus
+    assert "body?.free_bytes" in block
+    assert "body.required_bytes" in block
     # Same for startModelDownload
     idx2 = CHAT_JS.index("async function startModelDownload()")
     block2 = CHAT_JS[idx2:idx2 + 2000]
     assert "appendMessage(" in block2
     assert "insufficient_storage" in block2
+    assert "body?.free_bytes" in block2
     # Settings UI should format insufficient_storage as human-readable text
     assert "insufficient_storage" in CHAT_SETTINGS_UI_JS
     assert "Insufficient storage" in CHAT_SETTINGS_UI_JS

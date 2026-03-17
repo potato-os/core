@@ -466,6 +466,38 @@ def test_start_model_download_starts_when_enabled(runtime, monkeypatch):
     assert body["reason"] == "started"
 
 
+def test_start_model_download_insufficient_storage_includes_size_fields(runtime, monkeypatch):
+    app = create_app(runtime=runtime, enable_orchestrator=False)
+    runtime.enable_orchestrator = True
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    async def _start(_app, _runtime, trigger: str):
+        return False, "insufficient_storage"
+
+    monkeypatch.setattr("app.main.start_model_download", _start)
+    runtime.download_state_path.write_text(
+        json.dumps({
+            "bytes_total": 5000000000,
+            "bytes_downloaded": 0,
+            "percent": 0,
+            "error": "insufficient_storage",
+            "free_bytes": 2000000000,
+            "required_bytes": 5000000000,
+        }),
+        encoding="utf-8",
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post("/internal/start-model-download")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["started"] is False
+    assert body["reason"] == "insufficient_storage"
+    assert body["free_bytes"] == 2000000000
+    assert body["required_bytes"] == 5000000000
+
+
 def test_reset_runtime_starts_when_enabled(runtime, monkeypatch):
     app = create_app(runtime=runtime, enable_orchestrator=False)
     runtime.enable_orchestrator = True
