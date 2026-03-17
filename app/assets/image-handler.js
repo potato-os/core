@@ -102,8 +102,13 @@ import { appendMessage } from "./messages.js";
           || metadata.pixelCount > IMAGE_MAX_PIXEL_COUNT
         )
       );
+      // llama-server uses stb_image which only supports JPEG, PNG, BMP, GIF.
+      // Re-encode anything else (HEIC, WebP, AVIF, etc.) to JPEG.
+      const mimeType = String(file?.type || "").toLowerCase();
+      const needsReencode = mimeType !== "image/jpeg" && mimeType !== "image/png"
+        && mimeType !== "image/bmp" && mimeType !== "image/gif";
 
-      if (inputSize <= IMAGE_SAFE_MAX_BYTES && !needsResize) {
+      if (inputSize <= IMAGE_SAFE_MAX_BYTES && !needsResize && !needsReencode) {
         return {
           dataUrl,
           size: inputSize,
