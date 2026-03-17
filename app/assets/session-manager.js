@@ -240,6 +240,22 @@ export async function deleteSession(sessionId) {
   renderSessionList();
 }
 
+export async function deleteAllSessions() {
+  if (appState.requestInFlight) return;
+  const db = await openSessionsDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(SESSIONS_STORE, "readwrite");
+    tx.objectStore(SESSIONS_STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  appState.sessionIndex = [];
+  clearChatState();
+  appState.activeSessionId = null;
+  try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_e) { /* ignore */ }
+  renderSessionList();
+}
+
 export function renderSessionList() {
   const list = document.getElementById("chatSessionList");
   if (!list) return;
@@ -261,6 +277,8 @@ export function renderSessionList() {
     item.appendChild(del);
     list.appendChild(item);
   }
+  const deleteAllBtn = document.getElementById("deleteAllChatsBtn");
+  if (deleteAllBtn) deleteAllBtn.hidden = appState.sessionIndex.length === 0;
 }
 
 export async function initSessionManager() {

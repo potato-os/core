@@ -2,7 +2,7 @@
 
 import { appState, defaultSettings, settingsKey, PREFILL_METRICS_KEY, PREFILL_PROGRESS_CAP, PREFILL_PROGRESS_TAIL_START, PREFILL_PROGRESS_FLOOR, PREFILL_TICK_MS, PREFILL_FINISH_DURATION_MS, PREFILL_FINISH_TICK_MS, PREFILL_FINISH_HOLD_MS, STATUS_CHIP_MIN_VISIBLE_MS, STATUS_POLL_TIMEOUT_MS, RUNTIME_RECONNECT_INTERVAL_MS, RUNTIME_RECONNECT_TIMEOUT_MS, RUNTIME_RECONNECT_MAX_ATTEMPTS, IMAGE_CANCEL_RECOVERY_DELAY_MS, IMAGE_CANCEL_RESTART_DELAY_MS, SESSIONS_DB_NAME, SESSIONS_DB_VERSION, SESSIONS_STORE, ACTIVE_SESSION_KEY, SESSION_TITLE_MAX_LENGTH, SESSION_LIST_MAX_VISIBLE, IMAGE_SAFE_MAX_BYTES, IMAGE_MAX_DIMENSION, IMAGE_MAX_PIXEL_COUNT, CPU_CLOCK_MAX_HZ_PI5, GPU_CLOCK_MAX_HZ_PI5, RUNTIME_METRIC_SEVERITY_CLASSES, DEFAULT_MODEL_VISION_SETTINGS } from "./state.js";
 import { formatBytes, formatPercent, formatClockMHz, normalizePercent, percentFromRatio, runtimeMetricSeverityClass, applyRuntimeMetricSeverity, formatCountdownSeconds, estimateDataUrlBytes, postJson } from "./utils.js";
-import { registerAppendMessage, saveActiveSession, clearChatState, startNewChat, deleteSession, loadSessionIntoView, initSessionManager, renderSessionList } from "./session-manager.js";
+import { registerAppendMessage, saveActiveSession, clearChatState, startNewChat, deleteSession, deleteAllSessions, loadSessionIntoView, initSessionManager, renderSessionList } from "./session-manager.js";
 import { populateModelSwitcher, openModelSwitcher, closeModelSwitcher, toggleModelSwitcher } from "./model-switcher.js";
 import { isLocalModelConnected, updateLlamaIndicator, findResumableFailedModel, renderDownloadPrompt, renderStatusActions, renderCompatibilityWarnings, formatSidebarStatusDetail, formatModelStatusLabel } from "./status.js";
 import { setRuntimeDetailsExpanded, renderSystemRuntime, renderLlamaRuntimeStatus, renderUploadState, setModelUploadStatus, setLlamaRuntimeSwitchStatus, setLlamaRuntimeSwitchButtonState, setLlamaMemoryLoadingStatus, setLlamaMemoryLoadingButtonState, setLargeModelOverrideStatus, setLargeModelOverrideButtonState, setPowerCalibrationStatus, setPowerCalibrationButtonsState, setPowerCalibrationLiveStatus } from "./runtime-ui.js";
@@ -1196,6 +1196,10 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       }
     });
     document.getElementById("newChatBtn").addEventListener("click", () => startNewChat());
+    document.getElementById("deleteAllChatsBtn").addEventListener("click", () => {
+      if (!window.confirm("Delete all chats? This cannot be undone.")) return;
+      deleteAllSessions();
+    });
     document.getElementById("chatSessionList").addEventListener("click", (event) => {
       const del = event.target.closest(".chat-session-delete");
       if (del) {
