@@ -453,6 +453,13 @@ def test_chat_ui_insufficient_storage_shows_visible_error():
     assert "Insufficient storage" in CHAT_SETTINGS_UI_JS
 
 
+def test_chat_ui_supports_delete_all_chats():
+    assert 'id="deleteAllChatsBtn"' in CHAT_UI
+    assert "function deleteAllSessions(" in CHAT_SESSION_JS
+    assert "deleteAllSessions" in CHAT_JS
+    assert "Delete all chats" in CHAT_UI
+
+
 def test_chat_ui_shows_processing_indicator_while_generating():
     assert 'id="composerActivity"' in CHAT_UI
     assert 'id="composerStatusChip"' in CHAT_UI
