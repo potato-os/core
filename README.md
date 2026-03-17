@@ -28,6 +28,22 @@ Before you start, back up any SD card or Pi data you may want to keep. Potato OS
 - Power supply (27W USB-C recommended)
 - Ethernet or Wi-Fi connection (for first-boot model download)
 
+## MVP status
+
+Potato OS is an early release meant for testing and tinkering, not production use.
+
+### What works
+
+- Chat with streaming responses
+- Vision — attach a photo and ask about it
+- Multi-chat sessions (persisted in your browser)
+- Model management — download by URL, upload, delete, switch active model
+- SSD-backed model storage (USB SSD auto-detected)
+- System monitoring — CPU, GPU, temperature, memory, storage, power draw
+- Dual inference runtime — ik_llama (default) and upstream llama.cpp
+
+Updates are reflash-only for now — there is no OTA or in-place upgrade path yet.
+
 ## Recovery and rollback
 
 Need to back out or recover from a failed setup? See [docs/recovery.md](docs/recovery.md) for the practical rollback paths for:
