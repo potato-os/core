@@ -150,17 +150,17 @@ else
   REPO_BRANCH="master"
 fi
 
-# Fetch source: clone if missing or not a git repo, pull latest if present
+# Fetch source: clone if missing/broken, pull latest if present
 if [ "${FETCH_SOURCE}" = "1" ]; then
-  if [ ! -d "${SOURCE_DIR}/.git" ]; then
+  if git -C "${SOURCE_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+    printf 'Pulling latest %s in %s\n' "${REPO_BRANCH}" "${SOURCE_DIR}"
+    git -C "${SOURCE_DIR}" fetch origin "${REPO_BRANCH}" --depth 1
+    git -C "${SOURCE_DIR}" checkout FETCH_HEAD
+  else
     printf 'Cloning %s into %s\n' "${REPO_URL}" "${SOURCE_DIR}"
     rm -rf "${SOURCE_DIR}"
     mkdir -p "$(dirname "${SOURCE_DIR}")"
     git clone --depth 1 --branch "${REPO_BRANCH}" "${REPO_URL}" "${SOURCE_DIR}"
-  else
-    printf 'Pulling latest %s in %s\n' "${REPO_BRANCH}" "${SOURCE_DIR}"
-    git -C "${SOURCE_DIR}" fetch origin "${REPO_BRANCH}" --depth 1
-    git -C "${SOURCE_DIR}" checkout FETCH_HEAD
   fi
 fi
 
