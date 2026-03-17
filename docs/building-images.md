@@ -79,10 +79,11 @@ Or use **Raspberry Pi Imager** → "Use custom" → select the `.img.xz` file.
 ### Option B: Raspberry Pi Imager with manifest
 
 1. Open Raspberry Pi Imager
-2. Choose OS → scroll to bottom → "Use custom"
-3. Instead of selecting an image, use the `.rpi-imager-manifest` file as a Content Repository source
-4. Select **Potato OS** from the list
-5. Choose your SD card and flash
+2. Click the **OS** button → scroll to bottom → **Other general-purpose OS** → **Use custom**? No — instead, load the manifest as a **Content Repository**:
+   - On macOS: **Raspberry Pi Imager** → **Settings** (gear icon) → under **Content Repository**, select the `.rpi-imager-manifest` file
+   - The manifest registers Potato OS as a selectable OS entry
+3. Back on the main screen, click **Choose OS** → select **Potato OS (lite, Raspberry Pi 5)**
+4. Choose your SD card and flash
 
 The manifest file is at `output/images/potato-lite.rpi-imager-manifest`.
 
@@ -116,7 +117,7 @@ Remove build artifacts and caches:
 ```bash
 docker rm -f pigen_work potato-pigen-lite potato-pigen-full
 ```
-Or use `--skip-clean-pigen-work` to skip the automatic cleanup attempt.
+The build script normally cleans these automatically. If you see repeated conflicts, check that Docker is responding (`docker info`) before retrying.
 
 **Colima VM resources:** For faster builds, give Colima more CPU/RAM:
 ```bash
