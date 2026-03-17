@@ -47,7 +47,10 @@ if [ -z "${SLOT_DIR}" ]; then
 fi
 
 # ── Check dependencies ─────────────────────────────────────────────────
-command -v jq >/dev/null 2>&1 || die "jq is required to read runtime.json. Install with: brew install jq"
+if ! command -v jq >/dev/null 2>&1; then
+  printf 'ERROR: jq is required to read runtime.json. Install with: brew install jq\n' >&2
+  exit 1
+fi
 
 # ── Validate slot ──────────────────────────────────────────────────────
 if [ ! -d "${SLOT_DIR}" ]; then
