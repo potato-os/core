@@ -133,6 +133,7 @@ _rsync --delete \
   --include 'package.json' \
   --include 'AGENTS.md' \
   --include 'WORKFLOW.md' \
+  --exclude '*' \
   "${REPO_ROOT}/" "${PI_USER}@${PI_HOST}:${REMOTE_REPO_DIR}/"
 
 log_info "Repo synced"
