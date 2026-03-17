@@ -959,18 +959,18 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       return `${bestTier}GB`;
     }
 
-    function setSidebarNote(systemPayload) {
+    function setSidebarNote(statusPayload) {
       const noteEl = document.getElementById("sidebarNote");
       if (!noteEl) return;
+      const version = String(statusPayload?.version || "").trim();
+      const systemPayload = statusPayload?.system;
       const piModelName = String(systemPayload?.pi_model_name || "").trim();
       const memoryTier = classifyPi5MemoryTier(systemPayload?.memory_total_bytes);
-      if (piModelName && memoryTier) {
-        noteEl.textContent = `V0.3 Pre-Alpha · ${piModelName} · ${memoryTier}`;
-        return;
-      }
-      noteEl.textContent = piModelName
-        ? `V0.3 Pre-Alpha · ${piModelName}`
-        : "V0.3 Pre-Alpha";
+      const parts = [];
+      if (version) parts.push(version);
+      if (piModelName) parts.push(piModelName);
+      if (memoryTier) parts.push(memoryTier);
+      noteEl.textContent = parts.length > 0 ? parts.join(" · ") : "";
     }
 
     function setStatus(statusPayload) {
@@ -979,7 +979,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       const text = `State: ${statusPayload.state} | ${downloadText}`;
       document.getElementById("statusText").textContent = text;
       renderStatusActions(statusPayload);
-      setSidebarNote(statusPayload?.system);
+      setSidebarNote(statusPayload);
       const modelNameField = document.getElementById("modelName");
       if (modelNameField) {
         const modelName = statusPayload?.model?.filename || "Unknown model";

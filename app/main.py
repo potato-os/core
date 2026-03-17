@@ -679,7 +679,10 @@ async def build_status(
         raw_system_snapshot.get("power_estimate") if isinstance(raw_system_snapshot, dict) else None,
     )
 
+    from app.__version__ import __version__ as _app_version
+
     return {
+        "version": _app_version,
         "state": state,
         "model_present": has_model,
         "model": {
@@ -1445,7 +1448,9 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 except asyncio.CancelledError:
                     pass
 
-    app = FastAPI(title="Potato Web", version="0.3-pre-alpha", lifespan=_lifespan)
+    from app.__version__ import __version__ as _app_version
+
+    app = FastAPI(title="Potato Web", version=_app_version, lifespan=_lifespan)
     app.mount("/assets", StaticFiles(directory=str(WEB_ASSETS_DIR)), name="assets")
     app.state.runtime = runtime or RuntimeConfig.from_env()
     app.state.llama_process = None
