@@ -678,7 +678,10 @@ async def build_status(
         raw_system_snapshot.get("power_estimate") if isinstance(raw_system_snapshot, dict) else None,
     )
 
-    from app.__version__ import __version__ as _app_version
+    try:
+        from app.__version__ import __version__ as _app_version
+    except ModuleNotFoundError:
+        from __version__ import __version__ as _app_version  # type: ignore[no-redef]
 
     return {
         "version": _app_version,
@@ -1444,7 +1447,10 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 except asyncio.CancelledError:
                     pass
 
-    from app.__version__ import __version__ as _app_version
+    try:
+        from app.__version__ import __version__ as _app_version
+    except ModuleNotFoundError:
+        from __version__ import __version__ as _app_version  # type: ignore[no-redef]
 
     app = FastAPI(title="Potato Web", version=_app_version, lifespan=_lifespan)
     app.mount("/assets", StaticFiles(directory=str(WEB_ASSETS_DIR)), name="assets")
