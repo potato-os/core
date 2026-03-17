@@ -399,6 +399,11 @@ def test_chat_ui_compresses_large_images_before_send():
     assert "setComposerActivity(\"Optimizing image...\")" in CHAT_UI
     assert "await maybeCompressImage(result, file);" in CHAT_UI
     assert "optimized from" in CHAT_UI
+    # Images in unsupported formats (HEIC, WebP, etc.) must be re-encoded
+    # to JPEG/PNG so llama-server's stb_image decoder can handle them.
+    assert "needsReencode" in CHAT_IMAGE_HANDLER_JS
+    assert "image/jpeg" in CHAT_IMAGE_HANDLER_JS
+    assert "image/png" in CHAT_IMAGE_HANDLER_JS
 
 
 def test_chat_ui_model_manager_supports_model_delete_action():
