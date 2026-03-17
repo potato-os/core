@@ -58,7 +58,7 @@ def test_status_ignores_mmproj_files_from_local_model_discovery(runtime):
     app = create_app(runtime=runtime, enable_orchestrator=False)
     app.dependency_overrides[get_runtime] = lambda: runtime
 
-    (runtime.base_dir / "models" / "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf").write_bytes(b"mmproj")
+    (runtime.base_dir / "models" / "mmproj-test.gguf").write_bytes(b"mmproj")
 
     with TestClient(app) as client:
         response = client.get("/status")
@@ -66,7 +66,7 @@ def test_status_ignores_mmproj_files_from_local_model_discovery(runtime):
     assert response.status_code == 200
     body = response.json()
     names = {item["filename"] for item in body["models"]}
-    assert "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf" not in names
+    assert "mmproj-test.gguf" not in names
 
 def test_purge_models_clears_files_and_model_metadata(runtime):
     runtime.enable_orchestrator = True
