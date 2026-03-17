@@ -90,6 +90,13 @@ import { formatBytes, formatCountdownSeconds } from "./utils.js";
       }
 
       prompt.hidden = false;
+      const defaultModelFilename = String(statusPayload?.download?.default_model_filename || "").replace(/\.gguf$/i, "");
+      const titleEl = prompt.querySelector(".download-prompt-title");
+      if (titleEl) {
+        titleEl.textContent = defaultModelFilename
+          ? `${defaultModelFilename} download required`
+          : "Model download required";
+      }
       const countdownEnabled = statusPayload?.download?.countdown_enabled !== false;
       const autoStartRemaining = Number(statusPayload.download.auto_start_remaining_seconds);
       const freeBytes = Number(statusPayload?.system?.storage_free_bytes);
