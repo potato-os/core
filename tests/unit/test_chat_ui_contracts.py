@@ -285,6 +285,8 @@ def test_chat_ui_supports_manual_or_idle_model_download_prompt():
     assert "Not enough free storage for this model." in CHAT_UI
     assert "Model likely too large for free storage. Delete files and retry." in CHAT_UI
     assert "freeBytes < 512 * 1024 * 1024" in CHAT_UI
+    # Download prompt title should show the starter model name from status payload
+    assert "default_model_filename" in CHAT_STATUS_JS
 
 
 def test_chat_ui_supports_heavy_runtime_reset_action_with_confirmation():

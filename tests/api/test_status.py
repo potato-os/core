@@ -19,6 +19,7 @@ def test_status_booting_when_model_missing(client, monkeypatch):
     assert body["model_present"] is False
     assert body["model"]["filename"] == "Qwen3.5-2B-Q4_K_M.gguf"
     assert body["download"]["bytes_downloaded"] == 0
+    assert body["download"]["default_model_filename"] == "Qwen3.5-2B-Q4_K_M.gguf"
 
 
 def test_status_downloading_when_progress_exists(client, runtime, monkeypatch):
