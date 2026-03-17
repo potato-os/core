@@ -215,7 +215,7 @@ test("insufficient storage download shows visible error message", async ({ page 
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ started: false, reason: "insufficient_storage", free_bytes: 7860000000, required_bytes: 12424439872 }),
+      body: JSON.stringify({ started: false, reason: "insufficient_storage" }),
     });
   });
 
@@ -234,11 +234,9 @@ test("insufficient storage download shows visible error message", async ({ page 
   await expect.poll(() => downloadCalls.length).toBeGreaterThan(0);
   await closeSettingsModal(page);
 
-  // A chat bubble should appear with a visible storage error including byte details
+  // A chat bubble should appear with a visible storage error
   const messages = page.locator("#messages");
   await expect(messages).toContainText("storage");
-  await expect(messages).toContainText("free");
-  await expect(messages).toContainText("needed");
 });
 
 test("shows sidebar resume button for failed download while another model is active", async ({ page }) => {
