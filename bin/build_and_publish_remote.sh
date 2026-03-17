@@ -80,6 +80,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 command -v sshpass >/dev/null 2>&1 || die "sshpass is required. Install with: brew install hudochenkov/sshpass/sshpass"
+command -v jq >/dev/null 2>&1 || die "jq is required to read runtime.json. Install with: brew install jq"
 export SSHPASS="${PI_PASSWORD}"
 
 _ssh() {

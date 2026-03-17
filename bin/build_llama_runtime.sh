@@ -128,6 +128,8 @@ if [ "${FAMILY}" = "both" ]; then
   [ "${CLEAN_BUILD}" = "1" ] && build_args+=(--clean)
   [ "${FETCH_SOURCE}" = "1" ] && build_args+=(--fetch)
   [ -n "${JOBS}" ] && build_args+=(--jobs "${JOBS}")
+  # Clear source override so each family resolves its own source dir
+  unset POTATO_LLAMA_CPP_SOURCE
   "${BASH_SOURCE[0]}" --family ik_llama "${build_args[@]}"
   printf '\n'
   "${BASH_SOURCE[0]}" --family llama_cpp "${build_args[@]}"

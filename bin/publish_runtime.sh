@@ -46,6 +46,9 @@ if [ -z "${SLOT_DIR}" ]; then
   SLOT_DIR="${DEFAULT_SLOT_ROOT}/${FAMILY}"
 fi
 
+# ── Check dependencies ─────────────────────────────────────────────────
+command -v jq >/dev/null 2>&1 || die "jq is required to read runtime.json. Install with: brew install jq"
+
 # ── Validate slot ──────────────────────────────────────────────────────
 if [ ! -d "${SLOT_DIR}" ]; then
   printf 'ERROR: Slot directory does not exist: %s\n' "${SLOT_DIR}" >&2
