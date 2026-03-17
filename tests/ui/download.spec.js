@@ -158,6 +158,87 @@ test("surfaces failed downloads clearly and resumes them from the UI", async ({ 
   await expect(failedRow.locator('button[data-action="cancel-download"]')).toHaveText("Stop download");
 });
 
+test("insufficient storage download shows visible error message", async ({ page }) => {
+  let downloadCalls = [];
+  const models = [
+    {
+      id: "big-model",
+      filename: "Qwen3-30B-A3B-Instruct-2507-Q3_K_S-3.25bpw.gguf",
+      source_url: "https://example.com/qwen3-30b-a3b-q3ks.gguf",
+      source_type: "url",
+      status: "failed",
+      is_active: false,
+      bytes_total: 12424439872,
+      bytes_downloaded: 0,
+      percent: 0,
+      error: "insufficient_storage",
+    },
+  ];
+
+  const statusPayload = () => ({
+    state: "ERROR",
+    model_present: false,
+    model: { filename: "Qwen3-30B-A3B-Instruct-2507-Q3_K_S-3.25bpw.gguf", active_model_id: null },
+    models,
+    upload: { active: false, model_id: null, bytes_total: 0, bytes_received: 0, percent: 0, error: null },
+    download: {
+      bytes_total: 12424439872,
+      bytes_downloaded: 0,
+      percent: 0,
+      speed_bps: 0,
+      eta_seconds: 0,
+      error: "insufficient_storage",
+      active: false,
+      auto_start_seconds: 300,
+      auto_start_remaining_seconds: 0,
+      countdown_enabled: true,
+      current_model_id: null,
+      free_bytes: 7860000000,
+      required_bytes: 12424439872,
+    },
+    llama_server: { healthy: false, running: false, url: "http://127.0.0.1:8080" },
+    backend: { mode: "llama", active: "llama", fallback_active: false },
+    system: { available: false, cpu_cores_percent: [] },
+  });
+
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(statusPayload()),
+    });
+  });
+
+  await page.route("**/internal/models/download", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    downloadCalls.push(body.model_id);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ started: false, reason: "insufficient_storage" }),
+    });
+  });
+
+  await page.goto("/");
+  await waitForStatusApplied(page);
+
+  // Model list row should show "Insufficient storage" in the status pill
+  await openSettingsModal(page);
+  const modelRow = page.locator('#modelsList .model-row[data-model-id="big-model"]');
+  await expect(modelRow).toContainText("Insufficient storage");
+  await closeSettingsModal(page);
+
+  // Try downloading via the settings modal download button
+  await openSettingsModal(page);
+  await modelRow.locator('button[data-action="download"]').click();
+  await expect.poll(() => downloadCalls.length).toBeGreaterThan(0);
+  await closeSettingsModal(page);
+
+  // A chat bubble should appear with a visible storage error
+  const messages = page.locator("#messages");
+  await expect(messages).toContainText("storage");
+});
+
 test("shows sidebar resume button for failed download while another model is active", async ({ page }) => {
   let downloadCalls = [];
   let downloadActive = false;

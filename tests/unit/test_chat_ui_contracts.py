@@ -422,6 +422,24 @@ def test_chat_ui_model_manager_supports_model_delete_action():
     assert "reset_bootstrap_flag: false" in CHAT_UI
 
 
+def test_chat_ui_insufficient_storage_shows_visible_error():
+    assert 'body?.reason === "insufficient_storage"' in CHAT_JS
+    # Must call appendMessage for a visible chat bubble, not just setComposerActivity
+    # Find the insufficient_storage block in startModelDownloadForModel and verify appendMessage
+    idx = CHAT_JS.index("startModelDownloadForModel")
+    block = CHAT_JS[idx:idx + 600]
+    assert "appendMessage(" in block
+    assert "storage" in block.lower()
+    # Same for startModelDownload
+    idx2 = CHAT_JS.index("async function startModelDownload()")
+    block2 = CHAT_JS[idx2:idx2 + 2000]
+    assert "appendMessage(" in block2
+    assert "insufficient_storage" in block2
+    # Settings UI should format insufficient_storage as human-readable text
+    assert "insufficient_storage" in CHAT_SETTINGS_UI_JS
+    assert "Insufficient storage" in CHAT_SETTINGS_UI_JS
+
+
 def test_chat_ui_shows_processing_indicator_while_generating():
     assert 'id="composerActivity"' in CHAT_UI
     assert 'id="composerStatusChip"' in CHAT_UI
