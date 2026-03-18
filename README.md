@@ -108,7 +108,7 @@ Build a flashable Potato OS image from macOS:
 ./bin/build_local_image.sh --setup-docker
 ```
 
-See [Building Images](docs/building-images.md) for prerequisites, variants, and flashing instructions.
+See [Building Images](docs/building-images.md) for prerequisites, variants, flashing, and publishing releases.
 
 ### Project
 

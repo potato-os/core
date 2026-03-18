@@ -97,6 +97,32 @@ ssh pi@potato.local    # password: raspberry
 
 Open `http://potato.local` in a browser. The starter model downloads automatically on first boot (~5 minutes on a decent connection).
 
+## Publishing a release
+
+After building, publish the image to GitHub Releases so users can flash via Raspberry Pi Imager:
+
+```bash
+# Dry run — validate the bundle without publishing
+./bin/publish_image_release.sh --version v0.3 --dry-run
+
+# Publish for real
+./bin/publish_image_release.sh --version v0.3
+```
+
+This tags the repo, uploads the image + manifest + icon + checksums, and generates release notes with flashing instructions.
+
+Once published, users paste this URL into Raspberry Pi Imager (**OS** → **Content Repository** → **Use custom URL**):
+
+```
+https://github.com/slomin/potato-os/releases/download/v0.3/potato-lite.rpi-imager-manifest
+```
+
+The script auto-detects the latest bundle in `output/images/`. To target a specific bundle:
+
+```bash
+./bin/publish_image_release.sh --version v0.3 --bundle-dir output/images/local-test-lite-*/
+```
+
 ## Cleaning up
 
 Remove build artifacts and caches:
