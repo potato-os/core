@@ -3,8 +3,8 @@ set -euo pipefail
 
 PI_USER="${PI_USER:-pi}"
 PI_PASSWORD="${PI_PASSWORD:-raspberry}"
-PI_HOST_PRIMARY="${PI_HOST_PRIMARY:-192.168.1.132}"
-PI_HOST_FALLBACK="${PI_HOST_FALLBACK:-192.168.1.131}"
+PI_HOST_PRIMARY="${PI_HOST_PRIMARY:-potato.local}"
+PI_HOST_FALLBACK="${PI_HOST_FALLBACK:-potato.local}"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXPECT_BACKEND="${EXPECT_BACKEND:-llama}"
 LLAMA_BUNDLE_ROOT="${LLAMA_BUNDLE_ROOT:-${PROJECT_ROOT}/references/old_reference_design/llama_cpp_binary}"
