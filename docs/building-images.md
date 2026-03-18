@@ -114,7 +114,7 @@ This tags the repo, uploads the image + manifest + icon + checksums, and generat
 Once published, users paste this URL into Raspberry Pi Imager (**OS** → **Content Repository** → **Use custom URL**):
 
 ```
-https://github.com/slomin/potato-os/releases/download/v0.3/potato-lite.rpi-imager-manifest
+https://github.com/slomin/potato-os/releases/download/stable/potato-lite.rpi-imager-manifest
 ```
 
 The script auto-detects the latest bundle in `output/images/`. To target a specific bundle:
