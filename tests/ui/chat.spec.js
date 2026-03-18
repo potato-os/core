@@ -503,8 +503,8 @@ test("chat request sends stream true and messages array to the backend", async (
 
 // ── Stream disconnect recovery (#102) ─────────────────────────────────
 
-test("mid-stream disconnect preserves partial content and shows connection lost stats", async ({ page }) => {
-  const partialText = "Partial response from the model before disconnect";
+test("mid-stream disconnect preserves partial markdown content and shows connection lost stats", async ({ page }) => {
+  const partialMarkdown = "Here are **key facts**:\n\n- First point\n- Second `code`";
   await page.addInitScript((content) => {
     window.__POTATO_PREFILL_FINISH_DURATION_MS__ = 100;
     window.__POTATO_PREFILL_FINISH_HOLD_MS__ = 100;
@@ -531,7 +531,13 @@ test("mid-stream disconnect preserves partial content and shows connection lost 
       }
       return originalFetch.call(this, url, opts);
     };
-  }, partialText);
+  }, partialMarkdown);
+
+  await page.addInitScript(() => {
+    window.__capturedCopyText = "";
+    const clipboard = { writeText: async (v) => { window.__capturedCopyText = String(v || ""); } };
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard });
+  });
 
   await waitUntilReady(page);
 
@@ -540,8 +546,10 @@ test("mid-stream disconnect preserves partial content and shows connection lost 
   await expect(page.locator("#sendBtn")).toHaveText("Send", { timeout: 5000 });
 
   const bubble = page.locator(".message-row.assistant .message-bubble").last();
-  await expect(bubble).toContainText(partialText);
   await expect(bubble).not.toContainText("Request error");
+  await expect(bubble.locator("strong")).toHaveText("key facts");
+  await expect(bubble.locator("li")).toHaveCount(2);
+  await expect(bubble.locator("code")).toHaveText("code");
 
   const meta = page.locator(".message-row.assistant .message-meta").last();
   await expect(meta).toBeVisible();
@@ -549,7 +557,56 @@ test("mid-stream disconnect preserves partial content and shows connection lost 
   await expect(meta).toContainText("TTFT");
 
   await page.locator(".message-row.assistant .message-stack").last().hover();
-  await expect(page.locator(".message-row.assistant .message-action-btn[data-action='copy']").last()).toBeVisible();
+  const copyBtn = page.locator(".message-row.assistant .message-action-btn[data-action='copy']").last();
+  await expect(copyBtn).toBeVisible();
+  await copyBtn.click();
+  await expect.poll(async () => page.evaluate(() => window.__capturedCopyText)).toContain("**key facts**");
+});
+
+test("mid-stream disconnect during reasoning-only output preserves thinking content", async ({ page }) => {
+  const reasoningText = "Let me work through this step by step";
+  await page.addInitScript((reasoning) => {
+    window.__POTATO_PREFILL_FINISH_DURATION_MS__ = 100;
+    window.__POTATO_PREFILL_FINISH_HOLD_MS__ = 100;
+    const originalFetch = window.fetch;
+    window.fetch = async function (url, opts) {
+      if (typeof url === "string" && url.includes("/v1/chat/completions")) {
+        const sseChunk = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: reasoning } }] })}\n\n`;
+        const encoder = new TextEncoder();
+        let sent = 0;
+        const stream = new ReadableStream({
+          pull(controller) {
+            if (sent === 0) {
+              controller.enqueue(encoder.encode(sseChunk));
+              sent++;
+            } else {
+              controller.error(new TypeError("network error"));
+            }
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return originalFetch.call(this, url, opts);
+    };
+  }, reasoningText);
+
+  await waitUntilReady(page);
+
+  await page.locator("#userPrompt").fill("Think about this carefully.");
+  await page.locator("#userPrompt").press("Enter");
+  await expect(page.locator("#sendBtn")).toHaveText("Send", { timeout: 5000 });
+
+  const bubble = page.locator(".message-row.assistant .message-bubble").last();
+  await expect(bubble).toContainText(reasoningText);
+  await expect(bubble).toContainText("Thinking");
+  await expect(bubble).not.toContainText("Request error");
+
+  const meta = page.locator(".message-row.assistant .message-meta").last();
+  await expect(meta).toBeVisible();
+  await expect(meta).toContainText("Connection lost");
 });
 
 test("stream error before any tokens shows standard error message", async ({ page }) => {

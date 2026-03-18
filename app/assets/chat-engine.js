@@ -497,6 +497,8 @@ import { saveActiveSession } from "./session-manager.js";
         generationStarted: false,
       };
       const streamStats = { timings: null, finish_reason: null };
+      let assistantText = "";
+      let assistantReasoningText = "";
       let activeAssistantView = null;
       appState.activeRequest = requestCtx;
 
@@ -578,8 +580,8 @@ import { saveActiveSession } from "./session-manager.js";
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           const state = { buffer: "" };
-          let assistantText = "";
-          let assistantReasoningText = "";
+          assistantText = "";
+          assistantReasoningText = "";
 
           while (true) {
             const { done, value } = await reader.read();
@@ -702,13 +704,13 @@ import { saveActiveSession } from "./session-manager.js";
           }
         } else {
           if (activeAssistantView) {
-            const partial = activeAssistantView.bubble.textContent.trim();
-            if (partial && requestCtx.generationStarted) {
+            const rawPartial = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);
+            if (rawPartial && rawPartial !== "(empty response)") {
               activeAssistantView.bubble.classList.remove("processing");
               delete activeAssistantView.bubble.dataset.phase;
-              activeAssistantView.copyText = partial;
+              activeAssistantView.copyText = rawPartial;
               setMessageActionsVisible(activeAssistantView, true);
-              appState.chatHistory.push({ role: "assistant", content: partial });
+              appState.chatHistory.push({ role: "assistant", content: rawPartial });
               streamStats.finish_reason = "disconnected";
               const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
               setMessageMeta(activeAssistantView, formatAssistantStats(streamStats, elapsedSeconds, requestCtx.firstTokenLatencyMs));
