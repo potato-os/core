@@ -818,6 +818,9 @@ def test_generate_imager_manifest_script_outputs_pi5_manifest(tmp_path: Path):
     assert payload["os_list"][0]["architecture"] == "armv8"
     assert payload["os_list"][0]["extract_size"] == image_path.stat().st_size
     assert payload["os_list"][0]["url"].startswith("file://")
+    icon = payload["os_list"][0]["icon"]
+    assert icon.startswith("file://")
+    assert "potato-imager-icon.svg" in icon
 
 
 def test_vision_e2e_script_exercises_multimodal_requests():

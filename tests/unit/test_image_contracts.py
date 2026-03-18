@@ -72,6 +72,8 @@ def test_local_image_build_script_collects_artifacts_for_flash_test():
     assert ".rpi-imager-manifest" in script
     assert "Raspberry Pi 5" in script
     assert "python3" in script
+    assert "--icon" in script
+    assert "potato-imager-icon.svg" in script
     assert "--clean-artifacts <mode>" in script
     assert "--clean-artifacts-yes" in script
     assert "--clean-artifacts-no" in script
@@ -118,6 +120,16 @@ def test_imager_manifest_generator_is_pi5_only():
     assert "rpi-imager-manifest" in script
     assert "extract_sha256" in script
     assert "image_download_sha256" in script
+    assert "potato-imager-icon.svg" in script
+
+
+def test_potato_imager_icon_exists_and_is_valid_svg():
+    icon_path = Path("bin/assets/potato-imager-icon.svg")
+
+    assert icon_path.is_file(), "potato imager icon SVG must exist in bin/assets/"
+    content = icon_path.read_text(encoding="utf-8")
+    assert content.strip().startswith("<svg")
+    assert "Potato OS" in content
 
 
 def test_image_build_scripts_exist_for_lite_and_full_variants():
@@ -138,6 +150,8 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "potato-lite" in common
     assert "potato-full" in common
     assert "generate_imager_manifest.py" in common
+    assert "--icon" in common
+    assert "potato-imager-icon.svg" in common
     assert "potato-${variant}.rpi-imager-manifest" in common
     assert "Potato OS (${variant}, Raspberry Pi 5)" in common
     assert "uv run --script" in all_in_one
