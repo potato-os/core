@@ -108,7 +108,13 @@ def main() -> int:
     icon_value = args.icon
     icon_path = Path(icon_value)
     if icon_path.is_file():
-        icon_value = icon_path.resolve().as_uri()
+        # Resolve the icon path relative to the output manifest directory so
+        # the manifest stays self-contained within its bundle directory.
+        try:
+            rel = icon_path.resolve().relative_to(output_path.parent.resolve())
+            icon_value = str(rel)
+        except ValueError:
+            icon_value = icon_path.resolve().as_uri()
     if output_path.suffix not in {".json", ".rpi-imager-manifest"}:
         raise SystemExit("Output must end with .json or .rpi-imager-manifest")
 

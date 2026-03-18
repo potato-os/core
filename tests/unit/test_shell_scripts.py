@@ -793,6 +793,11 @@ def test_generate_imager_manifest_script_outputs_pi5_manifest(tmp_path: Path):
     image_path = tmp_path / "potato-lite-test.img"
     image_path.write_bytes(b"potato-os")
     manifest_path = tmp_path / "potato-lite.rpi-imager-manifest"
+    # Mirror real build flow: icon copied into bundle dir alongside manifest
+    import shutil
+    icon_src = REPO_ROOT / "bin" / "assets" / "potato-imager-icon.svg"
+    icon_dst = tmp_path / "potato-imager-icon.svg"
+    shutil.copy2(icon_src, icon_dst)
 
     subprocess.run(
         [
@@ -804,6 +809,8 @@ def test_generate_imager_manifest_script_outputs_pi5_manifest(tmp_path: Path):
             str(manifest_path),
             "--name",
             "Potato OS Test",
+            "--icon",
+            str(icon_dst),
         ],
         check=True,
         cwd=REPO_ROOT,
@@ -819,8 +826,7 @@ def test_generate_imager_manifest_script_outputs_pi5_manifest(tmp_path: Path):
     assert payload["os_list"][0]["extract_size"] == image_path.stat().st_size
     assert payload["os_list"][0]["url"].startswith("file://")
     icon = payload["os_list"][0]["icon"]
-    assert icon.startswith("file://")
-    assert "potato-imager-icon.svg" in icon
+    assert icon == "potato-imager-icon.svg"
 
 
 def test_vision_e2e_script_exercises_multimodal_requests():
