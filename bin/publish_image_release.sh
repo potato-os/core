@@ -104,7 +104,7 @@ MANIFEST_PATH="${STAGING}/${MANIFEST_NAME}"
 python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
   --image "${IMAGE_FILE}" \
   --output "${MANIFEST_PATH}" \
-  --name "Potato OS (${VARIANT}, Raspberry Pi 5)" \
+  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 5)" \
   --icon "${ICON_URL}" \
   --download-url "${IMAGE_URL}" \
   || die "Manifest generation failed"
@@ -232,11 +232,11 @@ STABLE_TAG="stable"
 STABLE_BASE="https://github.com/${GITHUB_REPO}/releases/download/${STABLE_TAG}"
 
 # Regenerate manifest with download URLs pointing at the versioned release assets
-STABLE_MANIFEST="${STAGING}/stable-${MANIFEST_NAME}"
+STABLE_MANIFEST="${STAGING}/${MANIFEST_NAME}"
 python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
   --image "${IMAGE_FILE}" \
   --output "${STABLE_MANIFEST}" \
-  --name "Potato OS (${VARIANT}, Raspberry Pi 5)" \
+  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 5)" \
   --icon "${STABLE_BASE}/potato-imager-icon.svg" \
   --download-url "${IMAGE_URL}" \
   || die "Stable manifest generation failed"
@@ -262,7 +262,7 @@ fi
 # Note: --clobber deletes then re-uploads per asset, so a transient
 # failure could briefly remove an asset. Re-run the script to fix.
 gh release upload "${STABLE_TAG}" \
-  "${STABLE_MANIFEST}#${MANIFEST_NAME}" \
+  "${STABLE_MANIFEST}" \
   "${ICON_FILE}" \
   "${CHECKSUMS_FILE}" \
   --repo "${GITHUB_REPO}" \
