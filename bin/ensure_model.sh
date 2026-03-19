@@ -85,7 +85,7 @@ fi
 
 start_ts="$(date +%s)"
 rm -f "${CURL_ERR_PATH}"
-curl -L -C - --fail --output "${TMP_PATH}" "${MODEL_URL}" 2>"${CURL_ERR_PATH}" &
+ionice -c3 nice -n 19 curl -L -C - --fail --output "${TMP_PATH}" "${MODEL_URL}" 2>"${CURL_ERR_PATH}" &
 download_pid=$!
 
 while kill -0 "${download_pid}" 2>/dev/null; do
