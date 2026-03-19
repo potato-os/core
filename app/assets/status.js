@@ -186,6 +186,10 @@ import { formatBytes, formatCountdownSeconds } from "./utils.js";
       if (downloadActive) {
         return `Download: ${download.percent}% (${downloaded} / ${total})`;
       }
+      const projDl = statusPayload?.projector_download;
+      if (projDl && projDl.active === true) {
+        return `Downloading vision encoder (${formatBytes(projDl.bytes_downloaded || 0)})`;
+      }
       if (downloadError === "download_failed" && resumableFailedModel) {
         return `Download failed (${downloaded} / ${total})`;
       }

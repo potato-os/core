@@ -13,7 +13,7 @@ from pathlib import Path
 
 DEFAULT_ICON = "potato-imager-icon.svg"
 DEFAULT_DISPLAY_NAME = "Potato OS (Raspberry Pi 5)"
-DEFAULT_DESCRIPTION = "Local-first Potato OS chat stack for Raspberry Pi 5."
+DEFAULT_DESCRIPTION = "Potato OS — local AI, zero cloud dependency."
 
 
 def sha256_file(path: Path) -> str:

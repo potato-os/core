@@ -242,7 +242,7 @@ download_mmproj() {
     target="${model_dir}/${remote_name}"
     tmp="${target}.part"
     rm -f "${tmp}"
-    if curl --fail --location --continue-at - --output "${tmp}" "${url}"; then
+    if ionice -c3 nice -n 19 curl --fail --location --continue-at - --output "${tmp}" "${url}"; then
       mv -f "${tmp}" "${target}"
       MMPROJ_PATH="${target}"
       return 0

@@ -18,6 +18,12 @@ export POTATO_ALLOW_FAKE_FALLBACK="${POTATO_ALLOW_FAKE_FALLBACK:-0}"
 export POTATO_LLAMA_RUNTIME_DIR="${POTATO_LLAMA_RUNTIME_DIR:-${POTATO_BASE_DIR}/llama}"
 export POTATO_MMPROJ_PATH="${POTATO_MMPROJ_PATH:-}"
 
+# Use BFQ I/O scheduler so ionice priority classes are respected during downloads.
+# mq-deadline (the default) ignores ionice, causing SD card I/O starvation.
+if [ -f /sys/block/mmcblk0/queue/scheduler ]; then
+  echo bfq > /sys/block/mmcblk0/queue/scheduler 2>/dev/null || true
+fi
+
 mkdir -p "${POTATO_BASE_DIR}/state" "${POTATO_BASE_DIR}/models" "${POTATO_BASE_DIR}/config"
 
 cd "${POTATO_APP_DIR}"

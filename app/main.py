@@ -525,6 +525,21 @@ def is_download_task_active(task: asyncio.Task[Any] | None) -> bool:
     # build_model_projector_status — extracted to model_state.py
 
 
+def _detect_projector_download(runtime: RuntimeConfig) -> dict[str, Any]:
+    """Check if a projector .part file exists, indicating an active download."""
+    models_dir = runtime.base_dir / "models"
+    try:
+        for part_file in models_dir.glob("mmproj*.gguf.part"):
+            try:
+                size = part_file.stat().st_size
+                return {"active": True, "filename": part_file.stem, "bytes_downloaded": size}
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return {"active": False}
+
+
 async def build_status(
     runtime: RuntimeConfig,
     *,
@@ -708,6 +723,7 @@ async def build_status(
             "transport_healthy": llama_transport_healthy,
             "url": runtime.llama_base_url,
         },
+        "projector_download": _detect_projector_download(runtime),
         "backend": {
             "mode": effective_mode,
             "active": active_backend,
