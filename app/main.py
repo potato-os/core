@@ -1269,9 +1269,16 @@ def _safe_upload_filename(name: str) -> str:
 async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
     while True:
         try:
+            # Skip heavy file I/O while a download is writing to the SD card.
+            # Synchronous reads (models.json, stat calls) block the event loop
+            # when the disk is saturated, freezing all HTTP responses.
+            download_active = is_download_task_active(app.state.model_download_task)
+            if download_active:
+                await asyncio.sleep(2)
+                continue
+
             models_state = ensure_models_state(runtime)
             active_model, active_model_path = resolve_active_model(models_state, runtime)
-            download_active = is_download_task_active(app.state.model_download_task)
             default_model = get_model_by_id(
                 models_state,
                 str(models_state.get("default_model_id") or "default"),
