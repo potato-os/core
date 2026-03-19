@@ -9,7 +9,7 @@ User=potato
 Group=potato
 WorkingDirectory=/opt/potato
 Environment=POTATO_BASE_DIR=/opt/potato
-ExecStartPre=/bin/sh -c 'echo bfq > /sys/block/mmcblk0/queue/scheduler 2>/dev/null || true'
+ExecStartPre=+/bin/sh -c 'echo bfq > /sys/block/mmcblk0/queue/scheduler 2>/dev/null || true'
 ExecStart=/opt/potato/bin/run.sh
 Restart=always
 RestartSec=2
