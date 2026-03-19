@@ -176,16 +176,17 @@ def test_start_llama_runs_projector_curl_at_idle_io_priority():
     assert "ionice -c3 nice -n 19 curl" in script
 
 
-def test_projector_download_does_not_block_event_loop():
-    """The projector download in start_model_download must run in a thread pool,
-    not directly on the event loop, to avoid blocking /status and all other requests."""
+def test_model_download_does_not_inline_projector_download():
+    """The projector download must NOT run inside start_model_download.
+    It must be handled by start_llama.sh to avoid overlapping large
+    writes that overwhelm SD card I/O on Pi 5."""
     import inspect
 
     from app.main import start_model_download
 
     source = inspect.getsource(start_model_download)
-    assert "to_thread" in source, (
-        "download_default_projector_for_model must be called via asyncio.to_thread "
-        "to avoid blocking the event loop during the 638MB projector download"
+    assert "download_default_projector_for_model" not in source, (
+        "Projector download must not run inside start_model_download — "
+        "let start_llama.sh handle it sequentially to avoid I/O starvation"
     )
 

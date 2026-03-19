@@ -943,19 +943,10 @@ async def start_model_download(
                 ):
                     updated_state["default_model_downloaded_once"] = True
                     save_models_state(runtime, updated_state)
-                # Auto-download projector for vision-capable bootstrap model.
-                # Runs in a thread pool to avoid blocking the async event loop
-                # during the ~638 MB download (which would freeze /status and the UI).
-                if model_supports_vision_filename(target_filename):
-                    try:
-                        downloaded, reason, proj_name = await asyncio.to_thread(
-                            download_default_projector_for_model,
-                            runtime=runtime, model_id=selected_model_id,
-                        )
-                        if downloaded:
-                            logger.info("Auto-downloaded projector %s for bootstrap model", proj_name)
-                    except Exception:
-                        logger.warning("Failed to auto-download projector for bootstrap model", exc_info=True)
+                # Projector download is handled by start_llama.sh when it detects
+                # a vision-capable model without a projector file. This avoids
+                # overlapping the 638 MB projector download with the model download,
+                # which overwhelms the SD card I/O on Pi 5.
             else:
                 failure_state = read_download_progress(runtime)
                 failure_reason = str(failure_state.get("error") or "download_failed")
