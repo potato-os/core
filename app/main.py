@@ -1307,7 +1307,7 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
             except OSError:
                 active_model_is_present = False
 
-            if active_model_is_present:
+            if active_model_is_present and not download_active:
                 # Reset failure counter when the active model changes (user switched models).
                 current_model_key = str(active_model_path)
                 if getattr(app.state, "_llama_failure_model", None) != current_model_key:
