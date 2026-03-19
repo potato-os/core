@@ -145,4 +145,21 @@ def test_install_script_uses_reference_llama_bundle_sync():
     assert "chmod 0755 /opt" in script
 
 
+def test_ensure_model_validates_download_size_before_finalizing():
+    script = Path("bin/ensure_model.sh").read_text(encoding="utf-8")
+
+    # Must check final_size against total_bytes before moving file
+    assert 'final_size="$(filesize "${TMP_PATH}")"' in script
+    assert '"${final_size}" -lt "${total_bytes}"' in script
+    assert "download_incomplete" in script
+    assert 'rm -f "${TMP_PATH}"' in script
+
+
+def test_ensure_model_validates_size_before_mv():
+    """The size check must happen BEFORE mv moves the partial file to final path."""
+    script = Path("bin/ensure_model.sh").read_text(encoding="utf-8")
+
+    size_check_pos = script.index('"${final_size}" -lt "${total_bytes}"')
+    mv_pos = script.index('mv -f "${TMP_PATH}" "${MODEL_PATH}"')
+    assert size_check_pos < mv_pos, "Size validation must occur before mv"
 

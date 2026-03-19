@@ -258,6 +258,7 @@ MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
 AUTO_DOWNLOAD_BOOTSTRAP_ENABLED = True
 LLAMA_READY_HEALTH_POLLS_REQUIRED = 2
 LLAMA_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+LLAMA_MAX_CONSECUTIVE_FAILURES = 5
 
 DEFAULT_CHAT_SETTINGS = {
     **DEFAULT_MODEL_CHAT_SETTINGS,
@@ -422,6 +423,7 @@ async def restart_managed_llama_process(app: FastAPI) -> tuple[bool, str]:
     terminated_stale = await terminate_stray_llama_processes(app.state.runtime)
 
     app.state.llama_process = None
+    app.state.llama_consecutive_failures = 0
     if terminated_running and terminated_stale:
         return True, "terminated_running_and_stale_processes"
     if terminated_running:
@@ -1296,9 +1298,28 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                 active_model_is_present = False
 
             if active_model_is_present:
+                # Reset failure counter when the active model changes (user switched models).
+                current_model_key = str(active_model_path)
+                if getattr(app.state, "_llama_failure_model", None) != current_model_key:
+                    app.state.llama_consecutive_failures = 0
+                    app.state._llama_failure_model = current_model_key
+
                 llama_process = app.state.llama_process
                 if llama_process is None or llama_process.returncode is not None:
-                    if runtime.start_llama_script.exists():
+                    # Count the previous process's failure BEFORE starting a new one.
+                    # Null out the reference so the same dead process isn't re-counted.
+                    if llama_process is not None and llama_process.returncode is not None and llama_process.returncode != 0:
+                        app.state.llama_consecutive_failures += 1
+                        app.state.llama_process = None
+                        if app.state.llama_consecutive_failures == LLAMA_MAX_CONSECUTIVE_FAILURES:
+                            logger.error(
+                                "llama-server failed %d times in a row — stopping restart attempts (model may be corrupt)",
+                                app.state.llama_consecutive_failures,
+                            )
+
+                    if app.state.llama_consecutive_failures >= LLAMA_MAX_CONSECUTIVE_FAILURES:
+                        pass  # Limit reached — don't restart.
+                    elif runtime.start_llama_script.exists():
                         await terminate_stray_llama_processes(runtime)
                         app.state.llama_process = await asyncio.create_subprocess_exec(
                             str(runtime.start_llama_script),
@@ -1308,9 +1329,12 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                     else:
                         logger.warning("start_llama script missing: %s", runtime.start_llama_script)
 
-                await refresh_llama_readiness(app, runtime, active_model_path=active_model_path)
+                readiness = await refresh_llama_readiness(app, runtime, active_model_path=active_model_path)
+                if readiness.get("ready"):
+                    app.state.llama_consecutive_failures = 0
             else:
                 reset_llama_readiness_state(app, reason="model_missing")
+                app.state.llama_consecutive_failures = 0
 
             await asyncio.sleep(2)
         except asyncio.CancelledError:
@@ -1467,6 +1491,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.state.llama_runtime_switch_lock = asyncio.Lock()
     app.state.llama_runtime_switch_state = _empty_llama_runtime_switch_state()
     app.state.llama_readiness_state = _empty_llama_readiness_state()
+    app.state.llama_consecutive_failures = 0
     app.state.startup_monotonic = None
     app.state.orchestrator_task = None
     app.state.chat_repository = ChatRepositoryManager(

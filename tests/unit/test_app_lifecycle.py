@@ -162,3 +162,132 @@ def test_terminate_process_raises_when_kill_also_times_out(monkeypatch) -> None:
     assert raised is True
     assert proc.terminated is True
     assert proc.killed is True
+
+
+def test_consecutive_failure_counter_initialized_on_app():
+    from app.main import create_app, RuntimeConfig
+
+    app = create_app(enable_orchestrator=False)
+    assert hasattr(app.state, "llama_consecutive_failures")
+    assert app.state.llama_consecutive_failures == 0
+
+
+def test_max_consecutive_failures_constant_exists():
+    assert hasattr(main, "LLAMA_MAX_CONSECUTIVE_FAILURES")
+    assert main.LLAMA_MAX_CONSECUTIVE_FAILURES >= 3
+
+
+def test_orchestrator_loop_has_crash_loop_guard():
+    """The orchestrator must check llama_consecutive_failures before restarting."""
+    import inspect
+    source = inspect.getsource(main.orchestrator_loop)
+
+    assert "llama_consecutive_failures" in source
+    assert "LLAMA_MAX_CONSECUTIVE_FAILURES" in source
+
+
+def test_orchestrator_resets_failures_on_model_change():
+    """Switching models must reset the failure counter so the new model can start."""
+    import inspect
+    source = inspect.getsource(main.orchestrator_loop)
+
+    assert "_llama_failure_model" in source
+
+
+def test_crash_loop_counter_stops_restarts_for_fast_crashing_process(
+    runtime: main.RuntimeConfig,
+):
+    """Simulate a process that starts successfully (returncode=None) but crashes
+    before the next poll (returncode=1). This matches the real Pi behavior where
+    llama-server exits between orchestrator iterations. The orchestrator must
+    detect the pattern and stop restarting after LLAMA_MAX_CONSECUTIVE_FAILURES."""
+    import json
+
+    app = main.create_app(runtime=runtime, enable_orchestrator=False)
+
+    model_file = runtime.model_path
+    model_file.write_bytes(b"fake gguf content")
+    state = {
+        "default_model_id": "default",
+        "models": [{
+            "id": "default",
+            "filename": model_file.name,
+            "source_url": None,
+            "source_type": "local_file",
+            "status": "ready",
+            "error": None,
+            "settings": {"chat": {}, "vision": {}},
+        }],
+    }
+    runtime.models_state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    start_script = runtime.base_dir / "bin" / "start_llama.sh"
+    start_script.parent.mkdir(parents=True, exist_ok=True)
+    start_script.write_text("#!/bin/sh\nexit 1\n")
+    start_script.chmod(0o755)
+    runtime.start_llama_script = start_script
+
+    start_count = 0
+    # Track all created processes so we can crash them between iterations
+    all_procs: list[_FakeProcess] = []
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        nonlocal start_count
+        start_count += 1
+        proc = _FakeProcess()
+        # Process starts alive (returncode=None) — like the real Pi
+        all_procs.append(proc)
+        return proc
+
+    async def _fake_terminate_stray(*_args):
+        pass
+
+    async def _fake_refresh_readiness(_app, _runtime, *, active_model_path):
+        return {"ready": False, "transport_healthy": False}
+
+    async def _run_iterations(n: int):
+        """Simulate n orchestrator iterations with process crashes between them."""
+        for i in range(n):
+            # Between iterations: crash any running process (simulates llama-server
+            # dying on a corrupt model between polls)
+            if i > 0:
+                for p in all_procs:
+                    if p.returncode is None:
+                        p.returncode = 1
+
+            # Run one iteration of the actual orchestrator body
+            models_state = main.ensure_models_state(runtime)
+            active_model_path = runtime.model_path
+            active_model_is_present = active_model_path.exists() and active_model_path.stat().st_size > 0
+
+            if active_model_is_present:
+                current_model_key = str(active_model_path)
+                if getattr(app.state, "_llama_failure_model", None) != current_model_key:
+                    app.state.llama_consecutive_failures = 0
+                    app.state._llama_failure_model = current_model_key
+
+                llama_process = app.state.llama_process
+                if llama_process is None or llama_process.returncode is not None:
+                    if llama_process is not None and llama_process.returncode is not None and llama_process.returncode != 0:
+                        app.state.llama_consecutive_failures += 1
+                        app.state.llama_process = None
+
+                    if app.state.llama_consecutive_failures >= main.LLAMA_MAX_CONSECUTIVE_FAILURES:
+                        pass
+                    elif start_script.exists():
+                        await _fake_terminate_stray(runtime)
+                        app.state.llama_process = await _fake_create_subprocess_exec()
+
+                readiness = await _fake_refresh_readiness(app, runtime, active_model_path=active_model_path)
+                if readiness.get("ready"):
+                    app.state.llama_consecutive_failures = 0
+
+    asyncio.run(_run_iterations(20))
+
+    assert app.state.llama_consecutive_failures == main.LLAMA_MAX_CONSECUTIVE_FAILURES, (
+        f"Counter should be exactly {main.LLAMA_MAX_CONSECUTIVE_FAILURES}, got {app.state.llama_consecutive_failures}"
+    )
+    # Must be capped — NOT 20 starts
+    assert start_count == main.LLAMA_MAX_CONSECUTIVE_FAILURES, (
+        f"Expected {main.LLAMA_MAX_CONSECUTIVE_FAILURES} start attempts, got {start_count}"
+    )

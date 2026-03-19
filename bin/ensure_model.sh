@@ -129,7 +129,15 @@ if ! wait "${download_pid}"; then
   exit 1
 fi
 
+final_size="$(filesize "${TMP_PATH}")"
+
+# Validate: downloaded file must match expected total size (if known)
+if [ "${total_bytes}" -gt 0 ] && [ "${final_size}" -lt "${total_bytes}" ]; then
+  rm -f "${TMP_PATH}"
+  write_state "${total_bytes}" "${final_size}" "$((final_size * 100 / total_bytes))" 0 0 "download_incomplete"
+  exit 1
+fi
+
 mv -f "${TMP_PATH}" "${MODEL_PATH}"
-final_size="$(filesize "${MODEL_PATH}")"
 write_state "${final_size}" "${final_size}" 100 0 0 ""
 rm -f "${CURL_ERR_PATH}"

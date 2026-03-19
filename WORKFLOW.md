@@ -14,7 +14,7 @@ This is the single source of truth for how we plan, execute, and close work.
 
 ## Labels
 
-- Type: `type:feature`, `type:bug`, `type:chore`, `type:spike`
+- Type: `type:feature`, `type:bug`, `type:chore`, `type:spike`, `type:hotfix`
 - Area: `area:ui`, `area:backend`, `area:pi-image`, `area:ops`
 - State: `blocked` (use when waiting on an external dependency)
 
@@ -37,6 +37,7 @@ Before starting new implementation work, first check whether a relevant issue al
    - `fix/issue-<id>-<short-slug>` for bugs
    - `chore/issue-<id>-<short-slug>` for maintenance
    - `spike/issue-<id>-<short-slug>` for exploratory work
+   - `hotfix/issue-<id>-<short-slug>` for urgent release-critical fixes
 6. Move issue to `In Progress` once branch is created.
 7. Open PR linked to the issue.
 8. Move to `In Review` when implementation is complete:
@@ -52,7 +53,7 @@ Before starting new implementation work, first check whether a relevant issue al
 - Never implement ticket work on `main`.
 - `main` is merge-only; no direct commits for feature/bug/chore/spike work.
 - Before writing code, confirm branch: `git branch --show-current`.
-- Required branch naming: `feat/issue-<id>-<short-slug>`, `fix/issue-<id>-<short-slug>`, `chore/issue-<id>-<short-slug>`, `spike/issue-<id>-<short-slug>`.
+- Required branch naming: `feat/issue-<id>-<short-slug>`, `fix/issue-<id>-<short-slug>`, `chore/issue-<id>-<short-slug>`, `spike/issue-<id>-<short-slug>`, `hotfix/issue-<id>-<short-slug>`.
 - Start every ticket branch from latest `main`: `git checkout main && git pull --ff-only && git checkout -b <branch-name>`.
 
 ## GitHub PR Linkage Rules (Required)
@@ -83,6 +84,11 @@ Spike tickets use the same structure, but the expected outcome is a decision:
 - measurable success thresholds
 - required evidence or measurements
 - a clear concluding recommendation, even if the answer is "do not pursue"
+
+Hotfix tickets use the normal implementation structure, but they are reserved for:
+- urgent regressions on `main`
+- release-blocking failures
+- production/device issues that need priority handling without changing the normal review/QA gates
 
 ## TDD Rule
 

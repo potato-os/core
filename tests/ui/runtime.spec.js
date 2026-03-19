@@ -265,7 +265,7 @@ test("mobile hamburger controls sidebar drawer and keeps composer actions aligne
   await expect(page.locator("#sidebarBackdrop")).toBeVisible();
   await expect(page.locator("body")).toHaveClass(/sidebar-open/);
 
-  await page.locator("#sidebarBackdrop").click();
+  await page.locator("#sidebarBackdrop").click({ position: { x: 450, y: 400 } });
   await expect(page.locator("#sidebarBackdrop")).toBeHidden();
   await expect(page.locator("body")).not.toHaveClass(/sidebar-open/);
 
