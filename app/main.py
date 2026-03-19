@@ -1313,52 +1313,51 @@ def _safe_upload_filename(name: str) -> str:
 async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
     while True:
         try:
-            # Skip heavy file I/O while a download is writing to the SD card.
-            # Synchronous reads (models.json, stat calls) block the event loop
-            # when the disk is saturated, freezing all HTTP responses.
             download_active = is_download_task_active(app.state.model_download_task)
-            if download_active:
-                await asyncio.sleep(2)
-                continue
 
-            models_state = ensure_models_state(runtime)
-            active_model, active_model_path = resolve_active_model(models_state, runtime)
-            default_model = get_model_by_id(
-                models_state,
-                str(models_state.get("default_model_id") or "default"),
-            )
-            default_model_present = False
-            default_model_is_bootstrap_target = False
-            if isinstance(default_model, dict):
-                default_filename = str(default_model.get("filename") or "")
-                default_model_present = model_file_present(runtime, default_filename)
-                default_model_is_bootstrap_target = default_filename == MODEL_FILENAME
-
-            any_ready = any_model_ready(runtime)
-            if should_auto_start_download(
-                runtime,
-                model_present=default_model_present or any_ready,
-                download_active=download_active,
-                startup_monotonic=app.state.startup_monotonic,
-                now_monotonic=get_monotonic_time(),
-                countdown_enabled=bool(models_state.get("countdown_enabled", True)),
-                default_model_downloaded_once=bool(models_state.get("default_model_downloaded_once", False))
-                or not default_model_is_bootstrap_target,
-            ):
-                await start_model_download(
-                    app,
-                    runtime,
-                    trigger="idle",
-                    model_id=str(models_state.get("default_model_id") or "default"),
+            # Auto-download: skip model-state reads while disk is saturated.
+            if not download_active:
+                models_state = ensure_models_state(runtime)
+                active_model, active_model_path = resolve_active_model(models_state, runtime)
+                default_model = get_model_by_id(
+                    models_state,
+                    str(models_state.get("default_model_id") or "default"),
                 )
+                default_model_present = False
+                default_model_is_bootstrap_target = False
+                if isinstance(default_model, dict):
+                    default_filename = str(default_model.get("filename") or "")
+                    default_model_present = model_file_present(runtime, default_filename)
+                    default_model_is_bootstrap_target = default_filename == MODEL_FILENAME
 
+                any_ready = any_model_ready(runtime)
+                if should_auto_start_download(
+                    runtime,
+                    model_present=default_model_present or any_ready,
+                    download_active=download_active,
+                    startup_monotonic=app.state.startup_monotonic,
+                    now_monotonic=get_monotonic_time(),
+                    countdown_enabled=bool(models_state.get("countdown_enabled", True)),
+                    default_model_downloaded_once=bool(models_state.get("default_model_downloaded_once", False))
+                    or not default_model_is_bootstrap_target,
+                ):
+                    await start_model_download(
+                        app,
+                        runtime,
+                        trigger="idle",
+                        model_id=str(models_state.get("default_model_id") or "default"),
+                    )
+
+            # Llama process management: always runs.
+            # Uses runtime.model_path (already resolved, no JSON read).
+            active_model_path = runtime.model_path
             active_model_is_present = False
             try:
                 active_model_is_present = active_model_path.exists() and active_model_path.stat().st_size > 0
             except OSError:
                 active_model_is_present = False
 
-            if active_model_is_present and not download_active:
+            if active_model_is_present:
                 # Reset failure counter when the active model changes (user switched models).
                 current_model_key = str(active_model_path)
                 if getattr(app.state, "_llama_failure_model", None) != current_model_key:

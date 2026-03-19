@@ -215,3 +215,16 @@ def test_get_status_download_context_is_async():
         "sync filesystem reads block the event loop during downloads"
     )
 
+
+def test_orchestrator_allows_llama_restart_during_download():
+    """The orchestrator must not gate llama-server restart on download state."""
+    import inspect
+
+    from app.main import orchestrator_loop
+
+    source = inspect.getsource(orchestrator_loop)
+    assert "active_model_is_present and not download_active" not in source, (
+        "Orchestrator restart logic must run during downloads — "
+        "otherwise restart_managed_llama_process leaves llama dead until download finishes"
+    )
+
