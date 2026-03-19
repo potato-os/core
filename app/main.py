@@ -423,6 +423,7 @@ async def restart_managed_llama_process(app: FastAPI) -> tuple[bool, str]:
     terminated_stale = await terminate_stray_llama_processes(app.state.runtime)
 
     app.state.llama_process = None
+    app.state.llama_consecutive_failures = 0
     if terminated_running and terminated_stale:
         return True, "terminated_running_and_stale_processes"
     if terminated_running:
