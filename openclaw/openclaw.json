@@ -1,0 +1,74 @@
+{
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "potato": {
+        "baseUrl": "http://127.0.0.1:1983/v1",
+        "apiKey": "not-needed",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "local",
+            "name": "Potato OS Local Model",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 16384,
+            "maxTokens": 4096
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "potato/local" },
+      "skipBootstrap": true,
+      "bootstrapMaxChars": 400,
+      "bootstrapTotalMaxChars": 1200,
+      "bootstrapPromptTruncationWarning": "off",
+      "memorySearch": { "enabled": false },
+      "compaction": {
+        "mode": "safeguard",
+        "reserveTokens": 8000,
+        "keepRecentTokens": 4000
+      }
+    }
+  },
+  "tools": {
+    "profile": "minimal"
+  },
+  "gateway": {
+    "port": 3080,
+    "mode": "local",
+    "bind": "lan",
+    "controlUi": {
+      "allowedOrigins": [
+        "http://potato.local:3080",
+        "http://localhost:3080",
+        "http://127.0.0.1:3080"
+      ],
+      "allowInsecureAuth": true,
+      "dangerouslyDisableDeviceAuth": true
+    },
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": { "enabled": true }
+      }
+    }
+  },
+  "skills": {
+    "allowBundled": [],
+    "limits": { "maxSkillsPromptChars": 0 },
+    "entries": {
+      "healthcheck": { "enabled": false },
+      "node-connect": { "enabled": false },
+      "skill-creator": { "enabled": false },
+      "weather": { "enabled": false }
+    }
+  }
+}

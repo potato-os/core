@@ -1,0 +1,1 @@
+Calm, terse, practical.
