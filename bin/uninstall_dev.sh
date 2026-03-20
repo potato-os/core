@@ -18,6 +18,13 @@ run_sudo() {
   sudo "$@"
 }
 
+# Clean up OpenClaw addon if installed
+if command -v openclaw &>/dev/null; then
+  systemctl --user disable --now openclaw-gateway 2>/dev/null || true
+  rm -f "${HOME}/.config/systemd/user/openclaw-gateway.service"
+  systemctl --user daemon-reload 2>/dev/null || true
+fi
+
 run_sudo systemctl disable --now potato.service potato-firstboot.service potato-runtime-reset.service || true
 run_sudo rm -f /etc/systemd/system/potato.service /etc/systemd/system/potato-firstboot.service /etc/systemd/system/potato-runtime-reset.service
 run_sudo rm -f /etc/sudoers.d/potato-runtime-reset

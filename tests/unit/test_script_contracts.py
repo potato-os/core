@@ -228,3 +228,66 @@ def test_orchestrator_allows_llama_restart_during_download():
         "otherwise restart_managed_llama_process leaves llama dead until download finishes"
     )
 
+
+# ---------------------------------------------------------------------------
+# OpenClaw addon scripts
+# ---------------------------------------------------------------------------
+
+
+def test_install_openclaw_checks_potato_prerequisite():
+    script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
+    assert "/opt/potato" in script
+    assert "potato.service" in script
+
+
+def test_install_openclaw_installs_nodejs():
+    script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
+    assert "nodesource.com/setup_24.x" in script
+    assert "apt-get install" in script
+    assert "nodejs" in script
+
+
+def test_install_openclaw_deploys_config():
+    script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
+    assert "openclaw/openclaw.json" in script
+    assert ".openclaw/openclaw.json" in script
+    assert "openclaw/workspace/AGENTS.md" in script
+    assert "openclaw/workspace/SOUL.md" in script
+
+
+def test_install_openclaw_disables_skills_on_disk():
+    script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
+    assert "SKILL.md.disabled" in script
+    assert "healthcheck" in script
+    assert "node-connect" in script
+    assert "skill-creator" in script
+    assert "weather" in script
+
+
+def test_install_openclaw_sets_gateway_port_3080():
+    script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
+    assert "3080" in script
+    assert "18789" in script
+
+
+def test_install_openclaw_enables_linger():
+    script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
+    assert "loginctl enable-linger" in script
+
+
+def test_uninstall_openclaw_removes_service():
+    script = Path("bin/uninstall_openclaw.sh").read_text(encoding="utf-8")
+    assert "systemctl --user disable --now openclaw-gateway" in script
+    assert "openclaw-gateway.service" in script
+
+
+def test_uninstall_openclaw_restores_skills():
+    script = Path("bin/uninstall_openclaw.sh").read_text(encoding="utf-8")
+    assert "SKILL.md.disabled" in script
+    assert "SKILL.md" in script
+
+
+def test_uninstall_dev_handles_openclaw():
+    script = Path("bin/uninstall_dev.sh").read_text(encoding="utf-8")
+    assert "openclaw" in script
+
