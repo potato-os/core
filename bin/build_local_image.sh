@@ -7,6 +7,7 @@ VARIANT="lite"
 NO_UPDATE_PI_GEN=1
 SETUP_DOCKER=0
 CLEAN_PIGEN_WORK=1
+POST_CLEANUP=0
 CLEAN_ARTIFACTS_MODE="${POTATO_CLEAN_ARTIFACTS:-ask}"
 
 usage() {
@@ -25,6 +26,7 @@ Options:
   --clean-artifacts <mode>    Handle old output artifacts: ask|yes|no (default: ask).
   --clean-artifacts-yes       Remove old output artifacts without prompting.
   --clean-artifacts-no        Keep old output artifacts without prompting.
+  --post-cleanup              Prune stale Docker artifacts after a successful build.
   -h, --help                  Show this help.
 
 Example:
@@ -135,6 +137,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --clean-artifacts-no)
       CLEAN_ARTIFACTS_MODE="no"
+      shift
+      ;;
+    --post-cleanup)
+      POST_CLEANUP=1
       shift
       ;;
     -h|--help)
@@ -310,6 +316,11 @@ if [ "${VARIANT}" = "both" ]; then
   collect_variant_bundle "full"
 else
   collect_variant_bundle "${VARIANT}"
+fi
+
+if [ "${POST_CLEANUP}" = "1" ]; then
+  echo "[potato-local-build] Running post-build Docker cleanup..."
+  "${REPO_ROOT}/bin/clean_image_build_artifacts.sh" --docker-prune --yes
 fi
 
 echo "[potato-local-build] Done."

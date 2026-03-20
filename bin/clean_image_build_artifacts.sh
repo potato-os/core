@@ -9,6 +9,7 @@ PIGEN_CHECKOUT_DIR="${POTATO_PI_GEN_DIR:-${REPO_ROOT}/.cache/pi-gen-arm64}"
 
 INCLUDE_DOWNLOAD_CACHE=0
 INCLUDE_PIGEN_CHECKOUT=0
+DOCKER_PRUNE=0
 ASSUME_YES=0
 
 usage() {
@@ -26,6 +27,7 @@ Options:
   --include-download-cache       Also clear cached downloads (slower next build).
   --include-pi-gen-checkout      Also delete local pi-gen checkout (re-cloned next build).
   --deep                         Equivalent to both cache options above.
+  --docker-prune                 Prune unused Docker images, build cache, and volumes (>24h old).
   --yes                          Skip confirmation prompt.
   -h, --help                     Show help.
 
@@ -76,6 +78,10 @@ while [ "$#" -gt 0 ]; do
       INCLUDE_PIGEN_CHECKOUT=1
       shift
       ;;
+    --docker-prune)
+      DOCKER_PRUNE=1
+      shift
+      ;;
     --yes)
       ASSUME_YES=1
       shift
@@ -108,6 +114,19 @@ remove_dir_tree() {
   fi
   printf '[potato-image-clean] Removing path: %s\n' "${target}"
   rm -rf "${target}"
+}
+
+cleanup_docker_artifacts() {
+  if ! has_cmd docker; then
+    printf '[potato-image-clean] Docker not installed; skipping artifact prune.\n'
+    return
+  fi
+
+  printf '[potato-image-clean] Pruning unused Docker images, build cache, and volumes (older than 24h)...\n'
+  docker image prune --force --filter "until=24h" 2>/dev/null || true
+  docker builder prune --force --filter "until=24h" 2>/dev/null || true
+  docker volume prune --force --filter "until=24h" 2>/dev/null || true
+  printf '[potato-image-clean] Docker artifact prune complete.\n'
 }
 
 cleanup_docker_containers() {
@@ -160,5 +179,9 @@ if [ "${INCLUDE_PIGEN_CHECKOUT}" = "1" ]; then
 fi
 
 cleanup_docker_containers
+
+if [ "${DOCKER_PRUNE}" = "1" ]; then
+  cleanup_docker_artifacts
+fi
 
 printf '[potato-image-clean] Done.\n'

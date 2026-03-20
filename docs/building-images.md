@@ -123,6 +123,58 @@ The script auto-detects the latest bundle in `output/images/`. To target a speci
 ./bin/publish_image_release.sh --version v0.3 --bundle-dir output/images/local-test-lite-*/
 ```
 
+## Disk space requirements
+
+A pi-gen Docker build needs at least **8 GB free** inside the Docker filesystem. The build script checks this automatically and fails early with recovery instructions if space is too low.
+
+### Checking Docker disk space manually
+
+```bash
+docker run --rm alpine df -h /
+```
+
+### Recovering disk space
+
+**Prune unused Docker artifacts:**
+```bash
+docker system prune --volumes
+```
+
+**Or use the built-in cleanup script:**
+```bash
+./bin/clean_image_build_artifacts.sh --docker-prune
+```
+
+**Increase Colima disk size (macOS):**
+```bash
+colima stop && colima start --disk 100
+```
+
+If Colima disk is nearly full, you may need to delete and recreate:
+```bash
+colima stop && colima delete && colima start --disk 100
+```
+
+**Automatic post-build cleanup:**
+```bash
+./bin/build_local_image.sh --setup-docker --post-cleanup
+```
+
+This removes unused Docker images, build cache, and volumes older than 24 hours after the build completes. Active containers and in-use images are never removed.
+
+### Skipping the preflight check
+
+```bash
+POTATO_SKIP_SPACE_PREFLIGHT=1 ./bin/build_local_image.sh --setup-docker
+```
+
+### Adjusting thresholds
+
+The default minimum is 8 GB (hard fail) and 12 GB (warning). Override with:
+```bash
+POTATO_DOCKER_MIN_SPACE_GB=6 POTATO_DOCKER_WARN_SPACE_GB=10 ./bin/build_local_image.sh --setup-docker
+```
+
 ## Cleaning up
 
 Remove build artifacts and caches:
@@ -138,6 +190,8 @@ Remove build artifacts and caches:
 ## Troubleshooting
 
 **Docker not running:** If you see "Cannot connect to the Docker daemon", run `colima start` or pass `--setup-docker` to auto-start it.
+
+**Low disk space in Docker:** The build checks Docker filesystem space before starting. If it fails with a space error, see the [Disk space requirements](#disk-space-requirements) section above.
 
 **Stale container:** If the build fails with a container conflict, remove the old container:
 ```bash

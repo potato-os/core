@@ -81,6 +81,10 @@ def test_local_image_build_script_collects_artifacts_for_flash_test():
     assert "Remove them before build? [y/N]:" in script
     assert "CLEAN_ARTIFACTS_MODE" in script
 
+    # Post-cleanup support (#112)
+    assert "--post-cleanup" in script
+    assert "clean_image_build_artifacts.sh" in script
+
 
 def test_publish_image_release_script_validates_bundle_and_creates_release():
     script = Path("bin/publish_image_release.sh").read_text(encoding="utf-8")
@@ -117,6 +121,13 @@ def test_clean_image_build_artifacts_script_cleans_outputs_and_optional_caches()
     assert "docker container inspect" in script
     assert "pigen_work potato-pigen-lite potato-pigen-full" in script
     assert "find \"${target}\" -mindepth 1 -maxdepth 1 -exec rm -rf {} +" in script
+
+    # Docker prune support (#112)
+    assert "--docker-prune" in script
+    assert "docker image prune" in script
+    assert "docker builder prune" in script
+    assert "docker volume prune" in script
+    assert "--filter" in script
 
 
 def test_chat_html_loads_local_markdown_assets_and_renders_assistant_markdown():
@@ -195,6 +206,14 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "except subprocess.CalledProcessError as exc" in uv_script
     assert "--setup-docker" in uv_script
     assert 'run(["brew", "install", "docker", "colima"])' in uv_script
+
+    # Docker space preflight (#112)
+    assert "check_docker_disk_space" in uv_script
+    assert "POTATO_SKIP_SPACE_PREFLIGHT" in uv_script
+    assert "POTATO_DOCKER_MIN_SPACE_GB" in uv_script
+    assert "POTATO_DOCKER_WARN_SPACE_GB" in uv_script
+    assert "docker system prune" in uv_script
+    assert "colima stop" in uv_script
 
 
 def test_manual_qa_scripts_exist_for_fake_and_real_flows():
@@ -318,6 +337,14 @@ def test_image_build_guide_exists_with_required_sections():
 
     # Troubleshooting section
     assert "Troubleshoot" in guide or "troubleshoot" in guide
+
+    # Disk space recovery guidance (#112)
+    assert "Disk space" in guide or "disk space" in guide
+    assert "docker system prune" in guide
+    assert "colima stop" in guide
+    assert "POTATO_SKIP_SPACE_PREFLIGHT" in guide
+    assert "--docker-prune" in guide
+    assert "--post-cleanup" in guide
 
 
 def test_readme_links_to_image_build_guide():

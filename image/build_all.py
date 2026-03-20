@@ -26,6 +26,78 @@ def run_capture(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=False, text=True, capture_output=True)
 
 
+DOCKER_MIN_SPACE_GB = 8
+DOCKER_WARN_SPACE_GB = 12
+
+
+def _parse_df_available_bytes(df_output: str) -> int | None:
+    """Parse ``df`` output from an alpine container and return available bytes.
+
+    Expected format (1K-blocks)::
+
+        Filesystem  1K-blocks  Used  Available  Use%  Mounted on
+        overlay     61234567   12345 48889222   20%   /
+    """
+    lines = [ln for ln in df_output.strip().splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return None
+    parts = lines[1].split()
+    if len(parts) < 4:
+        return None
+    try:
+        available_1k = int(parts[3])
+    except (ValueError, IndexError):
+        return None
+    return available_1k * 1024
+
+
+def check_docker_disk_space() -> None:
+    """Preflight: ensure Docker filesystem has enough free space for pi-gen."""
+    if os.getenv("POTATO_SKIP_SPACE_PREFLIGHT", "0") == "1":
+        info("Disk space preflight skipped (POTATO_SKIP_SPACE_PREFLIGHT=1).")
+        return
+
+    min_gb = int(os.getenv("POTATO_DOCKER_MIN_SPACE_GB", str(DOCKER_MIN_SPACE_GB)))
+    warn_gb = int(os.getenv("POTATO_DOCKER_WARN_SPACE_GB", str(DOCKER_WARN_SPACE_GB)))
+
+    result = run_capture(["docker", "run", "--rm", "alpine", "df", "/"])
+    if result.returncode != 0:
+        info(
+            "Warning: could not measure Docker disk space "
+            f"(docker run alpine df failed: {result.stderr.strip()}). "
+            "Proceeding without preflight check."
+        )
+        return
+
+    available_bytes = _parse_df_available_bytes(result.stdout)
+    if available_bytes is None:
+        info("Warning: could not parse Docker disk space. Proceeding without preflight check.")
+        return
+
+    available_gb = available_bytes / (1024**3)
+    info(f"Docker filesystem: {available_gb:.1f} GB free")
+
+    if available_gb < min_gb:
+        raise RuntimeError(
+            f"Docker filesystem has only {available_gb:.1f} GB free — "
+            f"pi-gen needs at least {min_gb} GB.\n"
+            "\n"
+            "Recovery options:\n"
+            "  1. Reclaim Docker space:  docker system prune --volumes\n"
+            "  2. Increase Colima disk:  colima stop && colima start --disk 100\n"
+            "  3. Skip this check:       POTATO_SKIP_SPACE_PREFLIGHT=1\n"
+            "\n"
+            "See docs/building-images.md for details."
+        )
+
+    if available_gb < warn_gb:
+        info(
+            f"Warning: Docker filesystem has {available_gb:.1f} GB free. "
+            f"Builds may fail below {min_gb} GB. "
+            "Consider: docker system prune --volumes"
+        )
+
+
 def ensure_docker_daemon_ready() -> None:
     probe = run_capture(["docker", "info"])
     if probe.returncode == 0:
@@ -222,6 +294,7 @@ def main() -> int:
             if args.setup_docker:
                 setup_docker_runtime()
             ensure_docker_daemon_ready()
+            check_docker_disk_space()
 
         variants = ["lite", "full"] if args.variant == "both" else [args.variant]
         for variant in variants:
