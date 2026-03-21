@@ -166,6 +166,14 @@ def test_build_update_status_default_shape_no_state(runtime):
     assert result["progress"] == {"phase": None, "percent": 0, "error": None}
 
 
+def test_build_update_status_survives_non_string_latest_version(runtime):
+    state = {"latest_version": ["0.4.0"], "checked_at_unix": 1711000000, "error": None}
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    result = build_update_status(runtime)
+    assert result["available"] is False
+    assert result["latest_version"] is None
+
+
 def test_build_update_status_populated_from_state(runtime):
     state = {
         "available": True,

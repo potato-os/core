@@ -126,6 +126,8 @@ def build_update_status(runtime: RuntimeConfig) -> dict[str, Any]:
         }
 
     latest_version = state.get("latest_version")
+    if not isinstance(latest_version, str):
+        latest_version = None
     available = is_newer(latest_version, __version__) if latest_version else False
 
     return {
