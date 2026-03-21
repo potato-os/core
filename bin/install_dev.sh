@@ -170,7 +170,7 @@ if [ -n "${bundle_src}" ] && [ -x "${bundle_src}/bin/llama-server" ] && [ -d "${
     run_sudo chmod +x "${LLAMA_RUNTIME_DIR}/run-llama-server.sh"
   fi
   # Also populate the runtime slot so discover_runtime_slots() finds it
-  local slot_dir="${TARGET_ROOT}/runtimes/${LLAMA_RUNTIME_FAMILY}"
+  slot_dir="${TARGET_ROOT}/runtimes/${LLAMA_RUNTIME_FAMILY}"
   run_sudo mkdir -p "${slot_dir}"
   run_sudo rsync -a --delete "${bundle_src}/" "${slot_dir}/"
   run_sudo chmod +x "${slot_dir}/bin/llama-server"

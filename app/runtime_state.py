@@ -218,7 +218,7 @@ PI4_INCOMPATIBLE_RUNTIMES = ("ik_llama",)
 
 DEVICE_CLOCK_LIMITS: dict[str, dict[str, int]] = {
     "pi5": {"cpu_max_hz": 2_400_000_000, "gpu_max_hz": 1_000_000_000},
-    "pi4": {"cpu_max_hz": 1_500_000_000, "gpu_max_hz": 500_000_000},
+    "pi4": {"cpu_max_hz": 1_800_000_000, "gpu_max_hz": 500_000_000},
 }
 
 
