@@ -289,7 +289,14 @@ def any_model_ready(runtime: RuntimeConfig) -> bool:
 
 
 def resolve_model_runtime_path(runtime: RuntimeConfig, filename: str) -> Path:
-    return _model_file_path(runtime, filename)
+    """Return the real filesystem path for a model, resolving symlinks."""
+    path = _model_file_path(runtime, filename)
+    try:
+        if path.is_symlink():
+            return path.resolve(strict=False)
+    except OSError:
+        return path
+    return path
 
 
 def describe_model_storage(runtime: RuntimeConfig, filename: str) -> dict[str, Any]:
