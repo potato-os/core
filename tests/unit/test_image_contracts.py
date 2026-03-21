@@ -6,6 +6,7 @@ from app.main import CHAT_HTML, WEB_ASSETS_DIR
 
 CHAT_CSS = (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8")
 CHAT_JS = (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8")
+SHELL_JS = (WEB_ASSETS_DIR / "shell.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "shell.js").exists() else ""
 CHAT_STATE_JS = (WEB_ASSETS_DIR / "state.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "state.js").exists() else ""
 CHAT_UTILS_JS = (WEB_ASSETS_DIR / "utils.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "utils.js").exists() else ""
 CHAT_SESSION_JS = (WEB_ASSETS_DIR / "session-manager.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "session-manager.js").exists() else ""
@@ -15,7 +16,7 @@ CHAT_MESSAGES_JS = (WEB_ASSETS_DIR / "messages.js").read_text(encoding="utf-8") 
 CHAT_IMAGE_HANDLER_JS = (WEB_ASSETS_DIR / "image-handler.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "image-handler.js").exists() else ""
 CHAT_SETTINGS_UI_JS = (WEB_ASSETS_DIR / "settings-ui.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "settings-ui.js").exists() else ""
 CHAT_ENGINE_JS = (WEB_ASSETS_DIR / "chat-engine.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "chat-engine.js").exists() else ""
-CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS + CHAT_RUNTIME_UI_JS + CHAT_MESSAGES_JS + CHAT_IMAGE_HANDLER_JS + CHAT_SETTINGS_UI_JS + CHAT_ENGINE_JS
+CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + SHELL_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS + CHAT_RUNTIME_UI_JS + CHAT_MESSAGES_JS + CHAT_IMAGE_HANDLER_JS + CHAT_SETTINGS_UI_JS + CHAT_ENGINE_JS
 
 def test_nginx_config_allows_large_streaming_uploads():
     conf = Path("nginx/potato.conf").read_text(encoding="utf-8")
