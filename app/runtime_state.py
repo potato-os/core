@@ -71,6 +71,7 @@ class RuntimeConfig:
     ensure_model_script: Path | None = None
     start_llama_script: Path | None = None
     llama_runtime_settings_path: Path | None = None
+    update_state_path: Path | None = None
     runtime_reset_service: str = "potato-runtime-reset.service"
 
     def __post_init__(self) -> None:
@@ -80,6 +81,8 @@ class RuntimeConfig:
             self.start_llama_script = self.base_dir / "bin" / "start_llama.sh"
         if self.llama_runtime_settings_path is None:
             self.llama_runtime_settings_path = self.base_dir / "state" / "llama_runtime.json"
+        if self.update_state_path is None:
+            self.update_state_path = self.base_dir / "state" / "update.json"
 
     @classmethod
     def from_env(cls) -> "RuntimeConfig":
@@ -112,6 +115,9 @@ class RuntimeConfig:
         llama_runtime_settings_path = Path(
             os.getenv("POTATO_LLAMA_RUNTIME_SETTINGS_PATH", str(base_dir / "state" / "llama_runtime.json"))
         )
+        update_state_path = Path(
+            os.getenv("POTATO_UPDATE_STATE_PATH", str(base_dir / "state" / "update.json"))
+        )
         runtime_reset_service = os.getenv("POTATO_RUNTIME_RESET_SERVICE", "potato-runtime-reset.service").strip()
         enable_orchestrator = os.getenv("POTATO_ENABLE_ORCHESTRATOR", "1") == "1"
         auto_download_idle_seconds = max(0, _safe_int(os.getenv("POTATO_AUTO_DOWNLOAD_IDLE_SECONDS", "300"), 300))
@@ -129,6 +135,7 @@ class RuntimeConfig:
             ensure_model_script=ensure_model_script,
             start_llama_script=start_llama_script,
             llama_runtime_settings_path=llama_runtime_settings_path,
+            update_state_path=update_state_path,
             runtime_reset_service=runtime_reset_service,
             enable_orchestrator=enable_orchestrator,
             auto_download_idle_seconds=auto_download_idle_seconds,

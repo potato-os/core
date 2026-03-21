@@ -72,6 +72,7 @@ try:
         _unique_filename,
         _unique_model_id,
     )
+    from app.update_state import build_update_status
     from app.runtime_state import (
         LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
         LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME,
@@ -176,6 +177,7 @@ except ModuleNotFoundError:
         _unique_filename,
         _unique_model_id,
     )
+    from update_state import build_update_status  # type: ignore[no-redef]
     from runtime_state import (  # type: ignore[no-redef]
         LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
         LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME,
@@ -722,6 +724,7 @@ def _build_status_fs(
         "compatibility": compatibility,
         "llama_runtime": build_llama_runtime_status(runtime, app=app),
         "system": system_payload,
+        "update": build_update_status(runtime),
         "_needs_health_check": needs_health_check,
     }
 
@@ -1558,12 +1561,14 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         from app.routes.status import router as status_router, register_status_helpers
         from app.routes.runtime import router as runtime_router, register_runtime_helpers
         from app.routes.models import router as models_router, register_models_helpers
+        from app.routes.update import router as update_router, register_update_helpers
     except ModuleNotFoundError:
         from routes.chat import router as chat_router, register_chat_helpers  # type: ignore[no-redef]
         from routes.settings import router as settings_router, register_settings_helpers  # type: ignore[no-redef]
         from routes.status import router as status_router, register_status_helpers  # type: ignore[no-redef]
         from routes.runtime import router as runtime_router, register_runtime_helpers  # type: ignore[no-redef]
         from routes.models import router as models_router, register_models_helpers  # type: ignore[no-redef]
+        from routes.update import router as update_router, register_update_helpers  # type: ignore[no-redef]
 
     register_chat_helpers(
         build_status=build_status,
@@ -1578,11 +1583,13 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     register_status_helpers(main_module=_this_module, chat_html_path=_CHAT_HTML_PATH)
     register_runtime_helpers(main_module=_this_module)
     register_models_helpers(main_module=_this_module)
+    register_update_helpers(main_module=_this_module)
     app.include_router(chat_router)
     app.include_router(settings_router)
     app.include_router(status_router)
     app.include_router(runtime_router)
     app.include_router(models_router)
+    app.include_router(update_router)
 
     return app
 
