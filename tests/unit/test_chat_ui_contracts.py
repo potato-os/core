@@ -6,6 +6,7 @@ from app.main import CHAT_HTML, WEB_ASSETS_DIR
 
 CHAT_CSS = (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8")
 CHAT_JS = (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8")
+SHELL_JS = (WEB_ASSETS_DIR / "shell.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "shell.js").exists() else ""
 CHAT_STATE_JS = (WEB_ASSETS_DIR / "state.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "state.js").exists() else ""
 CHAT_UTILS_JS = (WEB_ASSETS_DIR / "utils.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "utils.js").exists() else ""
 CHAT_SESSION_JS = (WEB_ASSETS_DIR / "session-manager.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "session-manager.js").exists() else ""
@@ -15,7 +16,7 @@ CHAT_MESSAGES_JS = (WEB_ASSETS_DIR / "messages.js").read_text(encoding="utf-8") 
 CHAT_IMAGE_HANDLER_JS = (WEB_ASSETS_DIR / "image-handler.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "image-handler.js").exists() else ""
 CHAT_SETTINGS_UI_JS = (WEB_ASSETS_DIR / "settings-ui.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "settings-ui.js").exists() else ""
 CHAT_ENGINE_JS = (WEB_ASSETS_DIR / "chat-engine.js").read_text(encoding="utf-8") if (WEB_ASSETS_DIR / "chat-engine.js").exists() else ""
-CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS + CHAT_RUNTIME_UI_JS + CHAT_MESSAGES_JS + CHAT_IMAGE_HANDLER_JS + CHAT_SETTINGS_UI_JS + CHAT_ENGINE_JS
+CHAT_UI = CHAT_HTML + CHAT_CSS + CHAT_JS + SHELL_JS + CHAT_STATE_JS + CHAT_UTILS_JS + CHAT_SESSION_JS + CHAT_STATUS_JS + CHAT_RUNTIME_UI_JS + CHAT_MESSAGES_JS + CHAT_IMAGE_HANDLER_JS + CHAT_SETTINGS_UI_JS + CHAT_ENGINE_JS
 
 
 def test_chat_ui_streaming_parses_sse_and_ignores_done_marker():
@@ -500,8 +501,18 @@ def test_chat_ui_shows_processing_indicator_while_generating():
     assert "TTFT " in CHAT_UI
 
 
+def test_shell_module_exists_with_key_functions():
+    shell_js = (WEB_ASSETS_DIR / "shell.js").read_text(encoding="utf-8")
+    assert "function applyTheme(" in shell_js
+    assert "function setSidebarOpen(" in shell_js
+    assert "function pollStatus(" in shell_js
+    assert "function setStatus(" in shell_js
+    assert "function bindMobileSidebar(" in shell_js
+    assert 'from "./chat.js"' in shell_js
+
+
 def test_chat_assets_are_loaded_from_external_files():
-    for name in ("chat.html", "chat.css", "chat.js", "state.js"):
+    for name in ("chat.html", "chat.css", "chat.js", "shell.js", "state.js"):
         path = WEB_ASSETS_DIR / name
         assert path.exists(), f"Expected {name} at {path}"
 
@@ -509,7 +520,8 @@ def test_chat_assets_are_loaded_from_external_files():
     assert (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8") == CHAT_CSS
     assert (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8") == CHAT_JS
     assert '<link rel="stylesheet" href="/assets/chat.css">' in CHAT_HTML
-    assert '<script type="module" src="/assets/chat.js"></script>' in CHAT_HTML
+    assert '<script type="module" src="/assets/shell.js"></script>' in CHAT_HTML
+    assert '<link rel="modulepreload" href="/assets/shell.js">' in CHAT_HTML
     assert '<link rel="modulepreload" href="/assets/state.js">' in CHAT_HTML
 
 

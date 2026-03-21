@@ -1,18 +1,19 @@
 "use strict";
 
-import { appState, defaultSettings, settingsKey, PREFILL_METRICS_KEY, PREFILL_PROGRESS_CAP, PREFILL_PROGRESS_TAIL_START, PREFILL_PROGRESS_FLOOR, PREFILL_TICK_MS, PREFILL_FINISH_DURATION_MS, PREFILL_FINISH_TICK_MS, PREFILL_FINISH_HOLD_MS, STATUS_CHIP_MIN_VISIBLE_MS, STATUS_POLL_TIMEOUT_MS, RUNTIME_RECONNECT_INTERVAL_MS, RUNTIME_RECONNECT_TIMEOUT_MS, RUNTIME_RECONNECT_MAX_ATTEMPTS, IMAGE_CANCEL_RECOVERY_DELAY_MS, IMAGE_CANCEL_RESTART_DELAY_MS, SESSIONS_DB_NAME, SESSIONS_DB_VERSION, SESSIONS_STORE, ACTIVE_SESSION_KEY, SESSION_TITLE_MAX_LENGTH, SESSION_LIST_MAX_VISIBLE, IMAGE_SAFE_MAX_BYTES, IMAGE_MAX_DIMENSION, IMAGE_MAX_PIXEL_COUNT, CPU_CLOCK_MAX_HZ_PI5, GPU_CLOCK_MAX_HZ_PI5, RUNTIME_METRIC_SEVERITY_CLASSES, DEFAULT_MODEL_VISION_SETTINGS } from "./state.js";
+import { appState, settingsKey, PREFILL_METRICS_KEY, PREFILL_PROGRESS_CAP, PREFILL_PROGRESS_TAIL_START, PREFILL_PROGRESS_FLOOR, PREFILL_TICK_MS, PREFILL_FINISH_DURATION_MS, PREFILL_FINISH_TICK_MS, PREFILL_FINISH_HOLD_MS, STATUS_CHIP_MIN_VISIBLE_MS, RUNTIME_RECONNECT_INTERVAL_MS, RUNTIME_RECONNECT_TIMEOUT_MS, RUNTIME_RECONNECT_MAX_ATTEMPTS, IMAGE_CANCEL_RECOVERY_DELAY_MS, IMAGE_CANCEL_RESTART_DELAY_MS, SESSIONS_DB_NAME, SESSIONS_DB_VERSION, SESSIONS_STORE, ACTIVE_SESSION_KEY, SESSION_TITLE_MAX_LENGTH, SESSION_LIST_MAX_VISIBLE, IMAGE_SAFE_MAX_BYTES, IMAGE_MAX_DIMENSION, IMAGE_MAX_PIXEL_COUNT, DEFAULT_MODEL_VISION_SETTINGS } from "./state.js";
 import { formatBytes, formatPercent, formatClockMHz, normalizePercent, percentFromRatio, runtimeMetricSeverityClass, applyRuntimeMetricSeverity, formatCountdownSeconds, estimateDataUrlBytes, postJson } from "./utils.js";
 import { registerAppendMessage, saveActiveSession, clearChatState, startNewChat, deleteSession, deleteAllSessions, loadSessionIntoView, initSessionManager, renderSessionList } from "./session-manager.js";
-import { populateModelSwitcher, openModelSwitcher, closeModelSwitcher, toggleModelSwitcher } from "./model-switcher.js";
-import { isLocalModelConnected, updateLlamaIndicator, findResumableFailedModel, renderDownloadPrompt, renderStatusActions, renderCompatibilityWarnings, formatSidebarStatusDetail, formatModelStatusLabel } from "./status.js";
-import { setRuntimeDetailsExpanded, renderSystemRuntime, renderLlamaRuntimeStatus, renderUploadState, setModelUploadStatus, setLlamaRuntimeSwitchStatus, setLlamaRuntimeSwitchButtonState, setLlamaMemoryLoadingStatus, setLlamaMemoryLoadingButtonState, setLargeModelOverrideStatus, setLargeModelOverrideButtonState, setPowerCalibrationStatus, setPowerCalibrationButtonsState, setPowerCalibrationLiveStatus } from "./runtime-ui.js";
+import { isLocalModelConnected, findResumableFailedModel, renderDownloadPrompt } from "./status.js";
+import { setModelUploadStatus, setLlamaRuntimeSwitchStatus, setLlamaRuntimeSwitchButtonState, setLlamaMemoryLoadingStatus, setLlamaMemoryLoadingButtonState, setLargeModelOverrideStatus, setLargeModelOverrideButtonState, setPowerCalibrationStatus, setPowerCalibrationButtonsState, setPowerCalibrationLiveStatus } from "./runtime-ui.js";
 import { registerOpenEditMessageModal, getMessagesBox, isMessagesPinned, setMessagesPinnedState, hasActiveMessageSelection, handleMessagesChanged, appendMessage, updateMessage, setMessageProcessingState, setMessageMeta, setMessageActionsVisible, removeMessage } from "./messages.js";
 import { registerImageUiCallbacks, cancelPendingImageWork, clearPendingImage, handleImageSelected, buildUserMessageContent, buildUserBubblePayload, openImagePicker } from "./image-handler.js";
-import { registerSettingsCallbacks, detectSystemTheme, normalizeTheme, loadSettings, saveSettings, normalizeGenerationMode, normalizeSeedValue, updateSeedFieldState, resolveSeedForRequest, normalizeChatSettings, activeRuntimeVisionCapability, formatImageRejectedNotice, showTextOnlyImageBlockedState, renderComposerCapabilities, getSettingsModels, resolveSelectedSettingsModel, getActiveChatSettings, collectSelectedModelSettings, markModelSettingsDraftDirty, clearModelSettingsDraftState, selectedModelHasUnsavedChanges, blockModelSelectionChange, discardSelectedModelSettings, collectSettings, setSettingsModalOpen, openSettingsModal, closeSettingsModal, closeLegacySettingsModal, openLegacySettingsModal, showSettingsWorkspaceTab, syncSegmentedControl, setSegmentedControlValue, renderSelectedModelSettings, renderSettingsWorkspace, loadSettingsDocument, applySettingsDocument, saveSelectedModelSettings, downloadProjectorForSelectedModel, bindSettingsModal, setModelUrlStatus, formatModelUrlStatus } from "./settings-ui.js";
+import { registerSettingsCallbacks, activeRuntimeVisionCapability, showTextOnlyImageBlockedState, resolveSelectedSettingsModel, selectedModelHasUnsavedChanges, blockModelSelectionChange, renderSettingsWorkspace, bindSettingsModal, setModelUrlStatus, formatModelUrlStatus } from "./settings-ui.js";
 import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setComposerStatusChip, hideComposerStatusChip, setCancelEnabled, sendChat, stopGeneration, cancelCurrentWork, extractApiErrorMessage } from "./chat-engine.js";
 
     // ── Session manager — extracted to session-manager.js ──────────────
 
+    // Shell API references — populated by init()
+    let _shell = {};
 
     function focusPromptInput(options = {}) {
       const prompt = document.getElementById("userPrompt");
@@ -27,38 +28,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
     }
 
 
-    function isMobileSidebarViewport() {
-      if (!appState.mobileSidebarMql) {
-        appState.mobileSidebarMql = window.matchMedia("(max-width: 900px)");
-      }
-      return appState.mobileSidebarMql.matches;
-    }
-
-    function setSidebarOpen(open) {
-      const sidebar = document.getElementById("sidebarPanel");
-      const backdrop = document.getElementById("sidebarBackdrop");
-      const toggle = document.getElementById("sidebarToggle");
-      const closeBtn = document.getElementById("sidebarCloseBtn");
-      const mobile = isMobileSidebarViewport();
-      const shouldOpen = Boolean(open) && mobile;
-
-      document.body.classList.toggle("sidebar-open", shouldOpen);
-
-      if (sidebar) {
-        sidebar.setAttribute("aria-hidden", mobile ? (shouldOpen ? "false" : "true") : "false");
-      }
-      if (backdrop) {
-        backdrop.hidden = !shouldOpen;
-      }
-      if (toggle) {
-        toggle.hidden = !mobile;
-        toggle.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
-      }
-      if (closeBtn) {
-        closeBtn.hidden = !shouldOpen;
-      }
-    }
-
+    // isMobileSidebarViewport, setSidebarOpen — extracted to shell.js
 
     function setEditModalOpen(open) {
       appState.editModalOpen = Boolean(open);
@@ -71,8 +41,8 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       if (backdrop) {
         backdrop.hidden = !appState.editModalOpen;
       }
-      if (appState.editModalOpen) {
-        setSidebarOpen(false);
+      if (appState.editModalOpen && _shell.setSidebarOpen) {
+        _shell.setSidebarOpen(false);
       }
     }
 
@@ -164,50 +134,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       setMessagesPinnedState(isMessagesPinned(box));
     }
 
-    function bindMobileSidebar() {
-      appState.mobileSidebarMql = window.matchMedia("(max-width: 900px)");
-      const sync = () => {
-        if (!appState.mobileSidebarMql.matches) {
-          setSidebarOpen(false);
-        } else {
-          setSidebarOpen(document.body.classList.contains("sidebar-open"));
-        }
-      };
-
-      const onViewportChange = () => {
-        sync();
-      };
-      if (typeof appState.mobileSidebarMql.addEventListener === "function") {
-        appState.mobileSidebarMql.addEventListener("change", onViewportChange);
-      } else if (typeof appState.mobileSidebarMql.addListener === "function") {
-        appState.mobileSidebarMql.addListener(onViewportChange);
-      }
-
-      document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") {
-          if (appState.modelSwitcherOpen) {
-            closeModelSwitcher();
-            return;
-          }
-          if (appState.editModalOpen) {
-            closeEditMessageModal();
-            return;
-          }
-          if (appState.legacySettingsModalOpen) {
-            closeLegacySettingsModal();
-            return;
-          }
-          if (appState.settingsModalOpen) {
-            closeSettingsModal();
-            return;
-          }
-          setSidebarOpen(false);
-        }
-      });
-
-      sync();
-    }
-
+    // bindMobileSidebar — extracted to shell.js
 
     function bindEditModal() {
       document.getElementById("editCloseBtn").addEventListener("click", () => closeEditMessageModal());
@@ -227,20 +154,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       });
     }
 
-    function applyTheme(theme) {
-      const resolved = theme === "light" ? "light" : "dark";
-      document.documentElement.setAttribute("data-theme", resolved);
-      const toggle = document.getElementById("themeToggle");
-      const target = resolved === "dark" ? "light" : "dark";
-      toggle.setAttribute("aria-label", `Switch to ${target} theme`);
-      toggle.setAttribute("title", `Switch to ${target} theme`);
-    }
-
-    function bindSettings() {
-      const settings = loadSettings();
-      applyTheme(settings.theme);
-    }
-
+    // applyTheme, bindSettings — extracted to shell.js
 
     function waitForRequestIdle(timeoutMs = 6000) {
       const deadline = performance.now() + Math.max(250, Number(timeoutMs) || 6000);
@@ -362,7 +276,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       } finally {
         appState.llamaRuntimeSwitchInFlight = false;
         setLlamaRuntimeSwitchButtonState(false);
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -395,7 +309,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
           `Applied model memory loading: ${body?.memory_loading?.label || mode}. ` +
           `Runtime restart: ${body?.restart_reason || "requested"}.`
         );
-        await pollStatus();
+        await _shell.pollStatus();
       } catch (err) {
         appendMessage("assistant", `Could not update model memory loading: ${err}`);
         setLlamaMemoryLoadingStatus(`Last memory loading update error: ${err}`);
@@ -438,7 +352,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       } finally {
         appState.largeModelOverrideApplyInFlight = false;
         setLargeModelOverrideButtonState(false);
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -477,7 +391,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       } finally {
         appState.powerCalibrationActionInFlight = false;
         setPowerCalibrationButtonsState(false);
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -504,7 +418,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       } finally {
         appState.powerCalibrationActionInFlight = false;
         setPowerCalibrationButtonsState(false);
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -532,7 +446,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       } finally {
         appState.powerCalibrationActionInFlight = false;
         setPowerCalibrationButtonsState(false);
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -552,7 +466,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       if (!res.ok) {
         appendMessage("assistant", `Could not update auto-download: ${body?.reason || res.status}`);
       }
-      await pollStatus();
+      await _shell.pollStatus();
     }
 
     async function registerModelFromUrl() {
@@ -581,7 +495,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         setModelUrlStatus(`Could not add model URL: ${err}`);
       } finally {
         appState.modelActionInFlight = false;
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -604,7 +518,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         appendMessage("assistant", `Could not start model download: ${err}`);
       } finally {
         appState.modelActionInFlight = false;
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -624,7 +538,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         appendMessage("assistant", `Could not cancel model download: ${err}`);
       } finally {
         appState.modelActionInFlight = false;
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -643,7 +557,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         appendMessage("assistant", `Could not activate model: ${err}`);
       } finally {
         appState.modelActionInFlight = false;
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -669,7 +583,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         appendMessage("assistant", `Could not delete model: ${err}`);
       } finally {
         appState.modelActionInFlight = false;
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -691,7 +605,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         appendMessage("assistant", `Could not purge models: ${err}`);
       } finally {
         appState.modelActionInFlight = false;
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -728,14 +642,14 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         appState.uploadRequest = null;
         if (cancelBtn) cancelBtn.hidden = true;
         setModelUploadStatus("Upload failed.");
-        await pollStatus();
+        await _shell.pollStatus();
       };
       xhr.onabort = async () => {
         appState.uploadRequest = null;
         if (cancelBtn) cancelBtn.hidden = true;
         setModelUploadStatus("Upload cancelled.");
         await postJson("/internal/models/cancel-upload", {});
-        await pollStatus();
+        await _shell.pollStatus();
       };
       xhr.onload = async () => {
         appState.uploadRequest = null;
@@ -755,7 +669,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         } else {
           setModelUploadStatus(`Upload did not complete (${body?.reason || "unknown"}).`);
         }
-        await pollStatus();
+        await _shell.pollStatus();
       };
       xhr.send(file);
     }
@@ -809,7 +723,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         );
       } finally {
         appState.downloadStartInFlight = false;
-        await pollStatus();
+        await _shell.pollStatus();
       }
     }
 
@@ -834,7 +748,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
     async function stepRuntimeReconnectWatch() {
       if (!appState.runtimeReconnectWatchActive) return;
       appState.runtimeReconnectAttempts += 1;
-      const statusPayload = await pollStatus({ timeoutMs: RUNTIME_RECONNECT_TIMEOUT_MS });
+      const statusPayload = await _shell.pollStatus({ timeoutMs: RUNTIME_RECONNECT_TIMEOUT_MS });
       if (isLocalModelConnected(statusPayload)) {
         stopRuntimeReconnectWatch();
         setComposerActivity("Runtime reconnected.");
@@ -909,192 +823,33 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         } else {
           setComposerActivity("");
           window.setTimeout(() => {
-            pollStatus();
+            _shell.pollStatus();
           }, 1000);
         }
       }
     }
 
 
-    function classifyPi5MemoryTier(totalBytes) {
-      const value = Number(totalBytes);
-      if (!Number.isFinite(value) || value <= 0) return null;
-      const gib = value / (1024 ** 3);
-      const supportedTiers = [1, 2, 4, 8, 16];
-      let bestTier = supportedTiers[0];
-      let bestDistance = Math.abs(gib - bestTier);
-      for (const tier of supportedTiers.slice(1)) {
-        const distance = Math.abs(gib - tier);
-        if (distance < bestDistance) {
-          bestTier = tier;
-          bestDistance = distance;
+    // classifyPi5MemoryTier, setSidebarNote, setStatus, pollStatus, toggleTheme — extracted to shell.js
+
+export function init(shellApi) {
+    const { pollStatus, setSidebarOpen, isMobileSidebarViewport, registerEscapeHandler, bindModelSwitcher } = shellApi;
+    _shell = { pollStatus, setSidebarOpen, isMobileSidebarViewport };
+
+    // Register escape handler for edit modal
+    if (registerEscapeHandler) {
+      registerEscapeHandler(() => {
+        if (appState.editModalOpen) {
+          closeEditMessageModal();
+          return true;
         }
-      }
-      return `${bestTier}GB`;
+        return false;
+      });
     }
 
-    function setSidebarNote(statusPayload) {
-      const noteEl = document.getElementById("sidebarNote");
-      if (!noteEl) return;
-      const version = String(statusPayload?.version || "").trim();
-      const systemPayload = statusPayload?.system;
-      const piModelName = String(systemPayload?.pi_model_name || "").trim();
-      const memoryTier = classifyPi5MemoryTier(systemPayload?.memory_total_bytes);
-      const parts = [];
-      if (version) parts.push(version);
-      if (piModelName) parts.push(piModelName);
-      if (memoryTier) parts.push(memoryTier);
-      noteEl.textContent = parts.length > 0 ? parts.join(" · ") : "";
-    }
-
-    function setStatus(statusPayload) {
-      appState.latestStatus = statusPayload;
-      const downloadText = formatSidebarStatusDetail(statusPayload);
-      const text = `State: ${statusPayload.state} | ${downloadText}`;
-      document.getElementById("statusText").textContent = text;
-      renderStatusActions(statusPayload);
-      setSidebarNote(statusPayload);
-      const modelNameField = document.getElementById("modelName");
-      if (modelNameField) {
-        const modelName = statusPayload?.model?.filename || "Unknown model";
-        modelNameField.textContent = statusPayload?.model_present ? modelName : `${modelName} (not loaded)`;
-      }
-      const countdownSelect = document.getElementById("downloadCountdownEnabled");
-      if (countdownSelect) {
-        countdownSelect.value = statusPayload?.download?.countdown_enabled === false ? "false" : "true";
-      }
-      updateLlamaIndicator(statusPayload);
-      if (appState.modelSwitcherOpen) populateModelSwitcher();
-      renderDownloadPrompt(statusPayload);
-      renderCompatibilityWarnings(statusPayload);
-      renderLlamaRuntimeStatus(statusPayload);
-      renderSystemRuntime(statusPayload?.system);
-      renderSettingsWorkspace(statusPayload);
-      renderUploadState(statusPayload);
-      setSendEnabled();
-    }
-
-    async function pollStatus(options = {}) {
-      const timeoutMs = Math.max(500, Number(options?.timeoutMs || STATUS_POLL_TIMEOUT_MS));
-      const seq = ++appState.statusPollSeq;
-      const controller = new AbortController();
-      const timeoutHandle = window.setTimeout(() => {
-        controller.abort();
-      }, timeoutMs);
-      try {
-        const res = await fetch("/status", { cache: "no-store", signal: controller.signal });
-        const body = await res.json();
-        if (seq < appState.statusPollAppliedSeq) {
-          return appState.latestStatus;
-        }
-        appState.statusPollAppliedSeq = seq;
-        setStatus(body);
-        return body;
-      } catch (err) {
-        if (seq < appState.statusPollAppliedSeq) {
-          return appState.latestStatus;
-        }
-        appState.statusPollAppliedSeq = seq;
-        const statusErrText = err?.name === "AbortError" ? "request timeout" : String(err);
-        if (appState.latestStatus && typeof appState.latestStatus === "object" && appState.latestStatus.state && appState.latestStatus.state !== "DOWN") {
-          document.getElementById("statusText").textContent = `Status warning: ${statusErrText}`;
-          renderStatusActions({});
-          return appState.latestStatus;
-        }
-        appState.latestStatus = {
-          state: "DOWN",
-          model_present: false,
-          model: { filename: "Unknown model", active_model_id: null },
-          models: [],
-          download: {
-            percent: 0,
-            bytes_downloaded: 0,
-            bytes_total: 0,
-            active: false,
-            auto_start_seconds: 0,
-            auto_start_remaining_seconds: 0,
-            countdown_enabled: true,
-            current_model_id: null,
-          },
-          upload: {
-            active: false,
-            model_id: null,
-            bytes_total: 0,
-            bytes_received: 0,
-            percent: 0,
-            error: null,
-          },
-          compatibility: {
-            device_class: "unknown",
-            large_model_warn_threshold_bytes: 0,
-            warnings: [],
-          },
-          llama_runtime: {
-            current: {
-              install_dir: "",
-              exists: false,
-              has_server_binary: false,
-              source_bundle_path: null,
-              source_bundle_name: null,
-              profile: null,
-            },
-            available_bundles: [],
-            switch: {
-              active: false,
-              target_bundle_path: null,
-              error: null,
-            },
-          },
-          system: {
-            available: false,
-            cpu_percent: null,
-            cpu_cores_percent: [],
-            cpu_clock_arm_hz: null,
-            memory_total_bytes: 0,
-            memory_used_bytes: 0,
-            memory_percent: null,
-            swap_total_bytes: 0,
-            swap_used_bytes: 0,
-            swap_percent: null,
-            temperature_c: null,
-            gpu_clock_core_hz: null,
-            gpu_clock_v3d_hz: null,
-            updated_at_unix: null,
-            throttling: { any_current: false, current_flags: [], history_flags: [] },
-          },
-        };
-        document.getElementById("statusText").textContent = `Status error: ${statusErrText}`;
-        renderStatusActions({});
-        const modelNameField = document.getElementById("modelName");
-        if (modelNameField) {
-          modelNameField.textContent = "Unknown model (status unavailable)";
-        }
-        updateLlamaIndicator(appState.latestStatus);
-        renderDownloadPrompt(appState.latestStatus);
-        renderCompatibilityWarnings(appState.latestStatus);
-        renderSystemRuntime(appState.latestStatus.system);
-        renderSettingsWorkspace(appState.latestStatus);
-        renderUploadState(appState.latestStatus);
-        setSendEnabled();
-        return appState.latestStatus;
-      } finally {
-        window.clearTimeout(timeoutHandle);
-      }
-    }
-
-    function toggleTheme() {
-      const current = document.documentElement.getAttribute("data-theme") || defaultSettings.theme;
-      const next = current === "dark" ? "light" : "dark";
-      applyTheme(next);
-      saveSettings({ theme: next });
-    }
-
-    bindSettings();
     bindSettingsModal();
     bindEditModal();
-    bindMobileSidebar();
     bindMessagesScroller();
-    setRuntimeDetailsExpanded(true);
     registerAppendMessage(appendMessage);
     registerOpenEditMessageModal(openEditMessageModal);
     registerImageUiCallbacks({
@@ -1111,66 +866,10 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       focusPromptInput, pollStatus,
     });
     initSessionManager().catch(() => {});
-    setInterval(() => {
-      if (appState.settingsModalOpen) return;
-      pollStatus();
-    }, 2000);
-    pollStatus();
 
-    document.getElementById("statusBadge").addEventListener("click", (event) => {
-      event.stopPropagation();
-      toggleModelSwitcher();
-    });
-    document.getElementById("statusBadge").addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleModelSwitcher();
-      }
-    });
-    function activateSwitcherItem(item) {
-      if (!item) return;
-      if (item.classList.contains("disabled")) return;
-      if (item.classList.contains("active")) {
-        closeModelSwitcher();
-        return;
-      }
-      const modelId = item.dataset.modelId;
-      if (modelId) {
-        closeModelSwitcher();
-        activateSelectedModel(modelId);
-      }
-    }
-    document.getElementById("modelSwitcherList").addEventListener("click", (event) => {
-      activateSwitcherItem(event.target.closest(".model-switcher-item"));
-    });
-    document.getElementById("modelSwitcher").addEventListener("keydown", (event) => {
-      const list = document.getElementById("modelSwitcherList");
-      if (!list) return;
-      const items = Array.from(list.querySelectorAll(".model-switcher-item"));
-      if (items.length === 0) return;
-      const focused = list.querySelector(".model-switcher-item.focused");
-      const idx = focused ? items.indexOf(focused) : -1;
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        const next = event.key === "ArrowDown"
-          ? (idx + 1) % items.length
-          : (idx - 1 + items.length) % items.length;
-        if (focused) focused.classList.remove("focused");
-        items[next].classList.add("focused");
-        items[next].scrollIntoView({ block: "nearest" });
-      } else if (event.key === "Enter") {
-        event.preventDefault();
-        if (focused) activateSwitcherItem(focused);
-      }
-    });
-    document.addEventListener("click", (event) => {
-      if (!appState.modelSwitcherOpen) return;
-      const anchor = document.querySelector(".model-switcher-anchor");
-      if (anchor && !anchor.contains(event.target)) {
-        closeModelSwitcher();
-      }
-    });
+    // Model switcher — shell owns the DOM bindings, chat provides the activate callback
+    bindModelSwitcher(activateSelectedModel);
+
     document.getElementById("newChatBtn").addEventListener("click", () => startNewChat());
     document.getElementById("deleteAllChatsBtn").addEventListener("click", () => {
       if (!window.confirm("Delete all chats? This cannot be undone.")) return;
@@ -1188,19 +887,6 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
         loadSessionIntoView(item.dataset.sessionId);
         if (isMobileSidebarViewport()) setSidebarOpen(false);
       }
-    });
-    document.getElementById("themeToggle").addEventListener("click", toggleTheme);
-    document.getElementById("sidebarToggle").addEventListener("click", () => {
-      setSidebarOpen(!document.body.classList.contains("sidebar-open"));
-    });
-    document.getElementById("sidebarCloseBtn").addEventListener("click", () => {
-      setSidebarOpen(false);
-    });
-    document.getElementById("sidebarBackdrop").addEventListener("click", () => {
-      setSidebarOpen(false);
-    });
-    document.getElementById("runtimeViewToggle").addEventListener("click", () => {
-      setRuntimeDetailsExpanded(!appState.runtimeDetailsExpanded);
     });
     document.getElementById("startDownloadBtn").addEventListener("click", startModelDownload);
     document.getElementById("statusResumeDownloadBtn").addEventListener("click", startModelDownload);
@@ -1278,3 +964,4 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
 
     // Expose select functions for Playwright test access
     window.appendMessage = appendMessage;
+}
