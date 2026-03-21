@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Potato OS icon</title>
+  <desc id="desc">A cheerful potato illustration on a warm yellow background.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f8d36b"/>
+      <stop offset="100%" stop-color="#f2a93b"/>
+    </linearGradient>
+    <linearGradient id="potato" x1="0.2" y1="0.1" x2="0.8" y2="0.9">
+      <stop offset="0%" stop-color="#c68a47"/>
+      <stop offset="100%" stop-color="#8f5a2d"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <ellipse cx="128" cy="138" rx="76" ry="92" fill="url(#potato)" transform="rotate(-10 128 138)"/>
+  <ellipse cx="104" cy="104" rx="10" ry="12" fill="#70431f"/>
+  <ellipse cx="149" cy="98" rx="10" ry="12" fill="#70431f"/>
+  <circle cx="104" cy="104" r="3" fill="#fff7df"/>
+  <circle cx="149" cy="98" r="3" fill="#fff7df"/>
+  <path d="M104 151c11 11 33 12 47 1" fill="none" stroke="#6b3d1b" stroke-linecap="round" stroke-width="8"/>
+  <circle cx="84" cy="146" r="6" fill="#a46a35"/>
+  <circle cx="165" cy="142" r="5" fill="#a46a35"/>
+  <circle cx="121" cy="72" r="5" fill="#d9a160" opacity="0.9"/>
+  <circle cx="136" cy="171" r="4" fill="#d9a160" opacity="0.9"/>
+</svg>

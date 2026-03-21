@@ -372,3 +372,15 @@ def test_gitignore_excludes_large_artifacts_and_model_downloads():
     assert ".cache/pi-gen-arm64/" in ignore
 
 
+def test_web_favicon_exists_and_html_wires_it():
+    favicon_path = WEB_ASSETS_DIR / "favicon.svg"
+    assert favicon_path.exists(), "app/assets/favicon.svg must exist"
+
+    assert '<link rel="icon"' in CHAT_HTML
+    assert 'href="/assets/favicon.svg"' in CHAT_HTML
+
+    imager_icon = Path("bin/assets/potato-imager-icon.svg").read_text(encoding="utf-8")
+    assert favicon_path.read_text(encoding="utf-8") == imager_icon, (
+        "web favicon should match bin/assets/potato-imager-icon.svg"
+    )
+
