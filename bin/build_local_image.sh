@@ -318,9 +318,12 @@ else
   collect_variant_bundle "${VARIANT}"
 fi
 
-if [ "${POST_CLEANUP}" = "1" ]; then
-  echo "[potato-local-build] Running post-build Docker cleanup..."
-  "${REPO_ROOT}/bin/clean_image_build_artifacts.sh" --docker-prune --yes
+if [ "${POST_CLEANUP}" = "1" ] && has_cmd docker; then
+  echo "[potato-local-build] Pruning stale Docker artifacts (older than 24h)..."
+  docker image prune --force --filter "until=24h" 2>/dev/null || true
+  docker builder prune --force --filter "until=24h" 2>/dev/null || true
+  docker volume prune --force 2>/dev/null || true
+  echo "[potato-local-build] Docker post-cleanup complete."
 fi
 
 echo "[potato-local-build] Done."

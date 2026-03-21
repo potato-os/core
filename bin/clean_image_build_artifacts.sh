@@ -122,10 +122,11 @@ cleanup_docker_artifacts() {
     return
   fi
 
-  printf '[potato-image-clean] Pruning unused Docker images, build cache, and volumes (older than 24h)...\n'
+  printf '[potato-image-clean] Pruning unused Docker images, build cache, and volumes...\n'
   docker image prune --force --filter "until=24h" 2>/dev/null || true
   docker builder prune --force --filter "until=24h" 2>/dev/null || true
-  docker volume prune --force --filter "until=24h" 2>/dev/null || true
+  # volume prune does not support --filter "until=...", so prune all unused volumes
+  docker volume prune --force 2>/dev/null || true
   printf '[potato-image-clean] Docker artifact prune complete.\n'
 }
 

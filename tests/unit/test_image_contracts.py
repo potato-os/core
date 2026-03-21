@@ -81,9 +81,11 @@ def test_local_image_build_script_collects_artifacts_for_flash_test():
     assert "Remove them before build? [y/N]:" in script
     assert "CLEAN_ARTIFACTS_MODE" in script
 
-    # Post-cleanup support (#112)
+    # Post-cleanup support (#112) — runs Docker prune directly, not via cleanup script
     assert "--post-cleanup" in script
-    assert "clean_image_build_artifacts.sh" in script
+    assert "docker image prune" in script
+    assert "docker builder prune" in script
+    assert "docker volume prune" in script
 
 
 def test_publish_image_release_script_validates_bundle_and_creates_release():
