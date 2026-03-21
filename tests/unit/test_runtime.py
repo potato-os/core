@@ -720,3 +720,27 @@ def test_cpu_load_power_estimate_pi5_returns_unavailable():
 def test_cpu_load_power_estimate_unknown_device_returns_unavailable():
     result = _estimate_power_from_cpu_load(cpu_percent=50.0, device_class="unknown")
     assert result["available"] is False
+
+
+def test_pi4_power_calibration_defaults_differ_from_pi5(monkeypatch):
+    from app.runtime_state import (
+        POWER_CALIBRATION_DEFAULT_A,
+        POWER_CALIBRATION_DEFAULT_B,
+        POWER_CALIBRATION_DEFAULT_A_PI4,
+        POWER_CALIBRATION_DEFAULT_B_PI4,
+        _get_power_calibration_default_coefficients,
+    )
+    monkeypatch.delenv("POTATO_POWER_ESTIMATE_ADJUST_A", raising=False)
+    monkeypatch.delenv("POTATO_POWER_ESTIMATE_ADJUST_B", raising=False)
+
+    # Pi 4: uses Pi 4 coefficients
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    a, b = _get_power_calibration_default_coefficients()
+    assert a == pytest.approx(POWER_CALIBRATION_DEFAULT_A_PI4)
+    assert b == pytest.approx(POWER_CALIBRATION_DEFAULT_B_PI4)
+
+    # Pi 5: uses Pi 5 coefficients
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    a, b = _get_power_calibration_default_coefficients()
+    assert a == pytest.approx(POWER_CALIBRATION_DEFAULT_A)
+    assert b == pytest.approx(POWER_CALIBRATION_DEFAULT_B)

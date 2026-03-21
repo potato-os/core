@@ -31,6 +31,8 @@ LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT = 5 * 1024 * 1024 * 1024
 LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME = ".potato-llama-runtime-bundle.json"
 POWER_CALIBRATION_DEFAULT_A = 1.260204
 POWER_CALIBRATION_DEFAULT_B = 0.704251
+POWER_CALIBRATION_DEFAULT_A_PI4 = 1.367883
+POWER_CALIBRATION_DEFAULT_B_PI4 = -1.277200
 POWER_CALIBRATION_MAX_SAMPLES = 64
 THROTTLE_FLAG_BITS = {
     0: "Undervoltage",
@@ -341,9 +343,16 @@ def _get_power_calibration_default_coefficients() -> tuple[float, float]:
                 b = parsed_b
         except (TypeError, ValueError):
             b = None
+    device_class = classify_runtime_device(pi_model_name=_read_pi_device_model_name())
+    if device_class.startswith("pi4-"):
+        default_a = POWER_CALIBRATION_DEFAULT_A_PI4
+        default_b = POWER_CALIBRATION_DEFAULT_B_PI4
+    else:
+        default_a = POWER_CALIBRATION_DEFAULT_A
+        default_b = POWER_CALIBRATION_DEFAULT_B
     return (
-        a if a is not None else POWER_CALIBRATION_DEFAULT_A,
-        b if b is not None else POWER_CALIBRATION_DEFAULT_B,
+        a if a is not None else default_a,
+        b if b is not None else default_b,
     )
 
 
