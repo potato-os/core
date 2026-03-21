@@ -104,6 +104,16 @@ def test_higher_patch_is_newer():
     assert is_newer("0.4.1", "0.4.0") is True
 
 
+def test_short_tag_release_beats_pre_alpha_of_same_base():
+    # v0.3 (two-part tag) should beat 0.3.0-pre-alpha (three-part pre-release)
+    assert is_newer("0.3", "0.3.0-pre-alpha") is True
+
+
+def test_short_tag_equal_to_padded_release():
+    # v0.3 and 0.3.0 are the same version — not newer
+    assert is_newer("0.3", "0.3.0") is False
+
+
 # ---------------------------------------------------------------------------
 # read_update_state
 # ---------------------------------------------------------------------------
@@ -130,6 +140,11 @@ def test_read_update_state_returns_dict_on_valid(runtime):
 
 def test_read_update_state_none_on_corrupt_json(runtime):
     runtime.update_state_path.write_text("not json{{{", encoding="utf-8")
+    assert read_update_state(runtime) is None
+
+
+def test_read_update_state_none_on_non_dict_json(runtime):
+    runtime.update_state_path.write_text("[]", encoding="utf-8")
     assert read_update_state(runtime) is None
 
 
@@ -185,6 +200,43 @@ def test_build_update_status_with_error_in_state(runtime):
     result = build_update_status(runtime)
     assert result["available"] is False
     assert result["progress"]["error"] == "rate_limited"
+
+
+def test_build_update_status_recomputes_availability_from_live_version(runtime, monkeypatch):
+    """After upgrading, stale state should not report a phantom update."""
+    state = {
+        "available": True,
+        "current_version": "0.3.6-pre-alpha",
+        "latest_version": "0.4.0",
+        "release_notes": "notes",
+        "release_url": None,
+        "tarball_url": None,
+        "checked_at_unix": 1711000000,
+        "error": None,
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    # Simulate the app now running 0.4.0 (upgraded)
+    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+    result = build_update_status(runtime)
+    assert result["available"] is False
+    assert result["current_version"] == "0.4.0"
+
+
+def test_build_update_status_uses_live_version_not_cached(runtime, monkeypatch):
+    state = {
+        "available": False,
+        "current_version": "0.3.6-pre-alpha",
+        "latest_version": "0.5.0",
+        "checked_at_unix": 1711000000,
+        "error": None,
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    # State was written by old build that thought 0.5.0 wasn't newer (bug).
+    # Live version is still old — should recompute as available.
+    monkeypatch.setattr("app.update_state.__version__", "0.3.6-pre-alpha")
+    result = build_update_status(runtime)
+    assert result["available"] is True
+    assert result["current_version"] == "0.3.6-pre-alpha"
 
 
 def test_build_update_status_deferred_when_download_active(runtime):

@@ -52,10 +52,19 @@ def parse_version(version_str: str) -> tuple[tuple[int, ...], str]:
     return (tuple(nums), suffix)
 
 
+def _pad_tuple(t: tuple[int, ...], length: int) -> tuple[int, ...]:
+    return t + (0,) * (length - len(t))
+
+
 def is_newer(latest: str, current: str) -> bool:
     """Return True if *latest* is strictly newer than *current*."""
     latest_nums, latest_suffix = parse_version(latest)
     current_nums, current_suffix = parse_version(current)
+
+    # Normalize length so (0,3) and (0,3,0) compare equal.
+    max_len = max(len(latest_nums), len(current_nums))
+    latest_nums = _pad_tuple(latest_nums, max_len)
+    current_nums = _pad_tuple(current_nums, max_len)
 
     if latest_nums != current_nums:
         return latest_nums > current_nums
@@ -75,7 +84,10 @@ def read_update_state(runtime: RuntimeConfig) -> dict[str, Any] | None:
     if not runtime.update_state_path.exists():
         return None
     try:
-        return json.loads(runtime.update_state_path.read_text(encoding="utf-8"))
+        data = json.loads(runtime.update_state_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        return data
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -113,10 +125,13 @@ def build_update_status(runtime: RuntimeConfig) -> dict[str, Any]:
             "progress": {"phase": None, "percent": 0, "error": None},
         }
 
+    latest_version = state.get("latest_version")
+    available = is_newer(latest_version, __version__) if latest_version else False
+
     return {
-        "available": bool(state.get("available", False)),
-        "current_version": state.get("current_version", __version__),
-        "latest_version": state.get("latest_version"),
+        "available": available,
+        "current_version": __version__,
+        "latest_version": latest_version,
         "release_notes": state.get("release_notes"),
         "checked_at_unix": state.get("checked_at_unix"),
         "state": "idle",
