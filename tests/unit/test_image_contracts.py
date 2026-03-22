@@ -191,7 +191,7 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "--icon" in common
     assert "potato-imager-icon.svg" in common
     assert "potato-${variant}.rpi-imager-manifest" in common
-    assert "Potato OS (${variant}, Raspberry Pi 4 / 5)" in common
+    assert "Potato OS — Local AI, No Cloud" in common
     assert "uv run --script" in all_in_one
     assert "--variant" in uv_script
     assert "https://github.com/RPi-Distro/pi-gen.git" in uv_script
