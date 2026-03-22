@@ -8,9 +8,13 @@ Experimental Raspberry Pi Linux mod with optimised local LLM inference. Runs qua
 
 *Potato sold separately.*
 
-<p align="center"><img src="docs/assets/demo-chat.gif" alt="Potato OS demo — Qwen3-30B generating code on Raspberry Pi 5" width="100%"></p>
-
 **Supports Raspberry Pi 5 (8 GB / 16 GB) and Raspberry Pi 4 (8 GB).** Pi 5 is the recommended target (~8 tok/sec). Pi 4 works but expect roughly 1/4 of the speed.
+
+> **30B model. Raspberry Pi. No cloud. Yes, really.**
+>
+> Qwen3-30B-A3B running on a Pi 5 (8 GB) with an SSD — deliberately pushed to thermal throttling to show worst-case performance.
+
+<p align="center"><img src="docs/assets/demo-chat.gif" alt="Potato OS demo — Qwen3-30B running on Raspberry Pi 5" width="100%"></p>
 
 **Runtime:** [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (IQK-optimised, Pi 5) + upstream [llama.cpp](https://github.com/ggerganov/llama.cpp) (Pi 4 / Pi 5) | **Default model:** Qwen3.5-2B (Pi 5), Qwen3.5-0.8B (Pi 4)
 
