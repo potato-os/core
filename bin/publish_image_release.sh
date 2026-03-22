@@ -104,7 +104,7 @@ MANIFEST_PATH="${STAGING}/${MANIFEST_NAME}"
 python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
   --image "${IMAGE_FILE}" \
   --output "${MANIFEST_PATH}" \
-  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 5)" \
+  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 4 / 5)" \
   --icon "${ICON_URL}" \
   --download-url "${IMAGE_URL}" \
   || die "Manifest generation failed"
@@ -163,14 +163,14 @@ done
 RELEASE_NOTES="$(cat <<NOTES
 ## Potato OS ${VERSION}
 
-Local AI chat on Raspberry Pi 5 — zero cloud dependency.
+Local AI chat on Raspberry Pi 4 / 5 — zero cloud dependency.
 
 | Field | Value |
 |-------|-------|
 | Version | \`${APP_VERSION}\` |
 | Variant | ${VARIANT} |
 | Image | \`${IMAGE_NAME}\` |
-| Device | Raspberry Pi 5 (8 GB / 16 GB) |
+| Device | Raspberry Pi 4 (8 GB) / Raspberry Pi 5 (8 GB / 16 GB) |
 
 ### Flash with Raspberry Pi Imager
 
@@ -181,7 +181,7 @@ Local AI chat on Raspberry Pi 5 — zero cloud dependency.
    ${DOWNLOAD_BASE}/${MANIFEST_NAME}
    \`\`\`
 4. Click **Apply & Restart**
-5. Select **Potato OS (${VARIANT}, Raspberry Pi 5)** and flash
+5. Select **Potato OS** and flash
 
 ### Direct download
 
@@ -193,6 +193,14 @@ Verify checksum:
 \`\`\`bash
 sha256sum -c SHA256SUMS
 \`\`\`
+
+### Pi 4 support
+
+Same image boots on both Pi 4 and Pi 5. On Pi 4:
+- Runtime: llama.cpp universal (auto-selects armv8.0 backend)
+- Default model: Qwen3.5-0.8B (~5 tok/sec)
+- Tested on Pi 4 Model B Rev 1.4 (8 GB), SD card only
+- Thermal throttling observed without active cooling
 NOTES
 )"
 
@@ -236,7 +244,7 @@ STABLE_MANIFEST="${STAGING}/${MANIFEST_NAME}"
 python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
   --image "${IMAGE_FILE}" \
   --output "${STABLE_MANIFEST}" \
-  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 5)" \
+  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 4 / 5)" \
   --icon "${STABLE_BASE}/potato-imager-icon.svg" \
   --download-url "${IMAGE_URL}" \
   || die "Stable manifest generation failed"
