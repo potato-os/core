@@ -8,7 +8,7 @@ Experimental Raspberry Pi Linux mod with optimised local LLM inference. Runs qua
 
 *Potato sold separately.*
 
-![Potato OS demo — Qwen3-30B generating code on Raspberry Pi 5](docs/assets/demo-chat.gif)
+<p align="center"><img src="docs/assets/demo-chat.gif" alt="Potato OS demo — Qwen3-30B generating code on Raspberry Pi 5" width="100%"></p>
 
 **Supports Raspberry Pi 5 (8 GB / 16 GB) and Raspberry Pi 4 (8 GB).** Pi 5 is the recommended target (~8 tok/sec). Pi 4 works but expect roughly 1/4 of the speed.
 
