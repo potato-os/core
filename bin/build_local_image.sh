@@ -2,6 +2,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/branding.sh
+source "${REPO_ROOT}/bin/lib/branding.sh"
+# shellcheck source=lib/build_helpers.sh
+source "${REPO_ROOT}/bin/lib/build_helpers.sh"
 OUTPUT_DIR="${POTATO_IMAGE_OUTPUT_DIR:-${REPO_ROOT}/output/images}"
 VARIANT="lite"
 NO_UPDATE_PI_GEN=1
@@ -92,18 +96,8 @@ maybe_clean_output_artifacts() {
   esac
 }
 
-sha256_line() {
-  local file_path="$1"
-  if has_cmd sha256sum; then
-    sha256sum "${file_path}"
-    return
-  fi
-  if has_cmd shasum; then
-    shasum -a 256 "${file_path}"
-    return
-  fi
-  die "Missing sha256 utility (sha256sum or shasum)"
-}
+# SHA256 via shared helper (potato_sha256 from build_helpers.sh)
+sha256_line() { potato_sha256 "$1"; }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -252,13 +246,9 @@ collect_variant_bundle() {
   printf '%s  %s\n' "${actual_sha}" "${image_name}" > "${bundle_dir}/SHA256SUMS"
 
   local imager_manifest="${bundle_dir}/potato-${target_variant}.rpi-imager-manifest"
-  cp -f "${REPO_ROOT}/bin/assets/potato-imager-icon.svg" "${bundle_dir}/potato-imager-icon.svg"
+  cp -f "${REPO_ROOT}/bin/assets/${POTATO_ICON_FILENAME}" "${bundle_dir}/${POTATO_ICON_FILENAME}"
   echo "[potato-local-build] Generating Raspberry Pi Imager manifest (this may take a minute)..."
-  python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
-    --image "${bundle_dir}/${image_name}" \
-    --output "${imager_manifest}" \
-    --name "Potato OS (${target_variant}, Raspberry Pi 4 / 5)" \
-    --icon "${bundle_dir}/potato-imager-icon.svg" \
+  generate_potato_manifest "${bundle_dir}/${image_name}" "${imager_manifest}" "${bundle_dir}/${POTATO_ICON_FILENAME}" "${target_variant}" \
     || die "Manifest generation failed for ${bundle_dir}/${image_name}"
 
   local image_size_bytes
@@ -296,10 +286,10 @@ Generated at: ${timestamp}
 3. Choose \`Use custom file\`.
 4. Select: \`potato-${target_variant}.rpi-imager-manifest\`.
 5. Click \`Apply & Restart\`.
-6. Select \`Potato OS (${target_variant}, Raspberry Pi 4 / 5)\` and flash.
+6. Select **${POTATO_PROJECT_NAME}** and flash.
 
 ## Important
-- This bundle supports Raspberry Pi 4 (8 GB) and Pi 5 (8 GB / 16 GB).
+- This bundle supports ${POTATO_DEVICE_LABEL}.
 - Do not use \`METADATA.json\` or \`potato-${target_variant}-build-info.json\` in Imager.
 
 ## Files

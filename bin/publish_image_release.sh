@@ -13,6 +13,10 @@ set -euo pipefail
 #   ./bin/publish_image_release.sh --version v0.3 --dry-run
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/branding.sh
+source "${REPO_ROOT}/bin/lib/branding.sh"
+# shellcheck source=lib/build_helpers.sh
+source "${REPO_ROOT}/bin/lib/build_helpers.sh"
 GITHUB_REPO="${POTATO_GITHUB_REPO:-slomin/potato-os}"
 
 VERSION=""
@@ -101,12 +105,7 @@ STAGING="$(mktemp -d)"
 trap 'rm -rf "${STAGING}"' EXIT
 
 MANIFEST_PATH="${STAGING}/${MANIFEST_NAME}"
-python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
-  --image "${IMAGE_FILE}" \
-  --output "${MANIFEST_PATH}" \
-  --name "Potato OS ${VERSION} (${VARIANT}) — Local AI, No Cloud" \
-  --icon "${ICON_URL}" \
-  --download-url "${IMAGE_URL}" \
+generate_potato_manifest "${IMAGE_FILE}" "${MANIFEST_PATH}" "${ICON_URL}" "${VARIANT}" "${VERSION}" "${IMAGE_URL}" \
   || die "Manifest generation failed"
 
 printf '\n'
@@ -151,14 +150,7 @@ if gh release view "${VERSION}" --repo "${GITHUB_REPO}" >/dev/null 2>&1; then
 fi
 
 # ── Resolve push remote ────────────────────────────────────────────────
-PUSH_REMOTE=""
-for _remote in $(git remote 2>/dev/null); do
-  _remote_url="$(git remote get-url "${_remote}" 2>/dev/null || true)"
-  if printf '%s' "${_remote_url}" | grep -q "${GITHUB_REPO}"; then
-    PUSH_REMOTE="${_remote}"
-    break
-  fi
-done
+PUSH_REMOTE="$(find_github_remote "${GITHUB_REPO}")"
 
 RELEASE_NOTES="$(cat <<NOTES
 ## Potato OS ${VERSION}
@@ -241,12 +233,7 @@ STABLE_BASE="https://github.com/${GITHUB_REPO}/releases/download/${STABLE_TAG}"
 
 # Regenerate manifest with download URLs pointing at the versioned release assets
 STABLE_MANIFEST="${STAGING}/${MANIFEST_NAME}"
-python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
-  --image "${IMAGE_FILE}" \
-  --output "${STABLE_MANIFEST}" \
-  --name "Potato OS ${VERSION} (${VARIANT}) — Local AI, No Cloud" \
-  --icon "${STABLE_BASE}/potato-imager-icon.svg" \
-  --download-url "${IMAGE_URL}" \
+generate_potato_manifest "${IMAGE_FILE}" "${STABLE_MANIFEST}" "${STABLE_BASE}/${POTATO_ICON_FILENAME}" "${VARIANT}" "${VERSION}" "${IMAGE_URL}" \
   || die "Stable manifest generation failed"
 
 printf '\nUpdating stable pointer release...\n'

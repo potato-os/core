@@ -69,12 +69,9 @@ def test_local_image_build_script_collects_artifacts_for_flash_test():
     assert 'cat > "${bundle_dir}/README.md"' in script
     assert "Use In Raspberry Pi Imager" in script
     assert "Content Repository" in script
-    assert "generate_imager_manifest.py" in script
+    assert "generate_potato_manifest" in script
     assert ".rpi-imager-manifest" in script
-    assert "Raspberry Pi 4 / 5" in script
-    assert "python3" in script
-    assert "--icon" in script
-    assert "potato-imager-icon.svg" in script
+    assert "POTATO_ICON_FILENAME" in script
     assert "--clean-artifacts <mode>" in script
     assert "--clean-artifacts-yes" in script
     assert "--clean-artifacts-no" in script
@@ -98,11 +95,9 @@ def test_publish_image_release_script_validates_bundle_and_creates_release():
     assert "--variant" in script
     assert "--dry-run" in script
     assert "gh release create" in script
-    assert "generate_imager_manifest.py" in script
-    assert "--download-url" in script
-    assert "--icon" in script
+    assert "generate_potato_manifest" in script
     assert "github.com/${GITHUB_REPO}/releases/download/${VERSION}" in script
-    assert "potato-imager-icon.svg" in script
+    assert "POTATO_ICON_FILENAME" in script
     assert "SHA256SUMS" in script
     assert ".rpi-imager-manifest" in script
     assert "Raspberry Pi Imager" in script
@@ -187,11 +182,10 @@ def test_image_build_scripts_exist_for_lite_and_full_variants():
     assert "POTATO_IMAGE_OUTPUT_DIR" in common
     assert "potato-lite" in common
     assert "potato-full" in common
-    assert "generate_imager_manifest.py" in common
-    assert "--icon" in common
-    assert "potato-imager-icon.svg" in common
+    assert "generate_potato_manifest" in common
+    assert "POTATO_ICON_FILENAME" in common
     assert "potato-${variant}.rpi-imager-manifest" in common
-    assert "Local AI, No Cloud" in common
+    assert "branding.sh" in common
     assert "uv run --script" in all_in_one
     assert "--variant" in uv_script
     assert "https://github.com/RPi-Distro/pi-gen.git" in uv_script

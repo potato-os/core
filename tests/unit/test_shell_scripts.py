@@ -843,6 +843,85 @@ def test_publish_image_release_notes_template_supports_pi4():
     )
 
 
+def test_branding_constants_defined():
+    """branding.sh must define all shared branding and device constants."""
+    branding = REPO_ROOT / "bin" / "lib" / "branding.sh"
+    assert branding.exists(), "bin/lib/branding.sh must exist"
+    text = branding.read_text(encoding="utf-8")
+
+    for var in ("POTATO_PROJECT_NAME", "POTATO_IMAGER_TAGLINE", "POTATO_IMAGER_DESCRIPTION",
+                "POTATO_SUPPORTED_DEVICE_TAGS", "POTATO_ICON_FILENAME"):
+        assert f'{var}=' in text, f"branding.sh must define {var}"
+
+
+def test_build_helpers_defines_shared_functions():
+    """build_helpers.sh must define generate_potato_manifest, potato_sha256, and find_github_remote."""
+    helpers = REPO_ROOT / "bin" / "lib" / "build_helpers.sh"
+    assert helpers.exists(), "bin/lib/build_helpers.sh must exist"
+    text = helpers.read_text(encoding="utf-8")
+
+    for fn in ("generate_potato_manifest", "potato_sha256", "find_github_remote"):
+        assert f"{fn}()" in text, f"build_helpers.sh must define {fn}()"
+
+
+def test_manifest_scripts_use_shared_branding():
+    """All scripts that generate manifests must source branding.sh and not hardcode the tagline."""
+    for script_path in (
+        REPO_ROOT / "bin" / "publish_image_release.sh",
+        REPO_ROOT / "bin" / "build_local_image.sh",
+        REPO_ROOT / "image" / "lib" / "common.sh",
+    ):
+        script = script_path.read_text(encoding="utf-8")
+        assert "branding.sh" in script, (
+            f"{script_path.name} must source branding.sh"
+        )
+        # Must not hardcode the tagline directly — use the variable or the shared function
+        assert '"Local AI, No Cloud"' not in script, (
+            f"{script_path.name} hardcodes tagline — must use POTATO_IMAGER_TAGLINE variable"
+        )
+
+
+def test_manifest_scripts_use_shared_generate_function():
+    """Scripts that generate manifests must call generate_potato_manifest, not call Python directly."""
+    for script_path in (
+        REPO_ROOT / "bin" / "publish_image_release.sh",
+        REPO_ROOT / "bin" / "build_local_image.sh",
+        REPO_ROOT / "image" / "lib" / "common.sh",
+    ):
+        script = script_path.read_text(encoding="utf-8")
+        assert "build_helpers.sh" in script, (
+            f"{script_path.name} must source build_helpers.sh"
+        )
+        assert "generate_potato_manifest" in script, (
+            f"{script_path.name} must use generate_potato_manifest function"
+        )
+
+
+def test_publish_scripts_use_shared_git_remote():
+    """Publish scripts must use find_github_remote from build_helpers.sh."""
+    for script_path in (
+        REPO_ROOT / "bin" / "publish_image_release.sh",
+        REPO_ROOT / "bin" / "publish_runtime.sh",
+    ):
+        script = script_path.read_text(encoding="utf-8")
+        assert "find_github_remote" in script, (
+            f"{script_path.name} must use find_github_remote from build_helpers.sh"
+        )
+
+
+def test_sha256_not_duplicated_across_scripts():
+    """SHA256 logic must live in build_helpers.sh, not be reimplemented in each script."""
+    for script_path in (
+        REPO_ROOT / "bin" / "build_local_image.sh",
+        REPO_ROOT / "image" / "lib" / "common.sh",
+    ):
+        script = script_path.read_text(encoding="utf-8")
+        # Scripts should call potato_sha256, not define their own sha256 function
+        assert "potato_sha256" in script or "sha256_file" not in script, (
+            f"{script_path.name} defines its own SHA256 function — use potato_sha256 from build_helpers.sh"
+        )
+
+
 def test_vision_e2e_script_exercises_multimodal_requests():
     script = (REPO_ROOT / "tests" / "e2e" / "vision_multi_image_pi.sh").read_text(encoding="utf-8")
 

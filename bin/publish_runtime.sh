@@ -9,6 +9,8 @@ set -euo pipefail
 #   ./bin/publish_runtime.sh --family ik_llama --dry-run
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/build_helpers.sh
+source "${REPO_ROOT}/bin/lib/build_helpers.sh"
 GITHUB_REPO="${POTATO_GITHUB_REPO:-slomin/potato-os}"
 DEFAULT_SLOT_ROOT="${REPO_ROOT}/references/old_reference_design/llama_cpp_binary/runtimes"
 
@@ -122,14 +124,7 @@ fi
 # Resolve the git remote that matches the target GitHub repo.
 # If no remote matches, skip git push — gh release create will
 # create the tag on the target repo automatically.
-PUSH_REMOTE=""
-for _remote in $(git remote 2>/dev/null); do
-  _remote_url="$(git remote get-url "${_remote}" 2>/dev/null || true)"
-  if printf '%s' "${_remote_url}" | grep -q "${GITHUB_REPO}"; then
-    PUSH_REMOTE="${_remote}"
-    break
-  fi
-done
+PUSH_REMOTE="$(find_github_remote "${GITHUB_REPO}")"
 
 git tag "${TAG_NAME}" 2>/dev/null || true
 if [ -n "${PUSH_REMOTE}" ]; then

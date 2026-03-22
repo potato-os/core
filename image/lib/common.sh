@@ -19,31 +19,29 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"
 }
 
-sha256_file() {
-  local path="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "${path}"
-    return
-  fi
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "${path}"
-    return
-  fi
-  die "Missing sha256 utility (sha256sum or shasum)"
-}
-
 resolve_repo_root() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   cd "${script_dir}/../.." && pwd
 }
 
-# Source shared release download helpers
+# Source shared helpers
 _common_repo_root="$(resolve_repo_root)"
+if [ -f "${_common_repo_root}/bin/lib/branding.sh" ]; then
+  # shellcheck source=../../bin/lib/branding.sh
+  source "${_common_repo_root}/bin/lib/branding.sh"
+fi
+if [ -f "${_common_repo_root}/bin/lib/build_helpers.sh" ]; then
+  # shellcheck source=../../bin/lib/build_helpers.sh
+  source "${_common_repo_root}/bin/lib/build_helpers.sh"
+fi
 if [ -f "${_common_repo_root}/bin/lib/runtime_release.sh" ]; then
   # shellcheck source=../../bin/lib/runtime_release.sh
   source "${_common_repo_root}/bin/lib/runtime_release.sh"
 fi
+
+# SHA256 via shared helper (potato_sha256 from build_helpers.sh), keep legacy name for callers
+sha256_file() { potato_sha256 "$1"; }
 
 resolve_llama_bundle_src() {
   local repo_root="$1"
@@ -368,12 +366,8 @@ run_build() {
     *.img|*.img.xz)
       info "Generating Raspberry Pi Imager manifest (this may take a minute for xz decompression)..."
       rm -f "${output_dir}/potato-${variant}.rpi-imager-manifest"
-      cp -f "${repo_root}/bin/assets/potato-imager-icon.svg" "${output_dir}/potato-imager-icon.svg"
-      python3 "${repo_root}/bin/generate_imager_manifest.py" \
-        --image "${out_image}" \
-        --output "${output_dir}/potato-${variant}.rpi-imager-manifest" \
-        --name "Potato OS (${variant}) — Local AI, No Cloud" \
-        --icon "${output_dir}/potato-imager-icon.svg" \
+      cp -f "${repo_root}/bin/assets/${POTATO_ICON_FILENAME}" "${output_dir}/${POTATO_ICON_FILENAME}"
+      generate_potato_manifest "${out_image}" "${output_dir}/potato-${variant}.rpi-imager-manifest" "${output_dir}/${POTATO_ICON_FILENAME}" "${variant}" \
         || die "Manifest generation failed for ${out_image}"
       info "Manifest generated: ${output_dir}/potato-${variant}.rpi-imager-manifest"
       ;;
