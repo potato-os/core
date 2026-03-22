@@ -44,6 +44,28 @@ def test_shell_scripts_have_valid_bash_syntax():
         subprocess.run(["bash", "-n", str(script)], check=True, cwd=REPO_ROOT)
 
 
+def test_shell_scripts_do_not_use_local_outside_functions():
+    """Trixie bash is strict about 'local' outside functions — catch this at test time."""
+    scripts = [
+        REPO_ROOT / "bin" / "install_dev.sh",
+        REPO_ROOT / "bin" / "uninstall_dev.sh",
+    ]
+    import re
+    for script_path in scripts:
+        lines = script_path.read_text(encoding="utf-8").splitlines()
+        in_function = 0
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if re.match(r"^[\w_]+\s*\(\)\s*\{", stripped) or stripped.endswith("() {"):
+                in_function += 1
+            if stripped == "}":
+                in_function = max(0, in_function - 1)
+            if stripped.startswith("local ") and in_function == 0:
+                raise AssertionError(
+                    f"{script_path.name}:{i}: 'local' used outside a function: {stripped!r}"
+                )
+
+
 def test_image_stage_nginx_symlink_points_to_runtime_path():
     stage_script = (REPO_ROOT / "image" / "stage-potato" / "00-potato" / "00-run.sh").read_text(encoding="utf-8")
 
@@ -275,6 +297,8 @@ printf '%s\n' "$@" > "$ARGS_OUT"
     assert "--jinja" in args
     assert "--flash-attn" in args
     assert "on" in args
+    assert "--chat-template-kwargs" in args
+    assert "enable_thinking" in args
 
 
 def test_start_llama_text_model_skips_mmproj(tmp_path: Path):
@@ -736,7 +760,7 @@ def test_generate_imager_manifest_script_outputs_pi5_manifest(tmp_path: Path):
     assert "imager" in payload
     assert "os_list" in payload
     assert payload["os_list"][0]["name"] == "Potato OS Test"
-    assert payload["os_list"][0]["devices"] == ["pi5-64bit"]
+    assert payload["os_list"][0]["devices"] == ["pi5-64bit", "pi4-64bit"]
     assert payload["os_list"][0]["init_format"] == "systemd"
     assert payload["os_list"][0]["architecture"] == "armv8"
     assert payload["os_list"][0]["extract_size"] == image_path.stat().st_size

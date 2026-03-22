@@ -8,6 +8,7 @@ QWEN35_PROJECTOR_REPO_RULES: Final[tuple[tuple[tuple[str, ...], str], ...]] = (
     (("4b", "hauhaucs"), "HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive"),
     (("4b",), "unsloth/Qwen3.5-4B-GGUF"),
     (("2b",), "unsloth/Qwen3.5-2B-GGUF"),
+    (("0.8b",), "unsloth/Qwen3.5-0.8B-GGUF"),
 )
 
 

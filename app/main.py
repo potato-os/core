@@ -40,8 +40,10 @@ try:
     from app.model_state import (
         DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
+        MODEL_FILENAME_PI4,
         MODELS_STATE_VERSION,
         MODEL_URL,
+        default_model_for_device,
         ModelSettingsValidationError,
         _default_model_record,
         apply_model_chat_defaults,
@@ -89,14 +91,17 @@ try:
         build_power_calibration_status,
         build_power_estimate_status,
         check_llama_health,
+        check_runtime_device_compatibility,
         classify_runtime_device,
         collect_system_metrics_snapshot,
+        ensure_compatible_runtime,
         compute_required_download_bytes,
         decode_throttled_bits,
         default_system_metrics_snapshot,
         discover_llama_runtime_bundles,
         fetch_remote_content_length_bytes,
         find_runtime_slot_by_family,
+        get_device_clock_limits,
         get_free_storage_bytes,
         get_large_model_warn_threshold_bytes,
         get_model_upload_max_bytes,
@@ -145,8 +150,10 @@ except ModuleNotFoundError:
     from model_state import (  # type: ignore[no-redef]
         DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
+        MODEL_FILENAME_PI4,
         MODELS_STATE_VERSION,
         MODEL_URL,
+        default_model_for_device,
         ModelSettingsValidationError,
         _default_model_record,
         apply_model_chat_defaults,
@@ -194,14 +201,17 @@ except ModuleNotFoundError:
         build_power_calibration_status,
         build_power_estimate_status,
         check_llama_health,
+        check_runtime_device_compatibility,
         classify_runtime_device,
         collect_system_metrics_snapshot,
+        ensure_compatible_runtime,
         compute_required_download_bytes,
         decode_throttled_bits,
         default_system_metrics_snapshot,
         discover_llama_runtime_bundles,
         fetch_remote_content_length_bytes,
         find_runtime_slot_by_family,
+        get_device_clock_limits,
         get_free_storage_bytes,
         get_large_model_warn_threshold_bytes,
         get_model_upload_max_bytes,
@@ -645,7 +655,11 @@ def _build_status_fs(
     download_payload["auto_download_completed_once"] = bool(models_state.get("default_model_downloaded_once", False))
     download_payload["current_model_id"] = current_download_model_id
     download_payload["auto_download_paused"] = not AUTO_DOWNLOAD_BOOTSTRAP_ENABLED
-    download_payload["default_model_filename"] = MODEL_FILENAME
+    device_class_for_default = classify_runtime_device(
+        pi_model_name=_read_pi_device_model_name(),
+    )
+    default_filename_for_device, _ = default_model_for_device(device_class_for_default)
+    download_payload["default_model_filename"] = default_filename_for_device
 
     upload_snapshot = {
         "active": False,
@@ -686,6 +700,9 @@ def _build_status_fs(
     system_payload["power_estimate"] = build_power_estimate_status(
         runtime,
         raw_system_snapshot.get("power_estimate") if isinstance(raw_system_snapshot, dict) else None,
+    )
+    system_payload["device_clock_limits"] = get_device_clock_limits(
+        classify_runtime_device(pi_model_name=raw_system_snapshot.get("pi_model_name") if isinstance(raw_system_snapshot, dict) else None)
     )
 
     try:
@@ -837,7 +854,11 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
                 projector_filename = str(vision_settings.get("projector_filename") or "").strip()
                 if projector_mode == "custom" and projector_filename:
                     env["POTATO_MMPROJ_PATH"] = str(runtime.base_dir / "models" / projector_filename)
-    env.setdefault("POTATO_MODEL_URL", MODEL_URL)
+    device_class = classify_runtime_device(
+        pi_model_name=_read_pi_device_model_name(),
+    )
+    _, device_model_url = default_model_for_device(device_class)
+    env.setdefault("POTATO_MODEL_URL", device_model_url)
     return env
 
 
@@ -873,7 +894,7 @@ async def start_model_download(
                 _upsert_model_status(runtime, model_id=selected_model_id, status="ready")
             if (
                 selected_model_id == default_model_id
-                and target_filename == MODEL_FILENAME
+                and target_filename in (MODEL_FILENAME, MODEL_FILENAME_PI4)
                 and not bool(state.get("default_model_downloaded_once", False))
             ):
                 state["default_model_downloaded_once"] = True
@@ -966,7 +987,7 @@ async def start_model_download(
                 updated_state = ensure_models_state(runtime)
                 if (
                     selected_model_id == default_model_id
-                    and target_filename == MODEL_FILENAME
+                    and target_filename in (MODEL_FILENAME, MODEL_FILENAME_PI4)
                     and not bool(updated_state.get("default_model_downloaded_once", False))
                 ):
                     updated_state["default_model_downloaded_once"] = True
@@ -1120,7 +1141,7 @@ def _get_status_download_context_sync(
     if isinstance(default_model, dict):
         default_filename = str(default_model.get("filename") or "")
         default_model_present = model_file_present(runtime, default_filename)
-        default_model_is_bootstrap_target = default_filename == MODEL_FILENAME
+        default_model_is_bootstrap_target = default_filename in (MODEL_FILENAME, MODEL_FILENAME_PI4)
     task = app.state.model_download_task
     download_active = is_download_task_active(task)
     remaining = compute_auto_download_remaining_seconds(
@@ -1277,7 +1298,8 @@ async def purge_all_models(
             "models": [_default_model_record(runtime)],
         }
         save_models_state(runtime, reset_state)
-        runtime.model_path = _model_file_path(runtime, MODEL_FILENAME)
+        default_record = reset_state["models"][0] if reset_state["models"] else {}
+        runtime.model_path = _model_file_path(runtime, str(default_record.get("filename") or MODEL_FILENAME))
 
         return {
             "purged": True,
@@ -1320,7 +1342,7 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                 if isinstance(default_model, dict):
                     default_filename = str(default_model.get("filename") or "")
                     default_model_present = model_file_present(runtime, default_filename)
-                    default_model_is_bootstrap_target = default_filename == MODEL_FILENAME
+                    default_model_is_bootstrap_target = default_filename in (MODEL_FILENAME, MODEL_FILENAME_PI4)
 
                 any_ready = any_model_ready(runtime)
                 if should_auto_start_download(
@@ -1477,6 +1499,9 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
         app.state.startup_monotonic = get_monotonic_time()
+        switched, reason = await ensure_compatible_runtime(app.state.runtime)
+        if switched:
+            logger.info("Runtime auto-switched at startup: %s", reason)
         ensure_models_state(app.state.runtime)
         prime_system_metrics_counters()
         app.state.system_metrics_snapshot = collect_system_metrics_snapshot()

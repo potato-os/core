@@ -71,7 +71,7 @@ def test_local_image_build_script_collects_artifacts_for_flash_test():
     assert "Content Repository" in script
     assert "generate_imager_manifest.py" in script
     assert ".rpi-imager-manifest" in script
-    assert "Raspberry Pi 5" in script
+    assert "Raspberry Pi 4 / 5" in script
     assert "python3" in script
     assert "--icon" in script
     assert "potato-imager-icon.svg" in script
@@ -148,11 +148,13 @@ def test_chat_html_loads_local_markdown_assets_and_renders_assistant_markdown():
     assert "renderBubbleContent(bubble, content, { ...options, role });" in CHAT_UI
 
 
-def test_imager_manifest_generator_is_pi5_only():
+def test_imager_manifest_generator_targets_pi5_and_pi4():
     script = Path("bin/generate_imager_manifest.py").read_text(encoding="utf-8")
 
     assert "pi5-64bit" in script
+    assert "pi4-64bit" in script
     assert "Raspberry Pi 5" in script
+    assert "Raspberry Pi 4" in script
     assert "rpi-imager-manifest" in script
     assert "extract_sha256" in script
     assert "image_download_sha256" in script

@@ -31,6 +31,8 @@ LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT = 5 * 1024 * 1024 * 1024
 LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME = ".potato-llama-runtime-bundle.json"
 POWER_CALIBRATION_DEFAULT_A = 1.260204
 POWER_CALIBRATION_DEFAULT_B = 0.704251
+POWER_CALIBRATION_DEFAULT_A_PI4 = 1.236268
+POWER_CALIBRATION_DEFAULT_B_PI4 = -0.849903
 POWER_CALIBRATION_MAX_SAMPLES = 64
 THROTTLE_FLAG_BITS = {
     0: "Undervoltage",
@@ -47,6 +49,13 @@ THROTTLE_HISTORY_BITS = {
 SYSTEM_STATIC_INFO_CACHE_TTL_SECONDS = 60
 SYSTEM_POWER_ESTIMATE_DISCLAIMER = (
     "Estimated from PMIC rails; excludes main 5V input current/peripherals/HATs and conversion losses."
+)
+
+PI4_POWER_IDLE_WATTS = 3.0
+PI4_POWER_LOAD_WATTS = 6.0
+PI4_POWER_CPU_LOAD_DISCLAIMER = (
+    "Estimated from CPU load using known Pi 4 power characteristics. "
+    "Not a hardware measurement; actual draw depends on peripherals and workload."
 )
 
 _SYSTEM_STATIC_INFO_CACHE: dict[str, Any] = {
@@ -95,7 +104,14 @@ class RuntimeConfig:
                 base_dir = preferred
             else:
                 base_dir = Path.home() / ".cache" / "potato-os"
-        model_path = Path(os.getenv("POTATO_MODEL_PATH", str(base_dir / "models" / "Qwen3.5-2B-Q4_K_M.gguf")))
+        model_path_env = os.getenv("POTATO_MODEL_PATH", "").strip()
+        if model_path_env:
+            model_path = Path(model_path_env)
+        else:
+            from app.model_state import default_model_for_device
+            device_class = classify_runtime_device(pi_model_name=_read_pi_device_model_name())
+            default_filename, _ = default_model_for_device(device_class)
+            model_path = base_dir / "models" / default_filename
         download_state_path = Path(
             os.getenv("POTATO_DOWNLOAD_STATE_PATH", str(base_dir / "state" / "download.json"))
         )
@@ -213,6 +229,22 @@ def _read_pi_device_model_name() -> str | None:
     return text or None
 
 
+PI4_8GB_MEMORY_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
+PI4_INCOMPATIBLE_RUNTIMES = ("ik_llama",)
+
+DEVICE_CLOCK_LIMITS: dict[str, dict[str, int]] = {
+    "pi5": {"cpu_max_hz": 2_400_000_000, "gpu_max_hz": 1_000_000_000},
+    "pi4": {"cpu_max_hz": 1_800_000_000, "gpu_max_hz": 500_000_000},
+}
+
+
+def get_device_clock_limits(device_class: str) -> dict[str, int]:
+    for prefix, limits in DEVICE_CLOCK_LIMITS.items():
+        if device_class.startswith(prefix):
+            return dict(limits)
+    return dict(DEVICE_CLOCK_LIMITS["pi5"])
+
+
 def classify_runtime_device(
     *,
     total_memory_bytes: int | None = None,
@@ -228,7 +260,78 @@ def classify_runtime_device(
         if total is not None and total >= MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES:
             return "pi5-16gb"
         return "pi5-8gb"
+    if "raspberry pi 4" in model_name:
+        total = total_memory_bytes if total_memory_bytes is not None else _detect_total_memory_bytes()
+        if total is not None and total >= MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES:
+            return "pi4-16gb"
+        if total is not None and total >= PI4_8GB_MEMORY_THRESHOLD_BYTES:
+            return "pi4-8gb"
+        return "pi4-4gb"
     return "other-pi"
+
+
+def check_runtime_device_compatibility(
+    device_class: str,
+    runtime_family: str,
+) -> dict[str, Any]:
+    if device_class.startswith("pi4-") and runtime_family in PI4_INCOMPATIBLE_RUNTIMES:
+        return {
+            "compatible": False,
+            "reason": (
+                f"{runtime_family} requires ARMv8.2-A dot product instructions (Cortex-A76+). "
+                f"Pi 4 (Cortex-A72, ARMv8.0-A) must use llama_cpp."
+            ),
+            "recommended_family": "llama_cpp",
+        }
+    return {"compatible": True, "reason": None, "recommended_family": None}
+
+
+def _detect_installed_runtime_family(runtime: RuntimeConfig) -> str:
+    """Detect the active runtime family from marker or installed runtime.json."""
+    marker = read_llama_runtime_bundle_marker(runtime)
+    if isinstance(marker, dict) and marker.get("family"):
+        return str(marker["family"])
+    # Fallback: read runtime.json from the llama install dir (fresh installs have no marker)
+    install_dir = _llama_runtime_install_dir(runtime)
+    runtime_json = install_dir / "runtime.json"
+    if runtime_json.exists():
+        try:
+            meta = json.loads(runtime_json.read_text(encoding="utf-8"))
+            if isinstance(meta, dict) and meta.get("family"):
+                return str(meta["family"])
+        except (OSError, json.JSONDecodeError):
+            pass
+    return ""
+
+
+async def ensure_compatible_runtime(runtime: RuntimeConfig) -> tuple[bool, str]:
+    device_class = classify_runtime_device(
+        pi_model_name=_read_pi_device_model_name(),
+        total_memory_bytes=_detect_total_memory_bytes(),
+    )
+    current_family = _detect_installed_runtime_family(runtime)
+    compat = check_runtime_device_compatibility(device_class, current_family)
+    if compat["compatible"]:
+        return False, "compatible"
+    recommended = compat.get("recommended_family") or ""
+    if not recommended:
+        logger.warning("Device %s incompatible with %s but no recommendation available", device_class, current_family)
+        return False, "no_recommendation"
+    slot = find_runtime_slot_by_family(runtime, recommended)
+    if slot is None:
+        logger.warning("Recommended runtime %s not available as a slot", recommended)
+        return False, "slot_unavailable"
+    slot_path = Path(slot["path"])
+    logger.info(
+        "Auto-switching runtime: %s -> %s (device %s incompatible with %s)",
+        current_family, recommended, device_class, current_family,
+    )
+    result = await install_llama_runtime_bundle(runtime, slot_path)
+    if not isinstance(result, dict) or not result.get("ok", False):
+        reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
+        logger.error("Runtime install failed during auto-switch: %s", reason)
+        return False, "install_failed"
+    return True, "pi4_incompatible_runtime"
 
 
 def get_large_model_warn_threshold_bytes() -> int:
@@ -295,9 +398,16 @@ def _get_power_calibration_default_coefficients() -> tuple[float, float]:
                 b = parsed_b
         except (TypeError, ValueError):
             b = None
+    device_class = classify_runtime_device(pi_model_name=_read_pi_device_model_name())
+    if device_class.startswith("pi4-"):
+        default_a = POWER_CALIBRATION_DEFAULT_A_PI4
+        default_b = POWER_CALIBRATION_DEFAULT_B_PI4
+    else:
+        default_a = POWER_CALIBRATION_DEFAULT_A
+        default_b = POWER_CALIBRATION_DEFAULT_B
     return (
-        a if a is not None else POWER_CALIBRATION_DEFAULT_A,
-        b if b is not None else POWER_CALIBRATION_DEFAULT_B,
+        a if a is not None else default_a,
+        b if b is not None else default_b,
     )
 
 
@@ -756,6 +866,9 @@ def build_large_model_compatibility(
             }
         )
 
+    runtime_family = _detect_installed_runtime_family(runtime)
+    runtime_compat = check_runtime_device_compatibility(device_class, runtime_family)
+
     return {
         "device_class": device_class,
         "pi_model_name": pi_model_name,
@@ -763,6 +876,7 @@ def build_large_model_compatibility(
         "large_model_warn_threshold_bytes": threshold_bytes,
         "supported_target": "raspberry-pi-5-16gb",
         "override_enabled": override_enabled,
+        "runtime_compatibility": runtime_compat,
         "warnings": warnings,
     }
 
@@ -809,13 +923,29 @@ def find_runtime_slot_by_family(runtime: RuntimeConfig, family: str) -> dict[str
     return None
 
 
+def _read_installed_runtime_metadata(runtime: RuntimeConfig) -> dict[str, Any]:
+    """Read runtime metadata from marker first, then fallback to runtime.json in install dir."""
+    marker = read_llama_runtime_bundle_marker(runtime)
+    if isinstance(marker, dict) and marker.get("family"):
+        return marker
+    install_dir = _llama_runtime_install_dir(runtime)
+    runtime_json = install_dir / "runtime.json"
+    if runtime_json.exists():
+        try:
+            meta = json.loads(runtime_json.read_text(encoding="utf-8"))
+            if isinstance(meta, dict):
+                return meta
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {}
+
+
 def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = None) -> dict[str, Any]:
     install_dir = _llama_runtime_install_dir(runtime)
-    marker = read_llama_runtime_bundle_marker(runtime) or {}
+    metadata = _read_installed_runtime_metadata(runtime)
     available_runtimes = discover_runtime_slots(runtime)
 
-    # Mark which slot is currently active based on the marker
-    current_family = str(marker.get("family") or marker.get("source_bundle_name") or "").strip()
+    current_family = str(metadata.get("family") or metadata.get("source_bundle_name") or "").strip()
     for slot in available_runtimes:
         slot["is_active"] = slot.get("family") == current_family
 
@@ -843,13 +973,13 @@ def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = Non
         "install_dir": str(install_dir),
         "exists": install_dir.exists(),
         "has_server_binary": (install_dir / "bin" / "llama-server").exists(),
-        "family": marker.get("family"),
-        "source_bundle_path": marker.get("source_bundle_path"),
-        "source_bundle_name": marker.get("source_bundle_name"),
-        "profile": marker.get("profile"),
-        "version_summary": marker.get("version_summary"),
-        "llama_cpp_commit": marker.get("llama_cpp_commit"),
-        "switched_at_unix": marker.get("switched_at_unix"),
+        "family": metadata.get("family"),
+        "source_bundle_path": metadata.get("source_bundle_path"),
+        "source_bundle_name": metadata.get("source_bundle_name"),
+        "profile": metadata.get("profile"),
+        "version_summary": metadata.get("version_summary") or metadata.get("version"),
+        "llama_cpp_commit": metadata.get("llama_cpp_commit") or metadata.get("commit"),
+        "switched_at_unix": metadata.get("switched_at_unix"),
     }
 
     return {
@@ -987,6 +1117,31 @@ def _default_firmware_version_snapshot() -> dict[str, Any]:
         "build_info": None,
         "version": None,
         "raw": None,
+    }
+
+
+def _estimate_power_from_cpu_load(
+    cpu_percent: float,
+    device_class: str,
+) -> dict[str, Any]:
+    if not device_class.startswith("pi4-"):
+        return {
+            "available": False,
+            "total_watts": None,
+            "method": "cpu_load_estimate",
+            "label": "CPU load estimate",
+            "disclaimer": PI4_POWER_CPU_LOAD_DISCLAIMER,
+            "error": "unsupported_device",
+        }
+    clamped = max(0.0, min(100.0, float(cpu_percent)))
+    watts = PI4_POWER_IDLE_WATTS + (clamped / 100.0) * (PI4_POWER_LOAD_WATTS - PI4_POWER_IDLE_WATTS)
+    return {
+        "available": True,
+        "total_watts": round(watts, 3),
+        "method": "cpu_load_estimate",
+        "label": "CPU load estimate",
+        "disclaimer": PI4_POWER_CPU_LOAD_DISCLAIMER,
+        "error": None,
     }
 
 
@@ -1194,6 +1349,16 @@ def _collect_static_platform_info_cached(*, now_unix: int | None = None) -> dict
 def _build_power_estimate_snapshot(*, now_unix: int | None = None) -> dict[str, Any]:
     now = int(time.time()) if now_unix is None else int(now_unix)
     payload = _parse_vcgencmd_pmic_read_adc(_run_vcgencmd("pmic_read_adc"))
+    if not payload.get("available"):
+        device_class = classify_runtime_device(pi_model_name=_read_pi_device_model_name())
+        if device_class.startswith("pi4-"):
+            cpu_pct = 0.0
+            if psutil is not None:
+                try:
+                    cpu_pct = psutil.cpu_percent(interval=None) or 0.0
+                except Exception:
+                    cpu_pct = 0.0
+            payload = _estimate_power_from_cpu_load(cpu_pct, device_class)
     payload["updated_at_unix"] = now
     if isinstance(payload.get("total_watts"), (int, float)):
         payload["total_watts"] = round(float(payload["total_watts"]), 3)
@@ -1255,15 +1420,24 @@ def build_power_estimate_status(runtime: RuntimeConfig, power_snapshot: Any) -> 
     payload["total_watts"] = raw_watts
     payload["raw_total_watts"] = raw_watts
 
+    is_cpu_load_method = payload.get("method") == "cpu_load_estimate"
+
     calibration = build_power_calibration_status(runtime)
     payload["calibration"] = calibration
-    payload["confidence"] = "meter-calibrated" if calibration.get("mode") == "custom" else "experimental-default"
 
-    adjusted = _apply_power_calibration(raw_watts, a=calibration.get("a"), b=calibration.get("b"))
-    payload["adjusted_total_watts"] = round(adjusted, 3) if adjusted is not None else None
-    payload["adjusted_label"] = "Estimated total power" if payload["adjusted_total_watts"] is not None else None
-    payload["estimated_total_disclaimer"] = (
-        "PMIC raw excludes direct 5V loads (USB/HAT/NVMe); estimated total uses "
+    if is_cpu_load_method:
+        payload["confidence"] = "meter-calibrated" if calibration.get("mode") == "custom" else "cpu-load-model"
+        adjusted = _apply_power_calibration(raw_watts, a=calibration.get("a"), b=calibration.get("b"))
+        payload["adjusted_total_watts"] = round(adjusted, 3) if adjusted is not None else None
+        payload["adjusted_label"] = "CPU load estimate" if payload["adjusted_total_watts"] is not None else None
+        payload["estimated_total_disclaimer"] = PI4_POWER_CPU_LOAD_DISCLAIMER
+    else:
+        payload["confidence"] = "meter-calibrated" if calibration.get("mode") == "custom" else "experimental-default"
+        adjusted = _apply_power_calibration(raw_watts, a=calibration.get("a"), b=calibration.get("b"))
+        payload["adjusted_total_watts"] = round(adjusted, 3) if adjusted is not None else None
+        payload["adjusted_label"] = "Estimated total power" if payload["adjusted_total_watts"] is not None else None
+        payload["estimated_total_disclaimer"] = (
+            "PMIC raw excludes direct 5V loads (USB/HAT/NVMe); estimated total uses "
         + ("meter-calibrated" if calibration.get("mode") == "custom" else "default")
         + " correction."
     )

@@ -6,6 +6,11 @@ import pytest
 
 from app.main import compute_auto_download_remaining_seconds, create_app, start_model_download
 from app.model_state import (
+    MODEL_FILENAME,
+    MODEL_URL,
+    MODEL_FILENAME_PI4,
+    MODEL_URL_PI4,
+    default_model_for_device,
     describe_model_storage,
     ensure_models_state,
     resolve_model_runtime_path,
@@ -197,4 +202,29 @@ def test_describe_model_storage_reports_local_for_all_models(runtime: RuntimeCon
     assert storage["location"] == "local"
     assert storage["exists"] is True
     assert storage["size_bytes"] > 0
+
+
+def test_default_model_for_pi4_returns_0_8b():
+    filename, url = default_model_for_device("pi4-8gb")
+    assert filename == MODEL_FILENAME_PI4
+    assert "0.8B" in filename
+    assert "IQ4_NL" in filename
+    assert url == MODEL_URL_PI4
+
+
+def test_default_model_for_pi4_4gb_returns_0_8b():
+    filename, url = default_model_for_device("pi4-4gb")
+    assert filename == MODEL_FILENAME_PI4
+
+
+def test_default_model_for_pi5_returns_2b():
+    filename, url = default_model_for_device("pi5-8gb")
+    assert filename == MODEL_FILENAME
+    assert url == MODEL_URL
+
+
+def test_default_model_for_unknown_returns_2b():
+    filename, url = default_model_for_device("unknown")
+    assert filename == MODEL_FILENAME
+    assert url == MODEL_URL
 

@@ -177,9 +177,17 @@ case "${arch}" in
 esac
 
 pi_model="$(tr -d '\000' < /proc/device-tree/model 2>/dev/null || true)"
-if [ -n "${pi_model}" ] && [[ "${pi_model}" != *"Raspberry Pi 5"* ]]; then
-  printf 'WARNING: Non-Pi5 model detected: %s\n' "${pi_model}" >&2
+printf 'Detected hardware: %s\n' "${pi_model:-unknown}"
+
+# Auto-detect build profile from hardware, allow env override
+if [ -n "${POTATO_LLAMA_BUILD_PROFILE:-}" ]; then
+  BUILD_PROFILE="${POTATO_LLAMA_BUILD_PROFILE}"
+elif [ -n "${pi_model}" ] && [[ "${pi_model}" == *"Raspberry Pi 4"* ]]; then
+  BUILD_PROFILE="pi4-opt"
+else
+  BUILD_PROFILE="pi5-opt"
 fi
+printf 'Build profile: %s\n' "${BUILD_PROFILE}"
 
 build_dir="/tmp/potato-llama-build-${FAMILY}"
 if [ "${CLEAN_BUILD}" = "1" ]; then
@@ -246,7 +254,7 @@ cat > "${slot_dir}/runtime.json" <<EOF
   "family": "${FAMILY}",
   "repo": "${REPO_URL}",
   "commit": "${commit}",
-  "profile": "pi5-opt",
+  "profile": "${BUILD_PROFILE}",
   "build_timestamp": "$(date -Iseconds)",
   "build_host": "${pi_model:-unknown}",
   "build_arch": "${arch}",

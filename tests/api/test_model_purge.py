@@ -107,6 +107,25 @@ def test_purge_models_clears_files_and_model_metadata(runtime):
     assert status_body["download"]["bytes_downloaded"] == 0
 
 
+def test_purge_models_sets_pi4_model_path_on_pi4(runtime, monkeypatch):
+    """P1: After purge on Pi 4, runtime.model_path must point at the 0.8B default, not 2B."""
+    from app.model_state import MODEL_FILENAME_PI4
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("app.model_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    with TestClient(app) as client:
+        runtime.model_path.write_bytes(b"old-model")
+        response = client.post("/internal/models/purge", json={"reset_bootstrap_flag": True})
+
+    assert response.status_code == 200
+    assert runtime.model_path.name == MODEL_FILENAME_PI4
+
+
 def test_upload_write_failure_clears_active_state_and_allows_retry(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)

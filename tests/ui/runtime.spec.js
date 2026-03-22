@@ -361,4 +361,62 @@ test("model upload sends file with filename header", async ({ page }) => {
   expect(uploadName).toBe("tiny.gguf");
 });
 
+test("power display shows PMIC labels for Pi 5 method", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...makeStatusPayload(),
+        system: {
+          available: true,
+          cpu_cores_percent: [10, 10, 10, 10],
+          power_estimate: {
+            available: true,
+            method: "pmic_read_adc",
+            total_watts: 4.5,
+            raw_total_watts: 4.5,
+            adjusted_total_watts: 6.37,
+            adjusted_label: "Estimated total power",
+            confidence: "experimental-default",
+          },
+        },
+      }),
+    });
+  });
+  await page.goto("/");
+  await waitForStatusApplied(page);
+  await expect(page.locator("#runtimeDetailPower")).toContainText("Power (estimated total): 6.370 W");
+  await expect(page.locator("#runtimeDetailPowerRaw")).toContainText("Power (PMIC raw): 4.500 W");
+});
+
+test("power display shows CPU load raw label for Pi 4", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...makeStatusPayload(),
+        system: {
+          available: true,
+          cpu_cores_percent: [80, 80, 80, 80],
+          power_estimate: {
+            available: true,
+            method: "cpu_load_estimate",
+            total_watts: 5.4,
+            raw_total_watts: 5.4,
+            adjusted_total_watts: 5.4,
+            adjusted_label: "CPU load estimate",
+            confidence: "cpu-load-model",
+          },
+        },
+      }),
+    });
+  });
+  await page.goto("/");
+  await waitForStatusApplied(page);
+  await expect(page.locator("#runtimeDetailPower")).toContainText("Power (estimated total): 5.400 W");
+  await expect(page.locator("#runtimeDetailPowerRaw")).toContainText("Power (CPU load raw): 5.400 W");
+});
+
 

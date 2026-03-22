@@ -257,7 +257,7 @@ collect_variant_bundle() {
   python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
     --image "${bundle_dir}/${image_name}" \
     --output "${imager_manifest}" \
-    --name "Potato OS (${target_variant}, Raspberry Pi 5)" \
+    --name "Potato OS (${target_variant}, Raspberry Pi 4 / 5)" \
     --icon "${bundle_dir}/potato-imager-icon.svg" \
     || die "Manifest generation failed for ${bundle_dir}/${image_name}"
 
@@ -296,10 +296,10 @@ Generated at: ${timestamp}
 3. Choose \`Use custom file\`.
 4. Select: \`potato-${target_variant}.rpi-imager-manifest\`.
 5. Click \`Apply & Restart\`.
-6. Select \`Potato OS (${target_variant}, Raspberry Pi 5)\` and flash.
+6. Select \`Potato OS (${target_variant}, Raspberry Pi 4 / 5)\` and flash.
 
 ## Important
-- This bundle is Pi 5-only (\`pi5-64bit\`).
+- This bundle supports Raspberry Pi 4 (8 GB) and Pi 5 (8 GB / 16 GB).
 - Do not use \`METADATA.json\` or \`potato-${target_variant}-build-info.json\` in Imager.
 
 ## Files

@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 DEFAULT_ICON = "potato-imager-icon.svg"
-DEFAULT_DISPLAY_NAME = "Potato OS (Raspberry Pi 5)"
+DEFAULT_DISPLAY_NAME = "Potato OS (Raspberry Pi 4 / 5)"
 DEFAULT_DESCRIPTION = "Potato OS — local AI, zero cloud dependency."
 
 
@@ -128,7 +128,7 @@ def main() -> int:
         "image_download_size": image_download_size,
         "image_download_sha256": image_download_sha256,
         "release_date": args.release_date,
-        "devices": ["pi5-64bit"],
+        "devices": ["pi5-64bit", "pi4-64bit"],
         "init_format": args.init_format,
         "architecture": args.architecture,
     }
@@ -144,7 +144,14 @@ def main() -> int:
                     "tags": ["pi5-64bit", "pi5-32bit"],
                     "matching_type": "exclusive",
                     "capabilities": [],
-                }
+                },
+                {
+                    "name": "Raspberry Pi 4",
+                    "description": "Raspberry Pi 4 Model B (8 GB)",
+                    "tags": ["pi4-64bit", "pi4-32bit"],
+                    "matching_type": "exclusive",
+                    "capabilities": [],
+                },
             ]
         },
         "os_list": [os_entry],

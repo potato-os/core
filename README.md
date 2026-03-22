@@ -2,13 +2,13 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Experimental Raspberry Pi 5 Linux mod with optimised local LLM inference. Runs quantised models on-device with a browser chat UI — no cloud, no GPU, just a Pi.
+Experimental Raspberry Pi Linux mod with optimised local LLM inference. Runs quantised models on-device with a browser chat UI — no cloud, no GPU, just a Pi.
 
 ![Potato OS Raspberry Pi next to a real potato](docs/assets/potato_os_next_to_a_real_spud.jpg)
 
 *Potato sold separately.*
 
-**Hardware:** Raspberry Pi 5 (8GB / 16GB) | **Runtime:** [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (IQK-optimised) + upstream [llama.cpp](https://github.com/ggerganov/llama.cpp) | **Default model:** Qwen3.5-2B
+**Hardware:** Raspberry Pi 5 (8 GB / 16 GB) or Raspberry Pi 4 (8 GB) | **Runtime:** [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (IQK-optimised, Pi 5) + upstream [llama.cpp](https://github.com/ggerganov/llama.cpp) (Pi 4 / Pi 5) | **Default model:** Qwen3.5-2B (Pi 5), Qwen3.5-0.8B (Pi 4)
 
 ## Install (recommended)
 
@@ -23,7 +23,7 @@ See [Flashing Guide](docs/flashing.md) for detailed step-by-step instructions, i
 
 ### What you need
 
-- Raspberry Pi 5 (8 GB or 16 GB)
+- Raspberry Pi 5 (8 GB or 16 GB) or Raspberry Pi 4 (8 GB)
 - microSD card (16 GB minimum)
 - Power supply (20W USB-C minimum, 27W recommended if using a USB SSD)
 - Ethernet or Wi-Fi connection (for first-boot model download)

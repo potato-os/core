@@ -363,6 +363,8 @@ if [ "${DISABLE_WARMUP}" = "1" ]; then
 fi
 REASONING_FORMAT="${POTATO_REASONING_FORMAT:-none}"
 extra_args+=(--reasoning-format "${REASONING_FORMAT}")
+CHAT_TEMPLATE_KWARGS="${POTATO_CHAT_TEMPLATE_KWARGS:-{\"enable_thinking\": false}}"
+extra_args+=(--chat-template-kwargs "${CHAT_TEMPLATE_KWARGS}")
 if should_disable_mmap; then
   extra_args+=(--no-mmap)
   printf 'Applying no-mmap runtime profile for local weights (disable GGUF mmap streaming)\n' >&2

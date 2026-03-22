@@ -8,9 +8,9 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 try:
-    from app.runtime_state import RuntimeConfig, _atomic_write_json
+    from app.runtime_state import RuntimeConfig, _atomic_write_json, _read_pi_device_model_name, classify_runtime_device
 except ModuleNotFoundError:
-    from runtime_state import RuntimeConfig, _atomic_write_json  # type: ignore[no-redef]
+    from runtime_state import RuntimeConfig, _atomic_write_json, _read_pi_device_model_name, classify_runtime_device  # type: ignore[no-redef]
 
 logger = logging.getLogger("potato")
 
@@ -19,6 +19,20 @@ MODEL_URL = (
     "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/"
     "Qwen3.5-2B-Q4_K_M.gguf"
 )
+
+MODEL_FILENAME_PI4 = "Qwen3.5-0.8B-IQ4_NL.gguf"
+MODEL_URL_PI4 = (
+    "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/"
+    "Qwen3.5-0.8B-IQ4_NL.gguf"
+)
+
+
+def default_model_for_device(device_class: str) -> tuple[str, str]:
+    if device_class.startswith("pi4-"):
+        return MODEL_FILENAME_PI4, MODEL_URL_PI4
+    return MODEL_FILENAME, MODEL_URL
+
+
 MODELS_STATE_VERSION = 1
 
 DEFAULT_MODEL_CHAT_SETTINGS = {
@@ -230,15 +244,21 @@ def validate_model_url(source_url: str) -> tuple[bool, str, str]:
     return True, "", safe_name
 
 
-def _default_model_record(_runtime: RuntimeConfig) -> dict[str, Any]:
+def _detect_device_class() -> str:
+    return classify_runtime_device(pi_model_name=_read_pi_device_model_name())
+
+
+def _default_model_record(_runtime: RuntimeConfig, *, device_class: str = "") -> dict[str, Any]:
+    effective_class = device_class or _detect_device_class()
+    filename, url = default_model_for_device(effective_class)
     return {
         "id": "default",
-        "filename": MODEL_FILENAME,
-        "source_url": MODEL_URL,
+        "filename": filename,
+        "source_url": url,
         "source_type": "url",
         "status": "not_downloaded",
         "error": None,
-        "settings": normalize_model_settings(None, filename=MODEL_FILENAME),
+        "settings": normalize_model_settings(None, filename=filename),
     }
 
 
@@ -439,7 +459,7 @@ def ensure_models_state(runtime: RuntimeConfig) -> dict[str, Any]:
     default_model = get_model_by_id(normalized, default_model_id)
     if isinstance(default_model, dict):
         default_filename = str(default_model.get("filename") or "")
-        if default_filename == MODEL_FILENAME and model_file_present(runtime, default_filename):
+        if default_filename in (MODEL_FILENAME, MODEL_FILENAME_PI4) and model_file_present(runtime, default_filename):
             normalized["default_model_downloaded_once"] = True
     _atomic_write_json(runtime.models_state_path, normalized)
     return normalized

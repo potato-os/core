@@ -155,7 +155,7 @@ def test_status_includes_large_model_warning_for_unsupported_pi(client, runtime,
     assert response.status_code == 200
     body = response.json()
     assert "compatibility" in body
-    assert body["compatibility"]["device_class"] == "other-pi"
+    assert body["compatibility"]["device_class"] == "pi4-8gb"
     assert body["compatibility"]["warnings"]
     assert body["compatibility"]["warnings"][0]["code"] == "large_model_unsupported_pi_warning"
 
