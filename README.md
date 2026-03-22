@@ -34,9 +34,12 @@ See [Flashing Guide](docs/flashing.md) for detailed step-by-step instructions, i
 
 | Device | Model | Speed | Notes |
 |--------|-------|-------|-------|
+| Pi 5 (8 GB) | [Qwen3-30B-A3B](https://huggingface.co/byteshape/Qwen3-30B-A3B-Instruct-2507-GGUF) Q3_K_S (2.66 bpw, ~10 GB) | **~8-9 tok/sec** | 30B MoE with SSD offload, ik_llama |
 | Pi 5 (8 GB) | Qwen3.5-2B Q4_K_M | ~7.8 tok/sec | ik_llama runtime |
 | Pi 4 (8 GB) | Qwen3.5-0.8B IQ4_NL | ~5 tok/sec | llama.cpp universal |
 | Pi 4 (8 GB) | Qwen3-30B-A3B Q3_K_S | ~2 tok/sec | 30B on 8 GB RAM |
+
+The standout: **30B-parameter Qwen3-30B-A3B** (mixture-of-experts, only 3B active) runs at full conversational speed on Pi 5 with a USB SSD. That's a frontier-class model on a $80 board.
 
 ## MVP status
 
