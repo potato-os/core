@@ -1298,7 +1298,8 @@ async def purge_all_models(
             "models": [_default_model_record(runtime)],
         }
         save_models_state(runtime, reset_state)
-        runtime.model_path = _model_file_path(runtime, MODEL_FILENAME)
+        default_record = reset_state["models"][0] if reset_state["models"] else {}
+        runtime.model_path = _model_file_path(runtime, str(default_record.get("filename") or MODEL_FILENAME))
 
         return {
             "purged": True,
