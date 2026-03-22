@@ -1391,10 +1391,16 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                             app.state.llama_consecutive_failures = 0
                             llama_cpp_slot = find_runtime_slot_by_family(runtime, "llama_cpp")
                             if llama_cpp_slot is not None:
-                                await install_llama_runtime_bundle(runtime, Path(llama_cpp_slot["path"]))
-                                logger.info("Auto-switched runtime to llama_cpp for Pi 4 compatibility")
+                                result = await install_llama_runtime_bundle(runtime, Path(llama_cpp_slot["path"]))
+                                if isinstance(result, dict) and result.get("ok"):
+                                    logger.info("Auto-switched runtime to llama_cpp for Pi 4 compatibility")
+                                else:
+                                    reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
+                                    logger.error("Runtime auto-switch install failed: %s", reason)
+                                    app.state.llama_consecutive_failures += 1
                             else:
                                 logger.error("No llama_cpp runtime slot available for auto-switch")
+                                app.state.llama_consecutive_failures += 1
                             continue
                         app.state.llama_consecutive_failures += 1
                         app.state.llama_process = None

@@ -776,6 +776,36 @@ async def test_ensure_compatible_runtime_noop_when_already_llama_cpp(monkeypatch
     assert reason == "compatible"
 
 
+@pytest.mark.anyio
+async def test_ensure_compatible_runtime_returns_false_when_install_fails(monkeypatch, runtime):
+    """Auto-switch must report failure when install_llama_runtime_bundle returns ok=False."""
+    import json
+    # ik_llama marker
+    llama_dir = runtime.base_dir / "llama"
+    llama_dir.mkdir(parents=True, exist_ok=True)
+    (llama_dir / "runtime.json").write_text(json.dumps({"family": "ik_llama"}))
+    # llama_cpp slot exists
+    slot_dir = runtime.base_dir / "runtimes" / "llama_cpp"
+    slot_dir.mkdir(parents=True, exist_ok=True)
+    (slot_dir / "bin").mkdir(parents=True, exist_ok=True)
+    (slot_dir / "bin" / "llama-server").write_bytes(b"fake")
+    (slot_dir / "bin" / "llama-server").chmod(0o755)
+    (slot_dir / "lib").mkdir(exist_ok=True)
+    (slot_dir / "runtime.json").write_text(json.dumps({"family": "llama_cpp"}))
+
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+
+    async def _fake_install_fail(_runtime, _path):
+        return {"ok": False, "reason": "rsync_not_available"}
+
+    monkeypatch.setattr("app.runtime_state.install_llama_runtime_bundle", _fake_install_fail)
+
+    switched, reason = await ensure_compatible_runtime(runtime)
+    assert switched is False
+    assert reason == "install_failed"
+
+
 def test_runtime_config_model_path_uses_device_default_on_pi4(monkeypatch):
     """P1: model_path should align with the Pi 4 default model, not hardcode 2B."""
     from app.model_state import MODEL_FILENAME_PI4

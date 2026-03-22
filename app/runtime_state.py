@@ -326,7 +326,11 @@ async def ensure_compatible_runtime(runtime: RuntimeConfig) -> tuple[bool, str]:
         "Auto-switching runtime: %s -> %s (device %s incompatible with %s)",
         current_family, recommended, device_class, current_family,
     )
-    await install_llama_runtime_bundle(runtime, slot_path)
+    result = await install_llama_runtime_bundle(runtime, slot_path)
+    if not isinstance(result, dict) or not result.get("ok", False):
+        reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
+        logger.error("Runtime install failed during auto-switch: %s", reason)
+        return False, "install_failed"
     return True, "pi4_incompatible_runtime"
 
 
