@@ -806,6 +806,36 @@ async def test_ensure_compatible_runtime_returns_false_when_install_fails(monkey
     assert reason == "install_failed"
 
 
+def test_compatibility_detects_runtime_from_runtime_json_when_no_marker(monkeypatch, runtime):
+    """P3: build_large_model_compatibility should detect ik_llama from runtime.json on fresh installs."""
+    import json
+    llama_dir = runtime.base_dir / "llama"
+    llama_dir.mkdir(parents=True, exist_ok=True)
+    (llama_dir / "runtime.json").write_text(json.dumps({"family": "ik_llama"}))
+
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+
+    payload = build_large_model_compatibility(runtime)
+    assert payload["runtime_compatibility"]["compatible"] is False
+    assert payload["runtime_compatibility"]["recommended_family"] == "llama_cpp"
+
+
+def test_runtime_status_detects_family_from_runtime_json_when_no_marker(runtime):
+    """P3: build_llama_runtime_status should show family from runtime.json on fresh installs."""
+    import json
+    from app.runtime_state import build_llama_runtime_status
+    llama_dir = runtime.base_dir / "llama"
+    llama_dir.mkdir(parents=True, exist_ok=True)
+    (llama_dir / "bin").mkdir(parents=True, exist_ok=True)
+    (llama_dir / "bin" / "llama-server").write_bytes(b"fake")
+    (llama_dir / "runtime.json").write_text(json.dumps({"family": "llama_cpp", "profile": "pi4-opt"}))
+
+    status = build_llama_runtime_status(runtime)
+    assert status["current"]["family"] == "llama_cpp"
+    assert status["current"]["profile"] == "pi4-opt"
+
+
 def test_runtime_config_model_path_uses_device_default_on_pi4(monkeypatch):
     """P1: model_path should align with the Pi 4 default model, not hardcode 2B."""
     from app.model_state import MODEL_FILENAME_PI4

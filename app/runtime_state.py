@@ -866,10 +866,7 @@ def build_large_model_compatibility(
             }
         )
 
-    runtime_family = ""
-    marker = read_llama_runtime_bundle_marker(runtime)
-    if isinstance(marker, dict):
-        runtime_family = str(marker.get("family") or "")
+    runtime_family = _detect_installed_runtime_family(runtime)
     runtime_compat = check_runtime_device_compatibility(device_class, runtime_family)
 
     return {
@@ -926,13 +923,29 @@ def find_runtime_slot_by_family(runtime: RuntimeConfig, family: str) -> dict[str
     return None
 
 
+def _read_installed_runtime_metadata(runtime: RuntimeConfig) -> dict[str, Any]:
+    """Read runtime metadata from marker first, then fallback to runtime.json in install dir."""
+    marker = read_llama_runtime_bundle_marker(runtime)
+    if isinstance(marker, dict) and marker.get("family"):
+        return marker
+    install_dir = _llama_runtime_install_dir(runtime)
+    runtime_json = install_dir / "runtime.json"
+    if runtime_json.exists():
+        try:
+            meta = json.loads(runtime_json.read_text(encoding="utf-8"))
+            if isinstance(meta, dict):
+                return meta
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {}
+
+
 def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = None) -> dict[str, Any]:
     install_dir = _llama_runtime_install_dir(runtime)
-    marker = read_llama_runtime_bundle_marker(runtime) or {}
+    metadata = _read_installed_runtime_metadata(runtime)
     available_runtimes = discover_runtime_slots(runtime)
 
-    # Mark which slot is currently active based on the marker
-    current_family = str(marker.get("family") or marker.get("source_bundle_name") or "").strip()
+    current_family = str(metadata.get("family") or metadata.get("source_bundle_name") or "").strip()
     for slot in available_runtimes:
         slot["is_active"] = slot.get("family") == current_family
 
@@ -960,13 +973,13 @@ def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = Non
         "install_dir": str(install_dir),
         "exists": install_dir.exists(),
         "has_server_binary": (install_dir / "bin" / "llama-server").exists(),
-        "family": marker.get("family"),
-        "source_bundle_path": marker.get("source_bundle_path"),
-        "source_bundle_name": marker.get("source_bundle_name"),
-        "profile": marker.get("profile"),
-        "version_summary": marker.get("version_summary"),
-        "llama_cpp_commit": marker.get("llama_cpp_commit"),
-        "switched_at_unix": marker.get("switched_at_unix"),
+        "family": metadata.get("family"),
+        "source_bundle_path": metadata.get("source_bundle_path"),
+        "source_bundle_name": metadata.get("source_bundle_name"),
+        "profile": metadata.get("profile"),
+        "version_summary": metadata.get("version_summary") or metadata.get("version"),
+        "llama_cpp_commit": metadata.get("llama_cpp_commit") or metadata.get("commit"),
+        "switched_at_unix": metadata.get("switched_at_unix"),
     }
 
     return {
