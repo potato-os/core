@@ -104,7 +104,7 @@ MANIFEST_PATH="${STAGING}/${MANIFEST_NAME}"
 python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
   --image "${IMAGE_FILE}" \
   --output "${MANIFEST_PATH}" \
-  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 5)" \
+  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 4 / 5)" \
   --icon "${ICON_URL}" \
   --download-url "${IMAGE_URL}" \
   || die "Manifest generation failed"
@@ -194,7 +194,7 @@ Verify checksum:
 sha256sum -c SHA256SUMS
 \`\`\`
 
-### Pi 4 support (new in v0.4.0)
+### Pi 4 support
 
 Same image boots on both Pi 4 and Pi 5. On Pi 4:
 - Runtime: llama.cpp universal (auto-selects armv8.0 backend)
@@ -244,7 +244,7 @@ STABLE_MANIFEST="${STAGING}/${MANIFEST_NAME}"
 python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
   --image "${IMAGE_FILE}" \
   --output "${STABLE_MANIFEST}" \
-  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 5)" \
+  --name "Potato OS ${VERSION} (${VARIANT}, Raspberry Pi 4 / 5)" \
   --icon "${STABLE_BASE}/potato-imager-icon.svg" \
   --download-url "${IMAGE_URL}" \
   || die "Stable manifest generation failed"

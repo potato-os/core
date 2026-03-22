@@ -833,6 +833,14 @@ def test_publish_image_release_notes_template_supports_pi4():
     assert "Local AI chat on Raspberry Pi 5 —" not in script, (
         "Release notes tagline still says 'Raspberry Pi 5' only"
     )
+    # Manifest --name must mention Pi 4, not just Pi 5
+    assert '(${VARIANT}, Raspberry Pi 5)"' not in script, (
+        "Imager manifest --name still says 'Raspberry Pi 5' only"
+    )
+    # No hardcoded version strings in the reusable template
+    assert "new in v0.4.0" not in script, (
+        "Release notes template hardcodes 'v0.4.0' — must use ${VERSION} or be version-agnostic"
+    )
 
 
 def test_vision_e2e_script_exercises_multimodal_requests():
