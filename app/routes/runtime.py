@@ -19,6 +19,10 @@ try:
         build_power_calibration_status,
         build_power_estimate_status,
         find_runtime_slot_by_family,
+        check_runtime_device_compatibility,
+        classify_runtime_device,
+        _read_pi_device_model_name,
+        _detect_total_memory_bytes,
         normalize_allow_unsupported_large_models,
         normalize_llama_memory_loading_mode,
         write_llama_runtime_bundle_marker,
@@ -37,6 +41,10 @@ except ModuleNotFoundError:
         build_power_calibration_status,
         build_power_estimate_status,
         find_runtime_slot_by_family,
+        check_runtime_device_compatibility,
+        classify_runtime_device,
+        _read_pi_device_model_name,
+        _detect_total_memory_bytes,
         normalize_allow_unsupported_large_models,
         normalize_llama_memory_loading_mode,
         write_llama_runtime_bundle_marker,
@@ -93,6 +101,14 @@ async def switch_llama_runtime(
     slot = find_runtime_slot_by_family(runtime_cfg, family)
     if slot is None:
         return JSONResponse(status_code=404, content={"switched": False, "reason": "runtime_not_found"})
+
+    device_class = classify_runtime_device(
+        pi_model_name=_read_pi_device_model_name(),
+        total_memory_bytes=_detect_total_memory_bytes(),
+    )
+    compat = check_runtime_device_compatibility(device_class, family)
+    if not compat["compatible"]:
+        return JSONResponse(status_code=409, content={"switched": False, "reason": "incompatible_runtime"})
 
     async with request.app.state.llama_runtime_switch_lock:
         switch_state = request.app.state.llama_runtime_switch_state

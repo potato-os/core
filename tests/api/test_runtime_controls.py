@@ -81,6 +81,37 @@ def test_switch_llama_runtime_by_family_installs_slot_and_reports_status(runtime
     assert marker["family"] == "ik_llama"
 
 
+def test_switch_llama_runtime_rejects_incompatible_family_on_pi4(runtime, monkeypatch):
+    """POST /internal/llama-runtime/switch must reject ik_llama on Pi 4 server-side."""
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    # Create both runtime slots
+    for family in ("ik_llama", "llama_cpp"):
+        slot = runtime.base_dir / "runtimes" / family
+        (slot / "bin").mkdir(parents=True)
+        (slot / "lib").mkdir(parents=True)
+        (slot / "bin" / "llama-server").write_text("binary", encoding="utf-8")
+        (slot / "runtime.json").write_text(
+            json.dumps({"family": family, "commit": "abc123"}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("app.routes.runtime._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("app.routes.runtime._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+
+    with TestClient(app) as client:
+        response = client.post("/internal/llama-runtime/switch", json={"family": "ik_llama"})
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["switched"] is False
+    assert body["reason"] == "incompatible_runtime"
+
+
 def test_set_llama_memory_loading_mode_persists_and_restarts(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
