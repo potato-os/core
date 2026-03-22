@@ -73,13 +73,6 @@ detect_total_memory_bytes() {
   return 1
 }
 
-is_pi4() {
-  local model_name
-  model_name="$(detect_pi_model_name || true)"
-  model_name="$(printf '%s' "${model_name}" | tr '[:upper:]' '[:lower:]')"
-  [[ "${model_name}" == *"raspberry pi 4"* ]]
-}
-
 is_pi5_16gb() {
   local model_name total_memory
   model_name="$(detect_pi_model_name || true)"
@@ -336,24 +329,6 @@ pick_mmproj() {
 
 [ -f "${MODEL_PATH}" ] || die "Model file not found: ${MODEL_PATH}"
 [ -x "${LLAMA_SERVER_BIN}" ] || die "llama-server binary not found or not executable: ${LLAMA_SERVER_BIN}"
-
-# Guard: ik_llama (IQK) requires ARMv8.2-A dot product instructions which
-# Pi 4 Cortex-A72 (ARMv8.0-A) does not have. The IQK stubs call GGML_ABORT
-# on non-dotprod CPUs. Exit with code 78 (EX_CONFIG) so the Python
-# orchestrator can auto-switch to the llama_cpp runtime.
-if is_pi4; then
-  runtime_family=''
-  if [ -r "${LLAMA_RUNTIME_DIR}/.potato-llama-runtime-bundle.json" ]; then
-    runtime_family="$(
-      sed -n 's/.*"family"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-        "${LLAMA_RUNTIME_DIR}/.potato-llama-runtime-bundle.json" 2>/dev/null | head -n1
-    )"
-  fi
-  if [ "${runtime_family}" = "ik_llama" ]; then
-    printf 'ERROR: ik_llama is incompatible with Pi 4 (no dotprod). Switching to llama_cpp.\n' >&2
-    exit 78
-  fi
-fi
 
 # Qwen3.5-35B-A3B: use the default 16k context. The previous 4096 override
 # caused context-shift crashes (GGML_ASSERT in rope) and is no longer needed

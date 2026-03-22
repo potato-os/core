@@ -1383,25 +1383,6 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                     # Count the previous process's failure BEFORE starting a new one.
                     # Null out the reference so the same dead process isn't re-counted.
                     if llama_process is not None and llama_process.returncode is not None and llama_process.returncode != 0:
-                        # Exit code 78 (EX_CONFIG): Pi 4 detected incompatible
-                        # ik_llama runtime. Auto-switch to llama_cpp.
-                        if llama_process.returncode == 78:
-                            logger.warning("start_llama.sh exited 78: runtime incompatible with device — attempting auto-switch to llama_cpp")
-                            app.state.llama_process = None
-                            llama_cpp_slot = find_runtime_slot_by_family(runtime, "llama_cpp")
-                            if llama_cpp_slot is not None:
-                                result = await install_llama_runtime_bundle(runtime, Path(llama_cpp_slot["path"]))
-                                if isinstance(result, dict) and result.get("ok"):
-                                    logger.info("Auto-switched runtime to llama_cpp for Pi 4 compatibility")
-                                    app.state.llama_consecutive_failures = 0
-                                else:
-                                    reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
-                                    logger.error("Runtime auto-switch install failed: %s", reason)
-                                    app.state.llama_consecutive_failures += 1
-                            else:
-                                logger.error("No llama_cpp runtime slot available for auto-switch")
-                                app.state.llama_consecutive_failures += 1
-                            continue
                         app.state.llama_consecutive_failures += 1
                         app.state.llama_process = None
                         if app.state.llama_consecutive_failures == LLAMA_MAX_CONSECUTIVE_FAILURES:
