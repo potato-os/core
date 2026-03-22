@@ -279,6 +279,32 @@ def check_runtime_device_compatibility(
     return {"compatible": True, "reason": None, "recommended_family": None}
 
 
+async def ensure_compatible_runtime(runtime: RuntimeConfig) -> tuple[bool, str]:
+    device_class = classify_runtime_device(
+        pi_model_name=_read_pi_device_model_name(),
+        total_memory_bytes=_detect_total_memory_bytes(),
+    )
+    marker = read_llama_runtime_bundle_marker(runtime)
+    current_family = str(marker.get("family") or "") if isinstance(marker, dict) else ""
+    compat = check_runtime_device_compatibility(device_class, current_family)
+    if compat["compatible"]:
+        return False, "compatible"
+    recommended = compat.get("recommended_family") or ""
+    if not recommended:
+        logger.warning("Device %s incompatible with %s but no recommendation available", device_class, current_family)
+        return False, "no_recommendation"
+    slot = find_runtime_slot_by_family(runtime, recommended)
+    if slot is None:
+        logger.warning("Recommended runtime %s not available as a slot", recommended)
+        return False, "slot_unavailable"
+    logger.info(
+        "Auto-switching runtime: %s -> %s (device %s incompatible with %s)",
+        current_family, recommended, device_class, current_family,
+    )
+    await install_llama_runtime_bundle(runtime, slot)
+    return True, "pi4_incompatible_runtime"
+
+
 def get_large_model_warn_threshold_bytes() -> int:
     raw = os.getenv("POTATO_UNSUPPORTED_PI_LARGE_MODEL_WARN_BYTES", "").strip()
     if not raw:

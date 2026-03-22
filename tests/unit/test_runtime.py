@@ -24,6 +24,7 @@ from app.runtime_state import (
     _apply_power_calibration,
     _fit_linear_power_calibration,
     _estimate_power_from_cpu_load,
+    ensure_compatible_runtime,
     _parse_vcgencmd_bootloader_version,
     _parse_vcgencmd_firmware_version,
     _parse_vcgencmd_pmic_read_adc,
@@ -690,6 +691,62 @@ def test_runtime_device_compatibility_pi4_4gb_ik_llama_incompatible():
     result = check_runtime_device_compatibility("pi4-4gb", "ik_llama")
     assert result["compatible"] is False
     assert result["recommended_family"] == "llama_cpp"
+
+
+@pytest.mark.anyio
+async def test_ensure_compatible_runtime_switches_on_pi4(monkeypatch, runtime, tmp_path):
+    # Set up a fake llama_cpp slot
+    slot_dir = runtime.base_dir / "runtimes" / "llama_cpp"
+    slot_dir.mkdir(parents=True, exist_ok=True)
+    (slot_dir / "bin").mkdir(parents=True, exist_ok=True)
+    (slot_dir / "bin" / "llama-server").write_bytes(b"fake")
+    (slot_dir / "bin" / "llama-server").chmod(0o755)
+    (slot_dir / "lib").mkdir(exist_ok=True)
+    import json
+    (slot_dir / "runtime.json").write_text(json.dumps({
+        "family": "llama_cpp", "commit": "abc", "profile": "pi4-opt",
+    }))
+    # Simulate ik_llama as current runtime
+    marker_path = runtime.base_dir / "llama" / ".potato-llama-runtime-bundle.json"
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(json.dumps({"family": "ik_llama", "profile": "pi5-opt"}))
+
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+
+    switched, reason = await ensure_compatible_runtime(runtime)
+    assert switched is True
+    assert reason == "pi4_incompatible_runtime"
+
+
+@pytest.mark.anyio
+async def test_ensure_compatible_runtime_noop_on_pi5(monkeypatch, runtime):
+    import json
+    marker_path = runtime.base_dir / "llama" / ".potato-llama-runtime-bundle.json"
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(json.dumps({"family": "ik_llama", "profile": "pi5-opt"}))
+
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+
+    switched, reason = await ensure_compatible_runtime(runtime)
+    assert switched is False
+    assert reason == "compatible"
+
+
+@pytest.mark.anyio
+async def test_ensure_compatible_runtime_noop_when_already_llama_cpp(monkeypatch, runtime):
+    import json
+    marker_path = runtime.base_dir / "llama" / ".potato-llama-runtime-bundle.json"
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(json.dumps({"family": "llama_cpp", "profile": "pi4-opt"}))
+
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+
+    switched, reason = await ensure_compatible_runtime(runtime)
+    assert switched is False
+    assert reason == "compatible"
 
 
 def test_cpu_load_power_estimate_idle():

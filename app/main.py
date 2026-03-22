@@ -94,6 +94,7 @@ try:
         check_runtime_device_compatibility,
         classify_runtime_device,
         collect_system_metrics_snapshot,
+        ensure_compatible_runtime,
         compute_required_download_bytes,
         decode_throttled_bits,
         default_system_metrics_snapshot,
@@ -203,6 +204,7 @@ except ModuleNotFoundError:
         check_runtime_device_compatibility,
         classify_runtime_device,
         collect_system_metrics_snapshot,
+        ensure_compatible_runtime,
         compute_required_download_bytes,
         decode_throttled_bits,
         default_system_metrics_snapshot,
@@ -1509,6 +1511,9 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
         app.state.startup_monotonic = get_monotonic_time()
+        switched, reason = await ensure_compatible_runtime(app.state.runtime)
+        if switched:
+            logger.info("Runtime auto-switched at startup: %s", reason)
         ensure_models_state(app.state.runtime)
         prime_system_metrics_counters()
         app.state.system_metrics_snapshot = collect_system_metrics_snapshot()
