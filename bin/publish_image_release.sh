@@ -104,7 +104,7 @@ MANIFEST_PATH="${STAGING}/${MANIFEST_NAME}"
 python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
   --image "${IMAGE_FILE}" \
   --output "${MANIFEST_PATH}" \
-  --name "Potato OS ${VERSION} — Local AI, No Cloud" \
+  --name "Potato OS ${VERSION} (${VARIANT}) — Local AI, No Cloud" \
   --icon "${ICON_URL}" \
   --download-url "${IMAGE_URL}" \
   || die "Manifest generation failed"
@@ -244,7 +244,7 @@ STABLE_MANIFEST="${STAGING}/${MANIFEST_NAME}"
 python3 "${REPO_ROOT}/bin/generate_imager_manifest.py" \
   --image "${IMAGE_FILE}" \
   --output "${STABLE_MANIFEST}" \
-  --name "Potato OS ${VERSION} — Local AI, No Cloud" \
+  --name "Potato OS ${VERSION} (${VARIANT}) — Local AI, No Cloud" \
   --icon "${STABLE_BASE}/potato-imager-icon.svg" \
   --download-url "${IMAGE_URL}" \
   || die "Stable manifest generation failed"

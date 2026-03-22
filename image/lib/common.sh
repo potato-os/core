@@ -372,7 +372,7 @@ run_build() {
       python3 "${repo_root}/bin/generate_imager_manifest.py" \
         --image "${out_image}" \
         --output "${output_dir}/potato-${variant}.rpi-imager-manifest" \
-        --name "Potato OS — Local AI, No Cloud" \
+        --name "Potato OS (${variant}) — Local AI, No Cloud" \
         --icon "${output_dir}/potato-imager-icon.svg" \
         || die "Manifest generation failed for ${out_image}"
       info "Manifest generated: ${output_dir}/potato-${variant}.rpi-imager-manifest"
