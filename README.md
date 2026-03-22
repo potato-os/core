@@ -8,7 +8,13 @@ Experimental Raspberry Pi Linux mod with optimised local LLM inference. Runs qua
 
 *Potato sold separately.*
 
-**Hardware:** Raspberry Pi 5 (8 GB / 16 GB) or Raspberry Pi 4 (8 GB) | **Runtime:** [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (IQK-optimised, Pi 5) + upstream [llama.cpp](https://github.com/ggerganov/llama.cpp) (Pi 4 / Pi 5) | **Default model:** Qwen3.5-2B (Pi 5), Qwen3.5-0.8B (Pi 4)
+**Supports Raspberry Pi 5 (8 GB / 16 GB) and Raspberry Pi 4 (8 GB).** Pi 5 is the recommended target (~8 tok/sec). Pi 4 works but expect roughly 1/4 of the speed.
+
+## Qwen3-30B-A3B running on a Pi 5 (8 GB) with an SSD — slightly throttling.
+
+<p align="center"><img src="docs/assets/demo-chat.gif" alt="Potato OS demo — Qwen3-30B running on Raspberry Pi 5" width="100%"></p>
+
+**Runtime:** [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) (IQK-optimised, Pi 5) + upstream [llama.cpp](https://github.com/ggerganov/llama.cpp) (Pi 4 / Pi 5) | **Default model:** Qwen3.5-2B (Pi 5), Qwen3.5-0.8B (Pi 4)
 
 ## Install (recommended)
 
@@ -17,7 +23,7 @@ Experimental Raspberry Pi Linux mod with optimised local LLM inference. Runs qua
 3. Insert the card, power on the Pi, and wait for first boot to complete
 4. Open `http://potato.local` in a browser
 
-A starter model (~1.8 GB) downloads automatically on first boot. Chat is ready once the download finishes and the status shows CONNECTED.
+A starter model downloads automatically on first boot (~1.8 GB on Pi 5, ~0.5 GB on Pi 4). Chat is ready once the download finishes and the status shows CONNECTED.
 
 See [Flashing Guide](docs/flashing.md) for detailed step-by-step instructions, including how to flash directly from Raspberry Pi Imager without a manual download.
 
@@ -27,6 +33,17 @@ See [Flashing Guide](docs/flashing.md) for detailed step-by-step instructions, i
 - microSD card (16 GB minimum)
 - Power supply (20W USB-C minimum, 27W recommended if using a USB SSD)
 - Ethernet or Wi-Fi connection (for first-boot model download)
+
+### Performance
+
+| Device | Model | Speed | Notes |
+|--------|-------|-------|-------|
+| Pi 5 (8 GB) | [Qwen3-30B-A3B](https://huggingface.co/byteshape/Qwen3-30B-A3B-Instruct-2507-GGUF) Q3_K_S (2.66 bpw, ~10 GB) | **~8-9 tok/sec** | 30B MoE with SSD offload, ik_llama |
+| Pi 5 (8 GB) | Qwen3.5-2B Q4_K_M | ~7.8 tok/sec | ik_llama runtime |
+| Pi 4 (8 GB) | Qwen3.5-0.8B IQ4_NL | ~5 tok/sec | llama.cpp universal |
+| Pi 4 (8 GB) | Qwen3-30B-A3B Q3_K_S | ~2 tok/sec | 30B on 8 GB RAM |
+
+The standout: **30B-parameter Qwen3-30B-A3B** (mixture-of-experts, only 3B active) runs at full conversational speed on Pi 5 with a USB SSD. That's a frontier-class model on a $80 board.
 
 ## MVP status
 
@@ -39,7 +56,7 @@ Potato OS is an early release meant for testing and tinkering, not production us
 - Multi-chat sessions (persisted in your browser)
 - Model management — download by URL, upload, delete, switch active model
 - System monitoring — CPU, GPU, temperature, memory, storage, power draw
-- Dual inference runtime — ik_llama (default) and upstream llama.cpp
+- Dual inference runtime — ik_llama (Pi 5 default) and upstream llama.cpp (Pi 4 default, Pi 5 fallback)
 
 Updates are reflash-only for now — there is no OTA or in-place upgrade path yet.
 
