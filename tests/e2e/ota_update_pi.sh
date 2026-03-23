@@ -99,17 +99,82 @@ pi_status_field() {
 STAGING_DIR=""
 HTTP_SERVER_PID=""
 
+PI_STATE_DIRTY=0
+
 cleanup() {
+  local exit_code=$?
   log_stage "Cleaning up..."
+
+  # Kill local HTTP server
   if [ -n "${HTTP_SERVER_PID}" ]; then
     kill "${HTTP_SERVER_PID}" 2>/dev/null || true
     wait "${HTTP_SERVER_PID}" 2>/dev/null || true
   fi
+
+  # Always restore Pi to pre-test state if we touched it
+  if [ "${PI_STATE_DIRTY}" = "1" ] && [ -n "${PI_HOST}" ]; then
+    log_stage "Restoring Pi to pre-test state (cleanup trap)..."
+    _restore_pi || log_stage "WARNING: Pi restore failed during cleanup"
+  fi
+
+  # Remove local staging
   if [ -n "${STAGING_DIR}" ] && [ -d "${STAGING_DIR}" ]; then
     rm -rf "${STAGING_DIR}"
   fi
+
+  exit "${exit_code}"
 }
 trap cleanup EXIT
+
+_sudo_pi() {
+  # Run a command on the Pi with sudo, using PI_PASSWORD
+  ssh_pi "echo '${PI_PASSWORD}' | sudo -S $*"
+}
+
+_restore_pi() {
+  # Restore app/ and bin/ from the local checkout and reset update.json.
+  # This is called from both Phase 8 and the cleanup trap.
+
+  # Fix ownership so rsync can overwrite
+  _sudo_pi "chown -R ${PI_USER}:${PI_USER} /opt/potato/app /opt/potato/bin 2>/dev/null" || true
+  _sudo_pi "find /opt/potato/app /opt/potato/bin -name '__pycache__' -exec rm -rf {} + 2>/dev/null" || true
+
+  # Restore both app/ AND bin/
+  rsync_to_pi "${PROJECT_ROOT}/app/" "${PI_USER}@${PI_HOST}:/opt/potato/app/"
+  rsync_to_pi "${PROJECT_ROOT}/bin/" "${PI_USER}@${PI_HOST}:/opt/potato/bin/"
+
+  # Reset update.json to clean idle state (remove test seed and any stale execution state)
+  ssh_pi "cat > /tmp/ota_clean_state.json <<'CLEANEOF'
+{\"available\":false,\"current_version\":\"${ORIGINAL_VERSION}\",\"latest_version\":null,\"release_notes\":null,\"release_url\":null,\"tarball_url\":null,\"checked_at_unix\":null,\"error\":null}
+CLEANEOF
+"
+  _sudo_pi "cp /tmp/ota_clean_state.json /opt/potato/state/update.json"
+  _sudo_pi "chown potato:potato /opt/potato/state/update.json"
+  ssh_pi "rm -f /tmp/ota_clean_state.json"
+
+  # Restart service
+  _sudo_pi "systemctl restart potato"
+
+  # Wait for service with the original version
+  log_stage "  Waiting for service to come back with version ${ORIGINAL_VERSION}..."
+  local restored_ver=""
+  for attempt in $(seq 1 30); do
+    local sj
+    sj="$(pi_status)"
+    if [ -n "${sj}" ]; then
+      restored_ver="$(pi_status_field "${sj}" '.version // "unknown"')"
+      if [ "${restored_ver}" = "${ORIGINAL_VERSION}" ]; then
+        log_stage "  Restored to version ${restored_ver}"
+        PI_STATE_DIRTY=0
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+
+  log_stage "  FATAL: Could not restore Pi to version ${ORIGINAL_VERSION} (got: ${restored_ver:-no response})"
+  return 1
+}
 
 # ── Resolve Pi host ───────────────────────────────────────────────────
 
@@ -205,7 +270,7 @@ report_stage_time "Phase 3 (start server)" "${stage_started_at}"
 
 # Ensure the potato user owns its directories (may be root-owned after dev rsync)
 log_stage "Fixing /opt/potato ownership for potato user..."
-ssh_pi "echo raspberry | sudo -S chown -R potato:potato /opt/potato/app /opt/potato/bin /opt/potato/state 2>/dev/null" || true
+_sudo_pi "chown -R potato:potato /opt/potato/app /opt/potato/bin /opt/potato/state 2>/dev/null" || true
 
 stage_started_at="$(now_epoch)"
 log_stage "Phase 4: Seeding update.json on Pi..."
@@ -227,9 +292,11 @@ JEOF
 ssh_pi "cat > /tmp/ota_test_update.json <<'SEEDEOF'
 ${UPDATE_JSON}
 SEEDEOF
-echo raspberry | sudo -S cp /tmp/ota_test_update.json /opt/potato/state/update.json
-echo raspberry | sudo -S chown potato:potato /opt/potato/state/update.json
-rm -f /tmp/ota_test_update.json"
+"
+_sudo_pi "cp /tmp/ota_test_update.json /opt/potato/state/update.json"
+_sudo_pi "chown potato:potato /opt/potato/state/update.json"
+ssh_pi "rm -f /tmp/ota_test_update.json"
+PI_STATE_DIRTY=1
 log_stage "  Seeded tarball_url=${TARBALL_URL}"
 report_stage_time "Phase 4 (seed state)" "${stage_started_at}"
 
@@ -328,34 +395,18 @@ fi
 
 report_stage_time "Phase 7 (verify)" "${stage_started_at}"
 
-# ── Phase 8: Restore original code ───────────────────────────────────
+# ── Phase 8: Restore Pi to pre-test state ─────────────────────────────
 
 stage_started_at="$(now_epoch)"
-log_stage "Phase 8: Restoring original code..."
+log_stage "Phase 8: Restoring Pi to pre-test state..."
 
-# Fix permissions if needed (root-owned pycache from service)
-ssh_pi "echo raspberry | sudo -S find /opt/potato/app -name '__pycache__' -exec rm -rf {} + 2>/dev/null; echo raspberry | sudo -S chown -R pi:pi /opt/potato/app" || true
-
-rsync_to_pi "${PROJECT_ROOT}/app/" "${PI_USER}@${PI_HOST}:/opt/potato/app/"
-ssh_pi "echo raspberry | sudo -S systemctl restart potato"
-
-log_stage "  Waiting for service to come back..."
-for attempt in $(seq 1 30); do
-  status_json="$(pi_status)"
-  if [ -n "${status_json}" ]; then
-    restored_ver="$(pi_status_field "${status_json}" '.version // "unknown"')"
-    if [ "${restored_ver}" = "${ORIGINAL_VERSION}" ]; then
-      break
-    fi
-  fi
-  sleep 2
-done
-
-restored_ver="$(pi_status_field "$(pi_status)" '.version // "unknown"')"
-if [ "${restored_ver}" != "${ORIGINAL_VERSION}" ]; then
-  echo "WARNING: Restore may not have worked. version=${restored_ver}, expected=${ORIGINAL_VERSION}" >&2
+if ! _restore_pi; then
+  echo "FATAL: Could not restore Pi to original state. Manual intervention required." >&2
+  echo "  Expected version: ${ORIGINAL_VERSION}" >&2
+  echo "  Run: sshpass -e rsync -az --delete -e 'ssh ${PI_SSH_OPTIONS}' app/ ${PI_USER}@${PI_HOST}:/opt/potato/app/" >&2
+  echo "  Run: sshpass -e rsync -az --delete -e 'ssh ${PI_SSH_OPTIONS}' bin/ ${PI_USER}@${PI_HOST}:/opt/potato/bin/" >&2
+  exit 1
 fi
-log_stage "  Restored to version ${restored_ver}"
 report_stage_time "Phase 8 (restore)" "${stage_started_at}"
 
 # ── Done ──────────────────────────────────────────────────────────────
