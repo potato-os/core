@@ -31,7 +31,7 @@ Tests are organized under `tests/`:
   - `runtime.spec.js`, `model-switcher.spec.js`, `sessions.spec.js`, `bootstrap.spec.js`
   - `update.spec.js`
 - `tests/ui/helpers.js`: Shared test utilities (`waitUntilReady`, `makeStatusPayload`, etc.).
-- `tests/e2e/`: Pi smoke/uninstall flows over SSH.
+- `tests/e2e/`: Pi smoke/uninstall/OTA flows over SSH. `ota_update_pi.sh` tests the full OTA cycle (happy path + `--test-failure` for rollback).
 
 ## Build, Test, and Development Commands
 

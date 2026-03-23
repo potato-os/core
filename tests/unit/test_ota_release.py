@@ -233,3 +233,10 @@ def test_publish_ota_script_tolerates_existing_remote_tag():
     push_line_end = push_section.index("\n", push_section.index("git push"))
     push_line = push_section[:push_line_end]
     assert "|| true" in push_line or "2>/dev/null" in push_line
+
+
+def test_ota_update_e2e_script_has_valid_bash_syntax():
+    """tests/e2e/ota_update_pi.sh must parse without bash syntax errors."""
+    script_path = REPO_ROOT / "tests" / "e2e" / "ota_update_pi.sh"
+    assert script_path.exists(), f"ota_update_pi.sh not found at {script_path}"
+    subprocess.run(["bash", "-n", str(script_path)], check=True, cwd=REPO_ROOT)
