@@ -12,7 +12,71 @@ At minimum, back up:
 - any local files on the Pi you do not want to lose
 - any files on the card that only exist on the current system image
 
-Potato OS does not currently provide OTA updates, a one-click rollback flow, or a built-in backup feature.
+Potato OS provides app-level OTA updates (see below) but does not yet offer a one-click rollback flow or a built-in backup feature.
+
+## OTA Update Recovery
+
+Potato OS supports app-level OTA updates that replace `app/` and `bin/` on the device. The updater creates a backup before applying changes and attempts automatic rollback on failure.
+
+### What the updater backs up
+
+Before overwriting live files, the updater copies the current `app/` and `bin/` directories (plus `app/requirements.txt`) to a staging backup at `/opt/potato/.update_staging/_backup/`. This backup is used for automatic rollback if the apply or pip install step fails.
+
+### Auto-recovered failures (no action needed)
+
+These failures are handled automatically — the updater rolls back to the previous code and reports `failed` state in the UI:
+
+- **Download failures** (network error, timeout, rate limit): no files changed, safe to retry
+- **Extract failures** (corrupt tarball, disk full during extract): no files changed, safe to retry
+- **Apply failures** (permission error, disk full during copy): backup restored automatically
+- **Pip install failures** (missing dependency, venv error): backup restored automatically
+
+After automatic rollback the Pi continues running the previous version. Click "Retry" or "Check for updates" to try again.
+
+### Manual recovery via SSH
+
+If the service won't start after an update (e.g., the backup restore was incomplete or a new dependency is missing):
+
+```bash
+# Check service status and logs
+ssh pi@potato.local
+echo raspberry | sudo -S systemctl status potato --no-pager
+echo raspberry | sudo -S journalctl -u potato -n 50 --no-pager
+```
+
+To re-deploy the working code from your dev machine:
+
+```bash
+export SSHPASS=raspberry
+# Fix ownership if needed
+sshpass -e ssh -o StrictHostKeyChecking=accept-new pi@potato.local \
+  "echo raspberry | sudo -S chown -R pi:pi /opt/potato/app"
+
+# Rsync known-good app/ from your checkout
+sshpass -e rsync -az --delete \
+  -e "ssh -o StrictHostKeyChecking=accept-new" \
+  app/ pi@potato.local:/opt/potato/app/
+
+# Restart the service
+sshpass -e ssh -o StrictHostKeyChecking=accept-new pi@potato.local \
+  "echo raspberry | sudo -S systemctl restart potato"
+```
+
+### When to reflash instead
+
+Reflash the SD card if:
+
+- Both the update apply and the automatic backup restore failed (system in unknown state)
+- The service repeatedly fails to start after manual re-deploy attempts
+- You need to roll back to a clean baseline with no risk of leftover state
+- The update changed system-level files outside `app/` and `bin/` (not currently supported, but guard against future changes)
+
+### Known limitations
+
+- There is no one-click rollback button in the UI. If automatic rollback fails, recovery requires SSH access.
+- The updater only replaces `app/` and `bin/`. System packages, kernel, firmware, nginx config, and systemd units are not updated by OTA.
+- If the Pi loses power during the apply phase (after backup, before restart), the system may be left with partially applied code. SSH re-deploy or reflash is the recovery path.
+- The staging backup is removed after a successful restart. There is no persistent rollback snapshot.
 
 ## Reflash the Card
 
@@ -32,7 +96,7 @@ Use one of these targets:
 3. Reflash it with the image you want to return to.
 4. Boot again and restore any files you backed up separately.
 
-This is also the expected way to move between MVP releases until there is a supported in-place update path.
+For full-system changes (kernel, firmware, system packages), reflashing remains the expected upgrade path. App-level changes are handled by OTA updates.
 
 ### If the first boot of Potato seems stuck
 
@@ -42,7 +106,7 @@ Give first boot a few minutes, especially on the first model download. If the we
 - try `http://potato.local` again after a few minutes
 - if it still does not recover, reflash the card and start clean or return to your previous image
 
-There is no in-place uninstall flow for the flashed image path today, and there is no promise that one MVP Potato OS image can upgrade another in place.
+There is no in-place uninstall flow for the flashed image path today.
 
 ## Quick Troubleshooting Before You Reflash
 
@@ -69,8 +133,7 @@ This guide is intentionally lightweight for MVP.
 It does not provide:
 
 - full disaster recovery for every failure mode
-- in-place upgrades between Potato OS MVP images
 - automatic rollback of system configuration changes
 - recovery of data that was not backed up first
 
-If you want the safest escape hatch, keep a backup of your working SD card and expect reflashing to be the normal recovery and upgrade path for now.
+App-level OTA updates are now supported for routine `app/` and `bin/` changes. For full-system upgrades (kernel, firmware, system packages), reflashing remains the expected path.
