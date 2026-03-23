@@ -431,6 +431,60 @@ async def test_check_for_update_extracts_tarball_url(runtime):
     assert result["tarball_url"] == "https://example.com/tarball.tar.gz"
 
 
+@pytest.mark.anyio
+async def test_check_for_update_ignores_non_ota_tarball(runtime):
+    """Runtime tarballs (ik_llama-*.tar.gz) must not be picked up as OTA assets."""
+    with respx.mock(assert_all_called=True) as router:
+        router.get(GITHUB_RELEASES_LATEST_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "tag_name": "v0.5.0",
+                    "body": "",
+                    "html_url": "https://github.com/slomin/potato-os/releases/tag/v0.5.0",
+                    "assets": [
+                        {
+                            "name": "ik_llama-abc12345-pi5-opt.tar.gz",
+                            "browser_download_url": "https://example.com/runtime.tar.gz",
+                        }
+                    ],
+                },
+            )
+        )
+        result = await check_for_update(runtime)
+
+    assert result["tarball_url"] is None
+
+
+@pytest.mark.anyio
+async def test_check_for_update_picks_ota_over_runtime_tarball(runtime):
+    """When both OTA and runtime tarballs are present, OTA tarball is selected."""
+    with respx.mock(assert_all_called=True) as router:
+        router.get(GITHUB_RELEASES_LATEST_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "tag_name": "v0.5.0",
+                    "body": "",
+                    "html_url": "https://github.com/slomin/potato-os/releases/tag/v0.5.0",
+                    "assets": [
+                        {
+                            "name": "ik_llama-abc12345-pi5-opt.tar.gz",
+                            "browser_download_url": "https://example.com/runtime.tar.gz",
+                        },
+                        {
+                            "name": "potato-os-0.5.0.tar.gz",
+                            "browser_download_url": "https://example.com/ota.tar.gz",
+                        },
+                    ],
+                },
+            )
+        )
+        result = await check_for_update(runtime)
+
+    assert result["tarball_url"] == "https://example.com/ota.tar.gz"
+
+
 # ---------------------------------------------------------------------------
 # is_update_safe
 # ---------------------------------------------------------------------------
