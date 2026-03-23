@@ -100,6 +100,7 @@ tar -C "${STAGING}" -czf "${TARBALL_PATH}" \
   --exclude='__pycache__' \
   --exclude='*.pyc' \
   --exclude='.DS_Store' \
+  --exclude='._*' \
   "${ARCHIVE_NAME}"
 
 TARBALL_SIZE="$(wc -c < "${TARBALL_PATH}" | tr -d ' ')"
