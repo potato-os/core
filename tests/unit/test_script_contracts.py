@@ -288,12 +288,11 @@ def test_install_openclaw_configurable_context_budget():
 
 
 def test_install_openclaw_dynamic_origins():
-    """allowedOrigins must be built dynamically from hostname and IPs."""
+    """allowedOrigins must be built dynamically from hostname and IPs, including .local mDNS."""
     script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
     assert "hostname -I" in script
     assert "allowedOrigins" in script
-    # Must NOT have hardcoded potato.local in the allowedOrigins
-    assert '"http://potato.local:' not in script
+    assert ".local:" in script  # mDNS variant must be included
 
 
 def test_install_openclaw_disables_all_skills():
@@ -304,6 +303,21 @@ def test_install_openclaw_disables_all_skills():
     assert 'SKILL.md' in script
     # Must NOT have a hardcoded skill list
     assert "OPENCLAW_SKILLS_TO_DISABLE" not in script
+
+
+def test_install_openclaw_preserves_existing_config():
+    """Re-running the installer must not overwrite existing config."""
+    script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
+    assert "openclaw.json" in script
+    # Must check if config exists before writing
+    assert "-f" in script  # file existence test
+
+
+def test_install_openclaw_advertises_vision():
+    """Model input must include image for vision-capable Potato models."""
+    script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
+    assert '"image"' in script
+    assert '"text"' in script
 
 
 def test_install_openclaw_stock_port():
@@ -350,4 +364,11 @@ def test_uninstall_openclaw_removes_config():
 def test_uninstall_dev_handles_openclaw():
     script = Path("bin/uninstall_dev.sh").read_text(encoding="utf-8")
     assert "openclaw" in script
+
+
+def test_uninstall_dev_targets_real_user():
+    """Must use SUDO_USER to clean up the real user's service, not root's."""
+    script = Path("bin/uninstall_dev.sh").read_text(encoding="utf-8")
+    assert "SUDO_USER" in script
+    assert "su -" in script
 

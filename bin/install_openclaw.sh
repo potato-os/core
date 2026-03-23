@@ -84,26 +84,35 @@ npm install -g "openclaw@${OPENCLAW_VERSION}"
 
 # ── Phase 3: Deploy config ────────────────────────────────────────────────────
 
-printf '[3/7] Deploying Potato OS config...\n'
 OPENCLAW_DIR="${REAL_HOME}/.openclaw"
 WORKSPACE_DIR="${OPENCLAW_DIR}/workspace"
 mkdir -p "${WORKSPACE_DIR}"
 
-# Build dynamic allowedOrigins from actual hostname + IPs
-ORIGINS="\"http://localhost:${OPENCLAW_PORT}\", \"http://127.0.0.1:${OPENCLAW_PORT}\""
-PI_HOSTNAME="$(hostname 2>/dev/null || true)"
-if [ -n "${PI_HOSTNAME}" ]; then
-  ORIGINS="${ORIGINS}, \"http://${PI_HOSTNAME}:${OPENCLAW_PORT}\""
-fi
-for ip in $(hostname -I 2>/dev/null || true); do
-  ip="$(echo "${ip}" | tr -d '[:space:]')"
-  [ -n "${ip}" ] && ORIGINS="${ORIGINS}, \"http://${ip}:${OPENCLAW_PORT}\""
-done
+# Preserve existing config on upgrades — only deploy on fresh install.
+if [ -f "${OPENCLAW_DIR}/openclaw.json" ]; then
+  printf '[3/7] Existing OpenClaw config found, preserving.\n'
+  # Re-read the existing token so we can print the dashboard URL at the end.
+  GATEWAY_TOKEN="$(grep -oP '"token"\s*:\s*"\K[^"]+' "${OPENCLAW_DIR}/openclaw.json" 2>/dev/null || echo unknown)"
+else
+  printf '[3/7] Deploying Potato OS config (fresh install)...\n'
 
-# Generate a fresh gateway token
-GATEWAY_TOKEN="$(openssl rand -hex 24)"
+  # Build dynamic allowedOrigins from actual hostname + IPs + mDNS
+  ORIGINS="\"http://localhost:${OPENCLAW_PORT}\", \"http://127.0.0.1:${OPENCLAW_PORT}\""
+  PI_HOSTNAME="$(hostname 2>/dev/null || true)"
+  if [ -n "${PI_HOSTNAME}" ]; then
+    ORIGINS="${ORIGINS}, \"http://${PI_HOSTNAME}:${OPENCLAW_PORT}\""
+    # Add .local mDNS variant (standard remote access path)
+    ORIGINS="${ORIGINS}, \"http://${PI_HOSTNAME}.local:${OPENCLAW_PORT}\""
+  fi
+  for ip in $(hostname -I 2>/dev/null || true); do
+    ip="$(echo "${ip}" | tr -d '[:space:]')"
+    [ -n "${ip}" ] && ORIGINS="${ORIGINS}, \"http://${ip}:${OPENCLAW_PORT}\""
+  done
 
-cat > "${OPENCLAW_DIR}/openclaw.json" <<OCEOF
+  # Generate a fresh gateway token
+  GATEWAY_TOKEN="$(openssl rand -hex 24)"
+
+  cat > "${OPENCLAW_DIR}/openclaw.json" <<OCEOF
 {
   "models": {
     "mode": "merge",
@@ -117,7 +126,7 @@ cat > "${OPENCLAW_DIR}/openclaw.json" <<OCEOF
             "id": "local",
             "name": "Potato OS Local Model",
             "reasoning": false,
-            "input": ["text"],
+            "input": ["text", "image"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": ${CONTEXT_WINDOW},
             "maxTokens": ${MAX_TOKENS}
@@ -170,17 +179,18 @@ cat > "${OPENCLAW_DIR}/openclaw.json" <<OCEOF
 }
 OCEOF
 
-# Workspace SOUL — keep agent replies short to save tokens
-cat > "${WORKSPACE_DIR}/SOUL.md" <<'SOULEOF'
+  # Workspace SOUL — keep agent replies short to save tokens
+  cat > "${WORKSPACE_DIR}/SOUL.md" <<'SOULEOF'
 Calm, terse, practical.
 SOULEOF
 
-# Create empty bootstrap files to prevent OpenClaw from generating defaults
-for f in AGENTS.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md BOOTSTRAP.md MEMORY.md; do
-  : > "${WORKSPACE_DIR}/${f}"
-done
+  # Create empty bootstrap files to prevent OpenClaw from generating defaults
+  for f in AGENTS.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md BOOTSTRAP.md MEMORY.md; do
+    : > "${WORKSPACE_DIR}/${f}"
+  done
 
-chown -R "${REAL_USER}:${REAL_USER}" "${OPENCLAW_DIR}"
+  chown -R "${REAL_USER}:${REAL_USER}" "${OPENCLAW_DIR}"
+fi
 
 # ── Phase 4: Disable ALL bundled skills ───────────────────────────────────────
 

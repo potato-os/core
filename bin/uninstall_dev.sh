@@ -18,11 +18,14 @@ run_sudo() {
   sudo "$@"
 }
 
-# Clean up OpenClaw addon if installed
+# Clean up OpenClaw addon if installed — target the real user (pi), not root.
+OPENCLAW_USER="${SUDO_USER:-$(logname 2>/dev/null || whoami)}"
+OPENCLAW_HOME="$(eval echo "~${OPENCLAW_USER}")"
 if command -v openclaw &>/dev/null; then
-  systemctl --user disable --now openclaw-gateway 2>/dev/null || true
-  rm -f "${HOME}/.config/systemd/user/openclaw-gateway.service"
-  systemctl --user daemon-reload 2>/dev/null || true
+  su - "${OPENCLAW_USER}" -c "systemctl --user disable --now openclaw-gateway 2>/dev/null" || true
+  rm -f "${OPENCLAW_HOME}/.config/systemd/user/openclaw-gateway.service"
+  su - "${OPENCLAW_USER}" -c "systemctl --user daemon-reload 2>/dev/null" || true
+  rm -rf "${OPENCLAW_HOME}/.openclaw"
 fi
 
 run_sudo systemctl disable --now potato.service potato-firstboot.service potato-runtime-reset.service || true
