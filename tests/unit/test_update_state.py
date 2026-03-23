@@ -2,21 +2,36 @@
 
 from __future__ import annotations
 
+import io
 import json
+import os
+import stat
+import tarfile
 import time
+from pathlib import Path
 
 import httpx
 import pytest
 import respx
 
 from app.update_state import (
+    EXECUTION_ACTIVE_STATES,
     GITHUB_RELEASES_LATEST_URL,
+    UPDATE_APPLY_DIRS,
+    apply_staged_update,
     build_update_status,
     check_for_update,
+    cleanup_staging,
+    detect_post_update_state,
+    download_release_tarball,
+    extract_tarball,
     is_newer,
     is_update_safe,
     parse_version,
+    read_execution_state,
     read_update_state,
+    staging_dir,
+    write_execution_state,
 )
 
 
@@ -452,3 +467,403 @@ def test_is_update_safe_clear_when_download_errored(runtime):
     safe, reason = is_update_safe(runtime)
     assert safe is True
     assert reason is None
+
+
+def test_is_update_safe_blocked_by_active_update(runtime):
+    write_execution_state(runtime, execution_state="downloading", target_version="0.5.0")
+    safe, reason = is_update_safe(runtime)
+    assert safe is False
+    assert reason == "update_in_progress"
+
+
+def test_is_update_safe_blocked_by_all_active_states(runtime):
+    for active_state in EXECUTION_ACTIVE_STATES:
+        write_execution_state(runtime, execution_state=active_state, target_version="0.5.0")
+        safe, reason = is_update_safe(runtime)
+        assert safe is False, f"Expected blocked for {active_state}"
+        assert reason == "update_in_progress"
+
+
+def test_is_update_safe_clear_after_failed_update(runtime):
+    write_execution_state(runtime, execution_state="failed", error="download_failed")
+    safe, reason = is_update_safe(runtime)
+    assert safe is True
+    assert reason is None
+
+
+# ---------------------------------------------------------------------------
+# Phase B — write/read execution state
+# ---------------------------------------------------------------------------
+
+
+def test_write_execution_state_creates_fields(runtime):
+    write_execution_state(
+        runtime,
+        execution_state="downloading",
+        phase="downloading",
+        percent=42,
+        target_version="0.5.0",
+        started_at_unix=1711000100,
+    )
+    state = read_update_state(runtime)
+    assert state["execution_state"] == "downloading"
+    assert state["execution_phase"] == "downloading"
+    assert state["execution_percent"] == 42
+    assert state["execution_error"] is None
+    assert state["execution_target_version"] == "0.5.0"
+    assert state["execution_started_at_unix"] == 1711000100
+
+
+def test_write_execution_state_preserves_check_fields(runtime):
+    check_state = {
+        "available": True,
+        "current_version": "0.4.0",
+        "latest_version": "0.5.0",
+        "release_notes": "Bug fixes",
+        "tarball_url": "https://example.com/tarball.tar.gz",
+        "checked_at_unix": 1711000000,
+        "error": None,
+    }
+    runtime.update_state_path.write_text(json.dumps(check_state), encoding="utf-8")
+
+    write_execution_state(runtime, execution_state="downloading", target_version="0.5.0")
+
+    state = read_update_state(runtime)
+    assert state["available"] is True
+    assert state["latest_version"] == "0.5.0"
+    assert state["tarball_url"] == "https://example.com/tarball.tar.gz"
+    assert state["execution_state"] == "downloading"
+
+
+def test_write_execution_state_error(runtime):
+    write_execution_state(
+        runtime,
+        execution_state="failed",
+        error="network_timeout",
+        target_version="0.5.0",
+    )
+    state = read_update_state(runtime)
+    assert state["execution_state"] == "failed"
+    assert state["execution_error"] == "network_timeout"
+
+
+def test_read_execution_state_returns_idle_when_missing(runtime):
+    assert read_execution_state(runtime) == "idle"
+
+
+def test_read_execution_state_returns_idle_on_corrupt(runtime):
+    runtime.update_state_path.write_text("not json{{{", encoding="utf-8")
+    assert read_execution_state(runtime) == "idle"
+
+
+def test_read_execution_state_returns_value(runtime):
+    write_execution_state(runtime, execution_state="staging", target_version="0.5.0")
+    assert read_execution_state(runtime) == "staging"
+
+
+# ---------------------------------------------------------------------------
+# Phase B — build_update_status with execution state
+# ---------------------------------------------------------------------------
+
+
+def test_build_update_status_reflects_downloading_state(runtime):
+    write_execution_state(
+        runtime,
+        execution_state="downloading",
+        phase="downloading",
+        percent=55,
+        target_version="0.5.0",
+    )
+    result = build_update_status(runtime)
+    assert result["state"] == "downloading"
+    assert result["progress"]["phase"] == "downloading"
+    assert result["progress"]["percent"] == 55
+
+
+def test_build_update_status_reflects_failed_state(runtime):
+    write_execution_state(
+        runtime,
+        execution_state="failed",
+        error="extract_failed",
+        target_version="0.5.0",
+    )
+    result = build_update_status(runtime)
+    assert result["state"] == "failed"
+    assert result["progress"]["error"] == "extract_failed"
+
+
+def test_build_update_status_execution_error_overrides_check_error(runtime):
+    state = {
+        "available": True,
+        "latest_version": "0.5.0",
+        "checked_at_unix": 1711000000,
+        "error": "rate_limited",
+        "execution_state": "failed",
+        "execution_error": "apply_failed",
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    result = build_update_status(runtime)
+    assert result["progress"]["error"] == "apply_failed"
+
+
+def test_build_update_status_falls_back_to_check_error(runtime):
+    state = {
+        "available": False,
+        "latest_version": None,
+        "checked_at_unix": 1711000000,
+        "error": "rate_limited",
+        "execution_state": "idle",
+        "execution_error": None,
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    result = build_update_status(runtime)
+    assert result["progress"]["error"] == "rate_limited"
+
+
+# ---------------------------------------------------------------------------
+# Phase B — detect_post_update_state
+# ---------------------------------------------------------------------------
+
+
+def test_detect_post_update_state_noop_when_idle(runtime):
+    assert detect_post_update_state(runtime) is False
+
+
+def test_detect_post_update_state_noop_when_no_state(runtime):
+    assert detect_post_update_state(runtime) is False
+
+
+def test_detect_post_update_state_clears_restart_pending_on_success(runtime, monkeypatch):
+    monkeypatch.setattr("app.update_state.__version__", "0.5.0")
+    state = {
+        "available": True,
+        "latest_version": "0.5.0",
+        "execution_state": "restart_pending",
+        "execution_target_version": "0.5.0",
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    assert detect_post_update_state(runtime) is True
+
+    after = read_update_state(runtime)
+    assert after["execution_state"] == "idle"
+    assert after["execution_error"] is None
+    assert after["execution_target_version"] is None
+
+
+def test_detect_post_update_state_fails_on_version_mismatch(runtime, monkeypatch):
+    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+    state = {
+        "available": True,
+        "latest_version": "0.5.0",
+        "execution_state": "restart_pending",
+        "execution_target_version": "0.5.0",
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    assert detect_post_update_state(runtime) is False
+
+    after = read_update_state(runtime)
+    assert after["execution_state"] == "failed"
+    assert after["execution_error"] == "version_unchanged_after_restart"
+
+
+# ---------------------------------------------------------------------------
+# Phase B — staging_dir / cleanup_staging
+# ---------------------------------------------------------------------------
+
+
+def test_staging_dir_path(runtime):
+    result = staging_dir(runtime)
+    assert result == runtime.base_dir / ".update_staging"
+
+
+def test_cleanup_staging_removes_dir(runtime):
+    stage = staging_dir(runtime)
+    stage.mkdir(parents=True)
+    (stage / "file.txt").write_text("data")
+    cleanup_staging(runtime)
+    assert not stage.exists()
+
+
+def test_cleanup_staging_noop_when_missing(runtime):
+    cleanup_staging(runtime)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Phase B — download_release_tarball
+# ---------------------------------------------------------------------------
+
+
+def _make_tarball_bytes(contents: dict[str, str]) -> bytes:
+    """Create an in-memory tar.gz with the given filename->content map."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, data in contents.items():
+            info = tarfile.TarInfo(name=name)
+            encoded = data.encode("utf-8")
+            info.size = len(encoded)
+            tf.addfile(info, io.BytesIO(encoded))
+    return buf.getvalue()
+
+
+@pytest.mark.anyio
+async def test_download_release_tarball_writes_file(runtime):
+    tarball_data = _make_tarball_bytes({"app/main.py": "print('hello')"})
+    dest = staging_dir(runtime) / "update.tar.gz"
+
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://example.com/update.tar.gz").mock(
+            return_value=httpx.Response(
+                200,
+                content=tarball_data,
+                headers={"content-length": str(len(tarball_data))},
+            )
+        )
+        result = await download_release_tarball(runtime, "https://example.com/update.tar.gz", dest)
+
+    assert result == dest
+    assert dest.exists()
+    assert dest.stat().st_size == len(tarball_data)
+
+
+@pytest.mark.anyio
+async def test_download_release_tarball_reports_progress(runtime):
+    tarball_data = _make_tarball_bytes({"app/main.py": "x" * 1000})
+    dest = staging_dir(runtime) / "update.tar.gz"
+    progress_values: list[int] = []
+
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://example.com/update.tar.gz").mock(
+            return_value=httpx.Response(
+                200,
+                content=tarball_data,
+                headers={"content-length": str(len(tarball_data))},
+            )
+        )
+        await download_release_tarball(
+            runtime,
+            "https://example.com/update.tar.gz",
+            dest,
+            on_progress=progress_values.append,
+        )
+
+    assert len(progress_values) > 0
+    assert progress_values[-1] == 100
+
+
+@pytest.mark.anyio
+async def test_download_release_tarball_raises_on_http_error(runtime):
+    dest = staging_dir(runtime) / "update.tar.gz"
+
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://example.com/update.tar.gz").mock(
+            return_value=httpx.Response(404, text="Not Found")
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            await download_release_tarball(runtime, "https://example.com/update.tar.gz", dest)
+
+
+# ---------------------------------------------------------------------------
+# Phase B — extract_tarball
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_extract_tarball_creates_expected_dirs(tmp_path):
+    tarball_data = _make_tarball_bytes({
+        "potato-os-0.5.0/app/main.py": "print('hello')",
+        "potato-os-0.5.0/bin/run.sh": "#!/bin/bash",
+    })
+    tarball_path = tmp_path / "update.tar.gz"
+    tarball_path.write_bytes(tarball_data)
+
+    dest = tmp_path / "extracted"
+    await extract_tarball(tarball_path, dest)
+
+    assert (dest / "potato-os-0.5.0" / "app" / "main.py").exists()
+    assert (dest / "potato-os-0.5.0" / "bin" / "run.sh").exists()
+
+
+@pytest.mark.anyio
+async def test_extract_tarball_raises_on_corrupt(tmp_path):
+    tarball_path = tmp_path / "bad.tar.gz"
+    tarball_path.write_text("not a tarball")
+
+    with pytest.raises((tarfile.TarError, EOFError)):
+        await extract_tarball(tarball_path, tmp_path / "extracted")
+
+
+# ---------------------------------------------------------------------------
+# Phase B — apply_staged_update
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_copies_app_and_bin(runtime):
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "app").mkdir(parents=True)
+    (staged / "app" / "main.py").write_text("# new version")
+    (staged / "bin").mkdir(parents=True)
+    (staged / "bin" / "run.sh").write_text("#!/bin/bash\necho new")
+
+    # Pre-create target dirs with old content
+    (runtime.base_dir / "app").mkdir(parents=True, exist_ok=True)
+    (runtime.base_dir / "app" / "main.py").write_text("# old version")
+
+    await apply_staged_update(runtime, staged)
+
+    assert (runtime.base_dir / "app" / "main.py").read_text() == "# new version"
+    assert (runtime.base_dir / "bin" / "run.sh").read_text() == "#!/bin/bash\necho new"
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_sets_executable_bits(runtime):
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "app").mkdir(parents=True)
+    (staged / "app" / "main.py").write_text("# app")
+    (staged / "bin").mkdir(parents=True)
+    (staged / "bin" / "start.sh").write_text("#!/bin/bash")
+
+    await apply_staged_update(runtime, staged)
+
+    sh_file = runtime.base_dir / "bin" / "start.sh"
+    assert sh_file.stat().st_mode & stat.S_IXUSR
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_skips_state_dir(runtime):
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "app").mkdir(parents=True)
+    (staged / "app" / "main.py").write_text("# new")
+
+    # Pre-create a state file that should not be touched
+    state_dir = runtime.base_dir / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "models.json").write_text('{"keep": true}')
+
+    await apply_staged_update(runtime, staged)
+
+    assert (state_dir / "models.json").read_text() == '{"keep": true}'
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_handles_single_subdir_layout(runtime):
+    staged = staging_dir(runtime) / "extracted"
+    inner = staged / "potato-os-0.5.0"
+    (inner / "app").mkdir(parents=True)
+    (inner / "app" / "main.py").write_text("# new")
+
+    await apply_staged_update(runtime, staged)
+
+    assert (runtime.base_dir / "app" / "main.py").read_text() == "# new"
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_raises_on_missing_app_dir(runtime):
+    staged = staging_dir(runtime) / "extracted"
+    staged.mkdir(parents=True)
+    (staged / "random.txt").write_text("no app dir here")
+
+    with pytest.raises(FileNotFoundError, match="app/"):
+        await apply_staged_update(runtime, staged)

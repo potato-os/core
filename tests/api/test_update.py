@@ -1,13 +1,15 @@
-"""API tests for OTA update check endpoint and /status integration."""
+"""API tests for OTA update endpoints and /status integration."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi.testclient import TestClient
 
 from app.__version__ import __version__
 from app.main import create_app, get_runtime
+from app.update_state import write_execution_state
 
 
 def test_update_check_returns_409_when_orchestrator_disabled(client):
@@ -112,6 +114,178 @@ def test_status_update_deferred_when_download_active(runtime, monkeypatch):
     update = response.json()["update"]
     assert update["deferred"] is True
     assert update["defer_reason"] == "download_active"
+
+
+# ---------------------------------------------------------------------------
+# POST /internal/update/start
+# ---------------------------------------------------------------------------
+
+
+def test_update_start_returns_409_when_orchestrator_disabled(client):
+    response = client.post("/internal/update/start")
+    assert response.status_code == 409
+    body = response.json()
+    assert body["started"] is False
+    assert body["reason"] == "orchestrator_disabled"
+
+
+def test_update_start_returns_409_when_no_update_available(runtime, monkeypatch):
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    with TestClient(app) as c:
+        response = c.post("/internal/update/start")
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "no_update_available"
+
+
+def test_update_start_returns_409_when_no_tarball_url(runtime, monkeypatch):
+    state = {
+        "available": True,
+        "current_version": "0.4.0",
+        "latest_version": "0.5.0",
+        "tarball_url": None,
+        "checked_at_unix": 1711000000,
+        "error": None,
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    with TestClient(app) as c:
+        response = c.post("/internal/update/start")
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "no_tarball_url"
+
+
+def test_update_start_returns_409_when_download_active(runtime, monkeypatch):
+    state = {
+        "available": True,
+        "current_version": "0.4.0",
+        "latest_version": "0.5.0",
+        "tarball_url": "https://example.com/tarball.tar.gz",
+        "checked_at_unix": 1711000000,
+        "error": None,
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    runtime.download_state_path.write_text(
+        json.dumps({"bytes_total": 1000, "bytes_downloaded": 500, "percent": 50}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    with TestClient(app) as c:
+        response = c.post("/internal/update/start")
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "download_active"
+
+
+def test_update_start_returns_409_when_update_already_running(runtime, monkeypatch):
+    state = {
+        "available": True,
+        "current_version": "0.4.0",
+        "latest_version": "0.5.0",
+        "tarball_url": "https://example.com/tarball.tar.gz",
+        "checked_at_unix": 1711000000,
+        "error": None,
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    write_execution_state(runtime, execution_state="downloading", target_version="0.5.0")
+    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    with TestClient(app) as c:
+        response = c.post("/internal/update/start")
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "update_in_progress"
+
+
+def test_update_start_returns_200_and_starts(runtime, monkeypatch):
+    state = {
+        "available": True,
+        "current_version": "0.4.0",
+        "latest_version": "0.5.0",
+        "tarball_url": "https://example.com/tarball.tar.gz",
+        "checked_at_unix": 1711000000,
+        "error": None,
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    async def _mock_run_update(_app, _runtime, _url, _version):
+        pass
+
+    monkeypatch.setattr("app.routes.update.run_update", _mock_run_update)
+
+    with TestClient(app) as c:
+        response = c.post("/internal/update/start")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["started"] is True
+
+
+def test_status_update_reflects_downloading(runtime, monkeypatch):
+    write_execution_state(
+        runtime,
+        execution_state="downloading",
+        phase="downloading",
+        percent=42,
+        target_version="0.5.0",
+    )
+
+    app = create_app(runtime=runtime, enable_orchestrator=False)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+
+    with TestClient(app) as c:
+        response = c.get("/status")
+
+    assert response.status_code == 200
+    update = response.json()["update"]
+    assert update["state"] == "downloading"
+    assert update["progress"]["phase"] == "downloading"
+    assert update["progress"]["percent"] == 42
+
+
+def test_status_update_reflects_failed(runtime, monkeypatch):
+    write_execution_state(
+        runtime,
+        execution_state="failed",
+        error="network_timeout",
+        target_version="0.5.0",
+    )
+
+    app = create_app(runtime=runtime, enable_orchestrator=False)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+
+    with TestClient(app) as c:
+        response = c.get("/status")
+
+    assert response.status_code == 200
+    update = response.json()["update"]
+    assert update["state"] == "failed"
+    assert update["progress"]["error"] == "network_timeout"
 
 
 # ---------------------------------------------------------------------------

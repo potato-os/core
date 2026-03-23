@@ -74,7 +74,17 @@ try:
         _unique_filename,
         _unique_model_id,
     )
-    from app.update_state import build_update_status
+    from app.update_state import (
+        build_update_status,
+        cleanup_staging,
+        detect_post_update_state,
+        download_release_tarball,
+        extract_tarball,
+        apply_staged_update,
+        signal_service_restart,
+        staging_dir,
+        write_execution_state,
+    )
     from app.runtime_state import (
         LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
         LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME,
@@ -862,6 +872,100 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     return env
 
 
+async def run_update(
+    app: FastAPI,
+    runtime: RuntimeConfig,
+    tarball_url: str,
+    target_version: str,
+) -> None:
+    """Background task: download → stage → apply → signal restart."""
+    stage = staging_dir(runtime)
+    tarball_dest = stage / "update.tar.gz"
+
+    try:
+        write_execution_state(
+            runtime,
+            execution_state="downloading",
+            phase="downloading",
+            percent=0,
+            target_version=target_version,
+            started_at_unix=int(time.time()),
+        )
+        stage.mkdir(parents=True, exist_ok=True)
+
+        def _on_progress(percent: int) -> None:
+            write_execution_state(
+                runtime,
+                execution_state="downloading",
+                phase="downloading",
+                percent=percent,
+                target_version=target_version,
+            )
+
+        await download_release_tarball(runtime, tarball_url, tarball_dest, on_progress=_on_progress)
+
+        write_execution_state(
+            runtime,
+            execution_state="staging",
+            phase="staging",
+            percent=0,
+            target_version=target_version,
+        )
+        extract_dir = stage / "extracted"
+        await extract_tarball(tarball_dest, extract_dir)
+        write_execution_state(
+            runtime,
+            execution_state="staging",
+            phase="staging",
+            percent=100,
+            target_version=target_version,
+        )
+
+        write_execution_state(
+            runtime,
+            execution_state="applying",
+            phase="applying",
+            percent=0,
+            target_version=target_version,
+        )
+        await apply_staged_update(runtime, extract_dir)
+        write_execution_state(
+            runtime,
+            execution_state="applying",
+            phase="applying",
+            percent=100,
+            target_version=target_version,
+        )
+
+        write_execution_state(
+            runtime,
+            execution_state="restart_pending",
+            percent=100,
+            target_version=target_version,
+        )
+        cleanup_staging(runtime)
+        await signal_service_restart()
+
+    except asyncio.CancelledError:
+        write_execution_state(
+            runtime,
+            execution_state="failed",
+            error="cancelled",
+            target_version=target_version,
+        )
+        cleanup_staging(runtime)
+        raise
+    except Exception as exc:
+        logger.warning("Update failed: %s", exc, exc_info=True)
+        write_execution_state(
+            runtime,
+            execution_state="failed",
+            error=str(exc) or "unknown_error",
+            target_version=target_version,
+        )
+        cleanup_staging(runtime)
+
+
 async def start_model_download(
     app: FastAPI,
     runtime: RuntimeConfig,
@@ -1502,6 +1606,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         switched, reason = await ensure_compatible_runtime(app.state.runtime)
         if switched:
             logger.info("Runtime auto-switched at startup: %s", reason)
+        detect_post_update_state(app.state.runtime)
         ensure_models_state(app.state.runtime)
         prime_system_metrics_counters()
         app.state.system_metrics_snapshot = collect_system_metrics_snapshot()
@@ -1540,6 +1645,14 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 except asyncio.CancelledError:
                     pass
 
+            update_task = app.state.update_task
+            if update_task is not None and not update_task.done():
+                update_task.cancel()
+                try:
+                    await update_task
+                except asyncio.CancelledError:
+                    pass
+
             system_task = app.state.system_metrics_task
             if system_task is not None:
                 system_task.cancel()
@@ -1568,6 +1681,8 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.state.llama_runtime_switch_lock = asyncio.Lock()
     app.state.llama_runtime_switch_state = _empty_llama_runtime_switch_state()
     app.state.llama_readiness_state = _empty_llama_readiness_state()
+    app.state.update_task = None
+    app.state.update_lock = asyncio.Lock()
     app.state.llama_consecutive_failures = 0
     app.state.startup_monotonic = None
     app.state.orchestrator_task = None
