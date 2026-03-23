@@ -118,12 +118,23 @@ cleanup() {
     _restore_pi || log_stage "WARNING: Pi restore failed during cleanup"
   fi
 
-  # Remove local staging and snapshot
+  # Remove local staging
   if [ -n "${STAGING_DIR}" ] && [ -d "${STAGING_DIR}" ]; then
     rm -rf "${STAGING_DIR}"
   fi
-  if [ -n "${PI_SNAPSHOT_DIR}" ] && [ -d "${PI_SNAPSHOT_DIR}" ]; then
-    rm -rf "${PI_SNAPSHOT_DIR}"
+
+  # Only remove snapshot if Pi was successfully restored.
+  # If restore failed, preserve it — it's the only correct recovery source.
+  if [ "${PI_STATE_DIRTY}" = "0" ]; then
+    if [ -n "${PI_SNAPSHOT_DIR}" ] && [ -d "${PI_SNAPSHOT_DIR}" ]; then
+      rm -rf "${PI_SNAPSHOT_DIR}"
+    fi
+  elif [ -n "${PI_SNAPSHOT_DIR}" ] && [ -d "${PI_SNAPSHOT_DIR}" ]; then
+    echo "" >&2
+    echo "IMPORTANT: Pi snapshot preserved at: ${PI_SNAPSHOT_DIR}" >&2
+    echo "  Restore manually with:" >&2
+    echo "  SSHPASS=\${PI_PASSWORD} sshpass -e rsync -az --delete -e 'ssh ${PI_SSH_OPTIONS}' ${PI_SNAPSHOT_DIR}/app/ ${PI_USER}@${PI_HOST}:/opt/potato/app/" >&2
+    echo "  SSHPASS=\${PI_PASSWORD} sshpass -e rsync -az --delete -e 'ssh ${PI_SSH_OPTIONS}' ${PI_SNAPSHOT_DIR}/bin/ ${PI_USER}@${PI_HOST}:/opt/potato/bin/" >&2
   fi
 
   exit "${exit_code}"
@@ -445,8 +456,10 @@ log_stage "Phase 8: Restoring Pi to pre-test state..."
 if ! _restore_pi; then
   echo "FATAL: Could not restore Pi to original state. Manual intervention required." >&2
   echo "  Expected version: ${ORIGINAL_VERSION}" >&2
-  echo "  Run: sshpass -e rsync -az --delete -e 'ssh ${PI_SSH_OPTIONS}' app/ ${PI_USER}@${PI_HOST}:/opt/potato/app/" >&2
-  echo "  Run: sshpass -e rsync -az --delete -e 'ssh ${PI_SSH_OPTIONS}' bin/ ${PI_USER}@${PI_HOST}:/opt/potato/bin/" >&2
+  echo "  Pi snapshot preserved at: ${PI_SNAPSHOT_DIR}" >&2
+  echo "  Restore manually with:" >&2
+  echo "  SSHPASS=\${PI_PASSWORD} sshpass -e rsync -az --delete -e 'ssh ${PI_SSH_OPTIONS}' ${PI_SNAPSHOT_DIR}/app/ ${PI_USER}@${PI_HOST}:/opt/potato/app/" >&2
+  echo "  SSHPASS=\${PI_PASSWORD} sshpass -e rsync -az --delete -e 'ssh ${PI_SSH_OPTIONS}' ${PI_SNAPSHOT_DIR}/bin/ ${PI_USER}@${PI_HOST}:/opt/potato/bin/" >&2
   exit 1
 fi
 report_stage_time "Phase 8 (restore)" "${stage_started_at}"
