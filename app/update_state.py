@@ -366,11 +366,45 @@ def _find_update_root(extracted_dir: Path) -> Path:
     )
 
 
+def _backup_live_dirs(runtime: RuntimeConfig, backup_dir: Path) -> None:
+    """Snapshot current app/ and bin/ so they can be restored on failure."""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    for dirname in UPDATE_APPLY_DIRS:
+        src = runtime.base_dir / dirname
+        if src.is_dir():
+            shutil.copytree(src, backup_dir / dirname)
+    req = runtime.base_dir / "app" / "requirements.txt"
+    if req.is_file():
+        shutil.copy2(req, backup_dir / "requirements.txt")
+
+
+def _restore_from_backup(runtime: RuntimeConfig, backup_dir: Path) -> None:
+    """Overwrite live dirs with the pre-update backup."""
+    for dirname in UPDATE_APPLY_DIRS:
+        bak = backup_dir / dirname
+        if not bak.is_dir():
+            continue
+        dst = runtime.base_dir / dirname
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(bak, dst)
+    req_bak = backup_dir / "requirements.txt"
+    if req_bak.is_file():
+        shutil.copy2(req_bak, runtime.base_dir / "app" / "requirements.txt")
+
+
 async def apply_staged_update(runtime: RuntimeConfig, staged_dir: Path) -> None:
-    """Copy staged files over the running installation."""
+    """Copy staged files over the running installation.
+
+    Backs up live app/ and bin/ first. If the copy or pip install fails
+    the backup is restored so the device boots the old code on restart.
+    """
     import asyncio
 
+    backup_dir = staging_dir(runtime) / "_backup"
+
     def _apply() -> None:
+        _backup_live_dirs(runtime, backup_dir)
         root = _find_update_root(staged_dir)
         for dirname in UPDATE_APPLY_DIRS:
             src = root / dirname
@@ -388,8 +422,16 @@ async def apply_staged_update(runtime: RuntimeConfig, staged_dir: Path) -> None:
             for sh_file in bin_dir.glob("*.sh"):
                 sh_file.chmod(sh_file.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
-    await asyncio.to_thread(_apply)
-    await install_requirements(runtime)
+    try:
+        await asyncio.to_thread(_apply)
+        await install_requirements(runtime)
+    except Exception:
+        logger.warning("Apply failed, restoring backup", exc_info=True)
+        try:
+            await asyncio.to_thread(_restore_from_backup, runtime, backup_dir)
+        except Exception:
+            logger.critical("Backup restore also failed", exc_info=True)
+        raise
 
 
 async def install_requirements(runtime: RuntimeConfig) -> None:

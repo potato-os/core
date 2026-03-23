@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import stat
 import tarfile
 import time
@@ -878,13 +879,72 @@ async def test_apply_staged_update_copies_requirements_txt(runtime):
     (staged / "app" / "main.py").write_text("# new")
     (staged / "requirements.txt").write_text("httpx>=0.27\nfastapi>=0.111\n")
 
-    # Create a fake venv/bin/pip so install_requirements doesn't run real pip
-    # (it won't find one, so it skips — we just verify the file copy here)
     await apply_staged_update(runtime, staged)
 
     req_dst = runtime.base_dir / "app" / "requirements.txt"
     assert req_dst.exists()
     assert "httpx>=0.27" in req_dst.read_text()
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_restores_on_pip_failure(runtime, monkeypatch):
+    """If pip install fails after file copy, the old tree is restored."""
+    # Set up old content
+    (runtime.base_dir / "app").mkdir(parents=True, exist_ok=True)
+    (runtime.base_dir / "app" / "main.py").write_text("# old version")
+    (runtime.base_dir / "app" / "requirements.txt").write_text("httpx>=0.25\n")
+    (runtime.base_dir / "bin").mkdir(parents=True, exist_ok=True)
+    (runtime.base_dir / "bin" / "run.sh").write_text("#!/bin/bash\necho old")
+
+    # Set up staged new content
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "app").mkdir(parents=True)
+    (staged / "app" / "main.py").write_text("# new version")
+    (staged / "bin").mkdir(parents=True)
+    (staged / "bin" / "run.sh").write_text("#!/bin/bash\necho new")
+    (staged / "requirements.txt").write_text("httpx>=0.27\nnew-dep>=1.0\n")
+
+    # Create fake venv/bin/pip that fails
+    venv_bin = runtime.base_dir / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    pip_script = venv_bin / "pip"
+    pip_script.write_text("#!/bin/bash\nexit 1")
+    pip_script.chmod(pip_script.stat().st_mode | stat.S_IXUSR)
+
+    with pytest.raises(RuntimeError, match="pip install failed"):
+        await apply_staged_update(runtime, staged)
+
+    # Old content should be restored
+    assert (runtime.base_dir / "app" / "main.py").read_text() == "# old version"
+    assert (runtime.base_dir / "bin" / "run.sh").read_text() == "#!/bin/bash\necho old"
+    assert "httpx>=0.25" in (runtime.base_dir / "app" / "requirements.txt").read_text()
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_restores_on_copy_failure(runtime, monkeypatch):
+    """If file copy itself fails, the old tree is restored."""
+    (runtime.base_dir / "app").mkdir(parents=True, exist_ok=True)
+    (runtime.base_dir / "app" / "main.py").write_text("# old version")
+
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "app").mkdir(parents=True)
+    (staged / "app" / "main.py").write_text("# new version")
+
+    # Make copytree fail on the live overwrite (dirs_exist_ok=True),
+    # but allow backup copies (no dirs_exist_ok) to succeed.
+    original_copytree = shutil.copytree
+
+    def _failing_copytree(src, dst, **kwargs):
+        if kwargs.get("dirs_exist_ok"):
+            raise OSError("Disk full")
+        return original_copytree(src, dst, **kwargs)
+
+    monkeypatch.setattr("app.update_state.shutil.copytree", _failing_copytree)
+
+    with pytest.raises(OSError, match="Disk full"):
+        await apply_staged_update(runtime, staged)
+
+    assert (runtime.base_dir / "app" / "main.py").read_text() == "# old version"
 
 
 # ---------------------------------------------------------------------------
