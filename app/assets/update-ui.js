@@ -38,8 +38,27 @@ export function renderUpdateCard(updatePayload) {
   if (retryBtn) retryBtn.hidden = true;
   if (progressWrap) progressWrap.hidden = true;
 
-  // No update, idle — hide card
+  // Block check button during active execution to prevent update.json overwrite
+  const checkBtn = document.getElementById("updateCheckBtn");
+  if (checkBtn) {
+    checkBtn.disabled = appState.updateCheckInFlight || isActive;
+  }
+
+  // No update, idle — hide card unless there's a check error to surface
   if (state === "idle" && !available) {
+    if (error) {
+      // Check failed (rate_limited, network_error, etc.) — show feedback
+      card.hidden = false;
+      const errorLabels = {
+        rate_limited: "GitHub rate limit reached. Try again later.",
+        network_error: "Could not reach GitHub. Check network connection.",
+        parse_error: "Received an unexpected response from GitHub.",
+        unknown_error: "An unexpected error occurred while checking for updates.",
+      };
+      title.textContent = "Update check failed";
+      hint.textContent = errorLabels[error] || `Check failed: ${error}`;
+      return;
+    }
     card.hidden = true;
     return;
   }
@@ -115,10 +134,16 @@ function _showProgress(wrap, bar, percent) {
   bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
 }
 
+export function isUpdateExecutionActive() {
+  const state = String(appState.latestStatus?.update?.state || "idle");
+  return ACTIVE_STATES.has(state);
+}
+
 export function setUpdateCheckInFlight(inFlight) {
   const btn = document.getElementById("updateCheckBtn");
   if (!btn) return;
-  btn.disabled = Boolean(inFlight);
+  const blocked = Boolean(inFlight) || isUpdateExecutionActive();
+  btn.disabled = blocked;
   btn.textContent = inFlight ? "Checking..." : "Check for updates";
 }
 

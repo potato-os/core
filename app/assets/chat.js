@@ -5,7 +5,7 @@ import { formatBytes, formatPercent, formatClockMHz, normalizePercent, percentFr
 import { registerAppendMessage, saveActiveSession, clearChatState, startNewChat, deleteSession, deleteAllSessions, loadSessionIntoView, initSessionManager, renderSessionList } from "./session-manager.js";
 import { isLocalModelConnected, findResumableFailedModel, renderDownloadPrompt } from "./status.js";
 import { setModelUploadStatus, setLlamaRuntimeSwitchStatus, setLlamaRuntimeSwitchButtonState, setLlamaMemoryLoadingStatus, setLlamaMemoryLoadingButtonState, setLargeModelOverrideStatus, setLargeModelOverrideButtonState, setPowerCalibrationStatus, setPowerCalibrationButtonsState, setPowerCalibrationLiveStatus } from "./runtime-ui.js";
-import { setUpdateCheckInFlight, setUpdateStartInFlight, renderUpdateCard, registerUpdateCallbacks } from "./update-ui.js";
+import { setUpdateCheckInFlight, setUpdateStartInFlight, renderUpdateCard, registerUpdateCallbacks, isUpdateExecutionActive } from "./update-ui.js";
 import { registerOpenEditMessageModal, getMessagesBox, isMessagesPinned, setMessagesPinnedState, hasActiveMessageSelection, handleMessagesChanged, appendMessage, updateMessage, setMessageProcessingState, setMessageMeta, setMessageActionsVisible, removeMessage } from "./messages.js";
 import { registerImageUiCallbacks, cancelPendingImageWork, clearPendingImage, handleImageSelected, buildUserMessageContent, buildUserBubblePayload, openImagePicker } from "./image-handler.js";
 import { registerSettingsCallbacks, activeRuntimeVisionCapability, showTextOnlyImageBlockedState, resolveSelectedSettingsModel, selectedModelHasUnsavedChanges, blockModelSelectionChange, renderSettingsWorkspace, bindSettingsModal, setModelUrlStatus, formatModelUrlStatus } from "./settings-ui.js";
@@ -835,6 +835,7 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
 
     async function checkForUpdate() {
       if (appState.updateCheckInFlight) return;
+      if (isUpdateExecutionActive()) return;
       appState.updateCheckInFlight = true;
       setUpdateCheckInFlight(true);
       try {

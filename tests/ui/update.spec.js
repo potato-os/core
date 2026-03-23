@@ -258,3 +258,37 @@ test("release notes displayed as chat message", async ({ page }) => {
   await page.locator("#updateNotesBtn").click();
   await expect(page.locator("#messages")).toContainText("Feature A", { timeout: 5000 });
 });
+
+test("check button disabled during active update execution", async ({ page }) => {
+  const status = makeUpdatePayload({
+    available: true,
+    current_version: "0.4.0",
+    latest_version: "0.5.0",
+    state: "downloading",
+    progress: { phase: "downloading", percent: 30, error: null },
+  });
+  await page.route("**/status", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(status) })
+  );
+  await page.goto("/");
+  await waitForStatusApplied(page);
+
+  await expect(page.locator("#updateCheckBtn")).toBeDisabled();
+});
+
+test("shows check error when update check fails", async ({ page }) => {
+  const status = makeUpdatePayload({
+    available: false,
+    state: "idle",
+    progress: { phase: null, percent: 0, error: "rate_limited" },
+  });
+  await page.route("**/status", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(status) })
+  );
+  await page.goto("/");
+  await waitForStatusApplied(page);
+
+  await expect(page.locator("#updateCard")).toBeVisible();
+  await expect(page.locator("#updateCardTitle")).toContainText(/check failed/i);
+  await expect(page.locator("#updateCardHint")).toContainText(/rate limit/i);
+});
