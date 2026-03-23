@@ -6,6 +6,7 @@
   <title>Potato OS Chat</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="/assets/chat.css">
+  <link rel="stylesheet" href="/assets/vendor/xterm/xterm.css">
 </head>
 <body>
   <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
@@ -18,6 +19,7 @@
         <h2 class="brand">Potato OS</h2>
         <p id="sidebarNote" class="sidebar-note"></p>
         <button id="updateCheckBtn" class="ghost-btn update-check-btn" type="button">Check for updates</button>
+        <button id="terminalOpenBtn" class="ghost-btn terminal-open-btn" type="button">Terminal</button>
         <div class="status-summary">
           <div id="statusText" class="status-card">Checking status...</div>
           <div id="statusActions" class="status-actions" hidden>
@@ -390,6 +392,23 @@
     </div>
   </div>
 
+  <div id="terminalBackdrop" class="settings-backdrop" hidden></div>
+  <div id="terminalModal" class="settings-modal terminal-modal" role="dialog" aria-modal="true" aria-labelledby="terminalModalTitle" hidden>
+    <div class="settings-modal-shell terminal-modal-shell">
+      <div class="settings-modal-header terminal-modal-header">
+        <div>
+          <h2 id="terminalModalTitle" class="settings-modal-title">Terminal</h2>
+          <p id="terminalStatusText" class="settings-modal-note">Connecting...</p>
+        </div>
+        <div class="settings-modal-header-actions">
+          <button id="terminalReconnectBtn" class="ghost-btn" type="button" hidden>Reconnect</button>
+          <button id="terminalCloseBtn" class="ghost-btn settings-close-btn" type="button" aria-label="Close terminal">Close</button>
+        </div>
+      </div>
+      <div id="terminalContainer" class="terminal-container"></div>
+    </div>
+  </div>
+
   <script src="/assets/vendor/marked.umd.js"></script>
   <script src="/assets/vendor/purify.min.js"></script>
   <link rel="modulepreload" href="/assets/shell.js">
@@ -400,6 +419,7 @@
   <link rel="modulepreload" href="/assets/status.js">
   <link rel="modulepreload" href="/assets/runtime-ui.js">
   <link rel="modulepreload" href="/assets/update-ui.js">
+  <link rel="modulepreload" href="/assets/terminal-ui.js">
   <link rel="modulepreload" href="/assets/messages.js">
   <link rel="modulepreload" href="/assets/image-handler.js">
   <link rel="modulepreload" href="/assets/settings-ui.js">

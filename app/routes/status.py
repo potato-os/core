@@ -30,8 +30,12 @@ def register_status_helpers(*, main_module: types.ModuleType, chat_html_path: Pa
 
 
 @router.get("/", response_class=HTMLResponse)
-async def root() -> HTMLResponse:
-    return HTMLResponse(_chat_html_path.read_text(encoding="utf-8"))
+async def root(request: Request) -> HTMLResponse:
+    html = _chat_html_path.read_text(encoding="utf-8")
+    # Inject the per-boot terminal token so the frontend can authenticate WS connections.
+    terminal_token = getattr(request.app.state, "terminal_token", "")
+    html = html.replace("</head>", f'<meta name="terminal-token" content="{terminal_token}">\n</head>', 1)
+    return HTMLResponse(html)
 
 
 @router.get("/status")

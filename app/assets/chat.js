@@ -958,6 +958,10 @@ export function init(shellApi) {
     // Register escape handler for edit modal
     if (registerEscapeHandler) {
       registerEscapeHandler(() => {
+        if (appState.terminalModalOpen) {
+          import("./terminal-ui.js").then((m) => m.closeTerminalModal());
+          return true;
+        }
         if (appState.editModalOpen) {
           closeEditMessageModal();
           return true;
@@ -1056,6 +1060,14 @@ export function init(shellApi) {
     });
     document.getElementById("resetRuntimeBtn").addEventListener("click", resetRuntimeHeavy);
     document.getElementById("updateCheckBtn").addEventListener("click", checkForUpdate);
+    {
+      let terminalBound = false;
+      document.getElementById("terminalOpenBtn").addEventListener("click", async () => {
+        const mod = await import("./terminal-ui.js");
+        if (!terminalBound) { mod.bindTerminalModal(); terminalBound = true; }
+        mod.openTerminalModal();
+      });
+    }
     document.getElementById("updateStartBtn").addEventListener("click", startUpdate);
     document.getElementById("updateRetryBtn").addEventListener("click", startUpdate);
     document.getElementById("updateNotesBtn").addEventListener("click", showUpdateReleaseNotes);
