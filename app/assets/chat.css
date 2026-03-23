@@ -2597,3 +2597,47 @@
         max-width: min(100%, 360px);
       }
     }
+
+/* ── Terminal modal ─────────────────────────────────────────────────── */
+
+body.terminal-modal-open { overflow: hidden; }
+
+body.terminal-modal-open #terminalBackdrop { display: block; }
+body.terminal-modal-open #terminalModal { display: grid; }
+
+.terminal-modal-shell {
+  width: min(960px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-modal-header {
+  flex-shrink: 0;
+}
+
+.terminal-container {
+  flex: 1 1 0;
+  min-height: 300px;
+  height: min(600px, calc(100vh - 160px));
+  border-radius: 8px;
+  overflow: hidden;
+  background: #081425;
+  margin: 0 0 12px;
+}
+
+.terminal-open-btn {
+  width: 100%;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+@media (max-width: 900px) {
+  .terminal-modal-shell {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+  }
+  .terminal-container {
+    height: calc(100vh - 140px);
+  }
+}

@@ -226,6 +226,13 @@ SUDOERS
 run_sudo install -m 0440 "${sudoers_tmp}" /etc/sudoers.d/potato-runtime-reset
 rm -f "${sudoers_tmp}"
 
+sudoers_terminal_tmp="$(mktemp)"
+cat > "${sudoers_terminal_tmp}" <<'SUDOERS'
+potato ALL=(pi) NOPASSWD: ALL
+SUDOERS
+run_sudo install -m 0440 "${sudoers_terminal_tmp}" /etc/sudoers.d/potato-terminal
+rm -f "${sudoers_terminal_tmp}"
+
 run_sudo systemctl daemon-reload
 run_sudo systemctl enable avahi-daemon nginx potato-firstboot.service potato.service
 run_sudo systemctl restart avahi-daemon nginx potato-firstboot.service potato.service

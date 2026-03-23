@@ -71,5 +71,10 @@ potato ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block potato-runtime-r
 SUDOERS
 chmod 0440 /etc/sudoers.d/potato-runtime-reset
 
+cat > /etc/sudoers.d/potato-terminal <<'SUDOERS'
+potato ALL=(pi) NOPASSWD: ALL
+SUDOERS
+chmod 0440 /etc/sudoers.d/potato-terminal
+
 systemctl enable potato-firstboot.service potato.service nginx avahi-daemon ssh
 EOF

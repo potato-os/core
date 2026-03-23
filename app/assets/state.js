@@ -38,6 +38,7 @@ export const appState = {
   legacySettingsModalOpen: false,
   settingsModalOpenedAtMs: 0,
   editModalOpen: false,
+  terminalModalOpen: false,
   modelSwitcherOpen: false,
   settingsWorkspaceTab: "model",
   selectedSettingsModelId: "",

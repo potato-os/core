@@ -1693,6 +1693,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.state.llama_readiness_state = _empty_llama_readiness_state()
     app.state.update_task = None
     app.state.update_lock = asyncio.Lock()
+    app.state.terminal_sessions: dict = {}
     app.state.llama_consecutive_failures = 0
     app.state.startup_monotonic = None
     app.state.orchestrator_task = None
@@ -1712,6 +1713,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         from app.routes.runtime import router as runtime_router, register_runtime_helpers
         from app.routes.models import router as models_router, register_models_helpers
         from app.routes.update import router as update_router, register_update_helpers
+        from app.routes.terminal import router as terminal_router, register_terminal_helpers
     except ModuleNotFoundError:
         from routes.chat import router as chat_router, register_chat_helpers  # type: ignore[no-redef]
         from routes.settings import router as settings_router, register_settings_helpers  # type: ignore[no-redef]
@@ -1719,6 +1721,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         from routes.runtime import router as runtime_router, register_runtime_helpers  # type: ignore[no-redef]
         from routes.models import router as models_router, register_models_helpers  # type: ignore[no-redef]
         from routes.update import router as update_router, register_update_helpers  # type: ignore[no-redef]
+        from routes.terminal import router as terminal_router, register_terminal_helpers  # type: ignore[no-redef]
 
     register_chat_helpers(
         build_status=build_status,
@@ -1734,12 +1737,14 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     register_runtime_helpers(main_module=_this_module)
     register_models_helpers(main_module=_this_module)
     register_update_helpers(main_module=_this_module)
+    register_terminal_helpers()
     app.include_router(chat_router)
     app.include_router(settings_router)
     app.include_router(status_router)
     app.include_router(runtime_router)
     app.include_router(models_router)
     app.include_router(update_router)
+    app.include_router(terminal_router)
 
     return app
 
