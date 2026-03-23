@@ -15,13 +15,16 @@ try:
     from app.update_state import (
         build_update_status,
         check_for_update,
+        is_newer,
         is_update_safe,
         read_update_state,
     )
+    from app.__version__ import __version__
 except ModuleNotFoundError:
     from deps import get_runtime  # type: ignore[no-redef]
     from runtime_state import RuntimeConfig  # type: ignore[no-redef]
-    from update_state import build_update_status, check_for_update, is_update_safe, read_update_state  # type: ignore[no-redef]
+    from update_state import build_update_status, check_for_update, is_newer, is_update_safe, read_update_state  # type: ignore[no-redef]
+    from __version__ import __version__  # type: ignore[no-redef]
 
 router = APIRouter()
 
@@ -70,7 +73,8 @@ async def update_start(
         )
 
     state = read_update_state(runtime_cfg)
-    if state is None or not state.get("available"):
+    latest_version = state.get("latest_version") if state else None
+    if state is None or not isinstance(latest_version, str) or not is_newer(latest_version, __version__):
         return JSONResponse(
             status_code=409,
             content={"started": False, "reason": "no_update_available"},

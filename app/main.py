@@ -944,7 +944,7 @@ async def run_update(
             target_version=target_version,
         )
         cleanup_staging(runtime)
-        await signal_service_restart()
+        await signal_service_restart(runtime)
 
     except asyncio.CancelledError:
         write_execution_state(

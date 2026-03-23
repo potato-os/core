@@ -25,11 +25,13 @@ from app.update_state import (
     detect_post_update_state,
     download_release_tarball,
     extract_tarball,
+    install_requirements,
     is_newer,
     is_update_safe,
     parse_version,
     read_execution_state,
     read_update_state,
+    signal_service_restart,
     staging_dir,
     write_execution_state,
 )
@@ -867,3 +869,60 @@ async def test_apply_staged_update_raises_on_missing_app_dir(runtime):
 
     with pytest.raises(FileNotFoundError, match="app/"):
         await apply_staged_update(runtime, staged)
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_copies_requirements_txt(runtime):
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "app").mkdir(parents=True)
+    (staged / "app" / "main.py").write_text("# new")
+    (staged / "requirements.txt").write_text("httpx>=0.27\nfastapi>=0.111\n")
+
+    # Create a fake venv/bin/pip so install_requirements doesn't run real pip
+    # (it won't find one, so it skips — we just verify the file copy here)
+    await apply_staged_update(runtime, staged)
+
+    req_dst = runtime.base_dir / "app" / "requirements.txt"
+    assert req_dst.exists()
+    assert "httpx>=0.27" in req_dst.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Phase B — signal_service_restart
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_signal_service_restart_uses_reset_service(runtime, monkeypatch):
+    calls: list[tuple] = []
+
+    async def _mock_subprocess_exec(*args, **kwargs):
+        calls.append(args)
+
+        class _MockProc:
+            returncode = 0
+            async def communicate(self):
+                return b"", b""
+        return _MockProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _mock_subprocess_exec)
+    await signal_service_restart(runtime)
+
+    assert len(calls) == 1
+    assert "potato-runtime-reset.service" in calls[0]
+    assert "start" in calls[0]
+    assert "restart" not in calls[0]
+
+
+@pytest.mark.anyio
+async def test_signal_service_restart_raises_on_failure(runtime, monkeypatch):
+    async def _mock_subprocess_exec(*args, **kwargs):
+        class _MockProc:
+            returncode = 1
+            async def communicate(self):
+                return b"", b"permission denied"
+        return _MockProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _mock_subprocess_exec)
+    with pytest.raises(RuntimeError, match="failed"):
+        await signal_service_restart(runtime)

@@ -378,6 +378,10 @@ async def apply_staged_update(runtime: RuntimeConfig, staged_dir: Path) -> None:
                 continue
             dst = runtime.base_dir / dirname
             shutil.copytree(src, dst, dirs_exist_ok=True)
+        # Copy requirements.txt to app/ (install_dev.sh places it there)
+        req_src = root / "requirements.txt"
+        if req_src.is_file():
+            shutil.copy2(req_src, runtime.base_dir / "app" / "requirements.txt")
         # Set executable bits on shell scripts
         bin_dir = runtime.base_dir / "bin"
         if bin_dir.is_dir():
@@ -385,15 +389,48 @@ async def apply_staged_update(runtime: RuntimeConfig, staged_dir: Path) -> None:
                 sh_file.chmod(sh_file.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     await asyncio.to_thread(_apply)
+    await install_requirements(runtime)
 
 
-async def signal_service_restart() -> None:
-    """Ask systemd to restart the potato service."""
+async def install_requirements(runtime: RuntimeConfig) -> None:
+    """Run pip install for updated dependencies after apply."""
     import asyncio
 
+    req_path = runtime.base_dir / "app" / "requirements.txt"
+    venv_pip = runtime.base_dir / "venv" / "bin" / "pip"
+    if not req_path.exists() or not venv_pip.exists():
+        return
     proc = await asyncio.create_subprocess_exec(
-        "sudo", "-n", "systemctl", "restart", "--no-block", "potato.service",
+        str(venv_pip), "install", "-r", str(req_path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    await proc.communicate()
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"pip install failed (exit {proc.returncode}): {stderr.decode(errors='replace').strip()}"
+        )
+
+
+async def signal_service_restart(runtime: RuntimeConfig) -> None:
+    """Restart the potato service via the configured reset service.
+
+    Uses the same sudoers-allowed command as start_runtime_reset():
+    sudo -n systemctl start --no-block <reset-service>
+    """
+    import asyncio
+
+    service_name = runtime.runtime_reset_service.strip()
+    if not service_name:
+        raise RuntimeError("runtime_reset_service not configured")
+    proc = await asyncio.create_subprocess_exec(
+        "sudo", "-n", "systemctl", "start", "--no-block", service_name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"systemctl start {service_name} failed (exit {proc.returncode}): "
+            f"{stderr.decode(errors='replace').strip()}"
+        )

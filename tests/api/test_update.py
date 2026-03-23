@@ -141,6 +141,11 @@ def test_update_start_returns_409_when_no_update_available(runtime, monkeypatch)
     assert response.json()["reason"] == "no_update_available"
 
 
+def _patch_version(monkeypatch, version: str = "0.4.0") -> None:
+    monkeypatch.setattr("app.update_state.__version__", version)
+    monkeypatch.setattr("app.routes.update.__version__", version)
+
+
 def test_update_start_returns_409_when_no_tarball_url(runtime, monkeypatch):
     state = {
         "available": True,
@@ -151,7 +156,7 @@ def test_update_start_returns_409_when_no_tarball_url(runtime, monkeypatch):
         "error": None,
     }
     runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
-    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+    _patch_version(monkeypatch)
 
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
@@ -178,7 +183,7 @@ def test_update_start_returns_409_when_download_active(runtime, monkeypatch):
         json.dumps({"bytes_total": 1000, "bytes_downloaded": 500, "percent": 50}),
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+    _patch_version(monkeypatch)
 
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
@@ -202,7 +207,7 @@ def test_update_start_returns_409_when_update_already_running(runtime, monkeypat
     }
     runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
     write_execution_state(runtime, execution_state="downloading", target_version="0.5.0")
-    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+    _patch_version(monkeypatch)
 
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
@@ -215,6 +220,30 @@ def test_update_start_returns_409_when_update_already_running(runtime, monkeypat
     assert response.json()["reason"] == "update_in_progress"
 
 
+def test_update_start_rejects_stale_available_after_upgrade(runtime, monkeypatch):
+    """P3: stale available=true in state should not allow redundant update."""
+    state = {
+        "available": True,
+        "current_version": "0.4.0",
+        "latest_version": "0.5.0",
+        "tarball_url": "https://example.com/tarball.tar.gz",
+        "checked_at_unix": 1711000000,
+        "error": None,
+    }
+    runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
+    _patch_version(monkeypatch, "0.5.0")
+
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    with TestClient(app) as c:
+        response = c.post("/internal/update/start")
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "no_update_available"
+
+
 def test_update_start_returns_200_and_starts(runtime, monkeypatch):
     state = {
         "available": True,
@@ -225,7 +254,7 @@ def test_update_start_returns_200_and_starts(runtime, monkeypatch):
         "error": None,
     }
     runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
-    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+    _patch_version(monkeypatch)
 
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
