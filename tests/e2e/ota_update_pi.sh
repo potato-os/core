@@ -98,6 +98,7 @@ pi_status_field() {
 
 STAGING_DIR=""
 HTTP_SERVER_PID=""
+PI_SNAPSHOT_DIR=""
 
 PI_STATE_DIRTY=0
 
@@ -117,14 +118,30 @@ cleanup() {
     _restore_pi || log_stage "WARNING: Pi restore failed during cleanup"
   fi
 
-  # Remove local staging
+  # Remove local staging and snapshot
   if [ -n "${STAGING_DIR}" ] && [ -d "${STAGING_DIR}" ]; then
     rm -rf "${STAGING_DIR}"
+  fi
+  if [ -n "${PI_SNAPSHOT_DIR}" ] && [ -d "${PI_SNAPSHOT_DIR}" ]; then
+    rm -rf "${PI_SNAPSHOT_DIR}"
   fi
 
   exit "${exit_code}"
 }
 trap cleanup EXIT
+
+_wait_for_ssh() {
+  # Wait until SSH to Pi is responsive (handles MaxStartups throttling)
+  local attempt
+  for attempt in $(seq 1 10); do
+    if ssh_pi "true" 2>/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "SSH to Pi not available after 10 attempts" >&2
+  return 1
+}
 
 _sudo_pi() {
   # Run a command on the Pi with sudo, using PI_PASSWORD
@@ -132,16 +149,24 @@ _sudo_pi() {
 }
 
 _restore_pi() {
-  # Restore app/ and bin/ from the local checkout and reset update.json.
+  # Restore app/ and bin/ from the pre-test Pi snapshot and reset update.json.
   # This is called from both Phase 8 and the cleanup trap.
+
+  if [ -z "${PI_SNAPSHOT_DIR}" ] || [ ! -d "${PI_SNAPSHOT_DIR}/app" ]; then
+    log_stage "  No Pi snapshot available — cannot restore"
+    return 1
+  fi
+
+  # Wait for SSH to be responsive
+  _wait_for_ssh || return 1
 
   # Fix ownership so rsync can overwrite
   _sudo_pi "chown -R ${PI_USER}:${PI_USER} /opt/potato/app /opt/potato/bin 2>/dev/null" || true
   _sudo_pi "find /opt/potato/app /opt/potato/bin -name '__pycache__' -exec rm -rf {} + 2>/dev/null" || true
 
-  # Restore both app/ AND bin/
-  rsync_to_pi "${PROJECT_ROOT}/app/" "${PI_USER}@${PI_HOST}:/opt/potato/app/"
-  rsync_to_pi "${PROJECT_ROOT}/bin/" "${PI_USER}@${PI_HOST}:/opt/potato/bin/"
+  # Restore both app/ AND bin/ from the Pi snapshot (not local checkout)
+  rsync_to_pi "${PI_SNAPSHOT_DIR}/app/" "${PI_USER}@${PI_HOST}:/opt/potato/app/"
+  rsync_to_pi "${PI_SNAPSHOT_DIR}/bin/" "${PI_USER}@${PI_HOST}:/opt/potato/bin/"
 
   # Reset update.json to clean idle state (remove test seed and any stale execution state)
   ssh_pi "cat > /tmp/ota_clean_state.json <<'CLEANEOF'
@@ -207,7 +232,21 @@ fi
 
 ORIGINAL_VERSION="$(pi_status_field "${status_json}" '.version // empty')"
 log_stage "Current version: ${ORIGINAL_VERSION}"
-report_stage_time "Phase 1 (record state)" "${stage_started_at}"
+
+# Snapshot the Pi's actual app/ and bin/ so we can restore exactly what was running
+PI_SNAPSHOT_DIR="$(mktemp -d)"
+log_stage "Snapshotting Pi app/ and bin/ to ${PI_SNAPSHOT_DIR}..."
+read -r -a SSH_SNAP_OPTS <<< "${PI_SSH_OPTIONS}"
+SSHPASS="${PI_PASSWORD}" sshpass -e rsync -az \
+  -e "ssh ${PI_SSH_OPTIONS}" \
+  "${PI_USER}@${PI_HOST}:/opt/potato/app/" "${PI_SNAPSHOT_DIR}/app/"
+SSHPASS="${PI_PASSWORD}" sshpass -e rsync -az \
+  -e "ssh ${PI_SSH_OPTIONS}" \
+  "${PI_USER}@${PI_HOST}:/opt/potato/bin/" "${PI_SNAPSHOT_DIR}/bin/"
+log_stage "  Snapshot complete ($(du -sh "${PI_SNAPSHOT_DIR}" | cut -f1) total)"
+# Brief pause to let Pi SSH connections drain (avoids MaxStartups throttling)
+sleep 2
+report_stage_time "Phase 1 (record state + snapshot)" "${stage_started_at}"
 
 # ── Phase 2: Create test tarball ──────────────────────────────────────
 
@@ -267,6 +306,9 @@ log_stage "  Serving at: ${TARBALL_URL}"
 report_stage_time "Phase 3 (start server)" "${stage_started_at}"
 
 # ── Phase 4: Seed update state on Pi ──────────────────────────────────
+
+# Ensure SSH is responsive before proceeding (handles throttling from snapshot rsyncs)
+_wait_for_ssh
 
 # Ensure the potato user owns its directories (may be root-owned after dev rsync)
 log_stage "Fixing /opt/potato ownership for potato user..."
