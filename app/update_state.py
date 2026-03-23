@@ -219,7 +219,7 @@ async def check_for_update(runtime: RuntimeConfig) -> dict[str, Any]:
                 # Find tarball asset.
                 for asset in data.get("assets") or []:
                     name = str(asset.get("name") or "")
-                    if name.endswith(".tar.gz"):
+                    if name.startswith("potato-os-") and name.endswith(".tar.gz"):
                         result["tarball_url"] = asset.get("browser_download_url")
                         break
 
