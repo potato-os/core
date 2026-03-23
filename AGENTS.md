@@ -18,6 +18,7 @@ Operational scripts are in `bin/`:
 - `prepare_imager_bundle.sh`: Packages SD card image payload.
 - `ensure_model.sh`: Bootstrap model download helper.
 - `publish_runtime.sh`: Packages, tags, and publishes a runtime slot to GitHub Releases.
+- `publish_ota_release.sh`: Packages app/ and bin/ into an OTA tarball and publishes to GitHub Releases. See [`docs/ota-releases.md`](docs/ota-releases.md).
 - `lib/runtime_release.sh`: Shared helpers for downloading runtimes from GitHub Releases.
 
 Service definitions in `systemd/`. Nginx config in `nginx/`. Image build in `image/`.
