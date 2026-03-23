@@ -15,6 +15,8 @@ import termios
 import time
 import uuid
 
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter()
@@ -24,31 +26,67 @@ MAX_TERMINAL_SESSIONS = 3
 IDLE_TIMEOUT_SECONDS = 900
 PTY_READ_CHUNK = 4096
 
+# Allowed Origin hostnames for WebSocket connections.  This prevents cross-site
+# WebSocket hijacking (a malicious page opening ws://potato.local/ws/terminal).
+# It does NOT stop someone with direct LAN access and a raw WS client — that is
+# the same threat model as SSH, which is also open on the Pi by default.
+_ALLOWED_ORIGIN_HOSTS = frozenset({
+    "localhost",
+    "127.0.0.1",
+    "potato.local",
+})
+
 
 def register_terminal_helpers(**_kwargs: object) -> None:
     """Placeholder for consistency with the other route modules."""
 
 
+def _is_origin_allowed(origin: str | None) -> bool:
+    """Return True if the Origin header is absent (non-browser) or matches an allowed host."""
+    if not origin:
+        return True  # non-browser clients (curl, wscat) don't send Origin
+    try:
+        host = urlparse(origin).hostname or ""
+    except Exception:
+        return False
+    return host in _ALLOWED_ORIGIN_HOSTS
+
+
 def _cleanup_session(session_id: str, sessions: dict) -> None:
-    """Kill the PTY child and close the master fd."""
+    """Kill the PTY child and close the master fd.  Properly reaps the child."""
     session = sessions.pop(session_id, None)
     if session is None:
         return
     pid = session.get("pid")
     master_fd = session.get("master_fd")
-    if pid:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-        try:
-            os.waitpid(pid, os.WNOHANG)
-        except ChildProcessError:
-            pass
+    # Close the fd first — this delivers SIGHUP to the shell in most cases.
     if master_fd is not None:
         try:
             os.close(master_fd)
         except OSError:
+            pass
+    if pid:
+        # SIGTERM → brief blocking wait → SIGKILL → final reap
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        for _ in range(10):
+            try:
+                rpid, _ = os.waitpid(pid, os.WNOHANG)
+                if rpid != 0:
+                    return  # reaped
+            except ChildProcessError:
+                return  # already gone
+            time.sleep(0.05)
+        # Still alive after 500ms — force kill
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            os.waitpid(pid, 0)  # blocking — guaranteed to reap after SIGKILL
+        except ChildProcessError:
             pass
 
 
@@ -71,7 +109,11 @@ async def _pty_reader(
     sessions: dict,
     stop_event: asyncio.Event,
 ) -> None:
-    """Read output from the PTY and forward to the WebSocket client."""
+    """Read output from the PTY and forward to the WebSocket client.
+
+    When the shell exits (EOF on the master fd), sends an exit message and
+    closes the WebSocket so the main receive loop unblocks immediately.
+    """
     loop = asyncio.get_running_loop()
     try:
         while session_id in sessions and not stop_event.is_set():
@@ -88,12 +130,27 @@ async def _pty_reader(
             if session_id in sessions:
                 sessions[session_id]["last_activity"] = time.monotonic()
     except asyncio.CancelledError:
+        return
+
+    # Shell exited — notify client and close the WebSocket so the main
+    # receive loop (receive_text) unblocks instead of hanging forever.
+    stop_event.set()
+    try:
+        await ws.send_text(json.dumps({"type": "exit", "code": 0}))
+        await ws.close(code=1000)
+    except Exception:
         pass
 
 
 @router.websocket("/ws/terminal")
 async def terminal_websocket(websocket: WebSocket) -> None:
     sessions: dict = websocket.app.state.terminal_sessions
+
+    # P1: Origin validation — block cross-site WebSocket hijacking.
+    origin = websocket.headers.get("origin")
+    if not _is_origin_allowed(origin):
+        await websocket.close(code=4003)
+        return
 
     if len(sessions) >= MAX_TERMINAL_SESSIONS:
         await websocket.accept()

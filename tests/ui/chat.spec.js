@@ -94,6 +94,17 @@ test("streaming cancel during finish animation does not render buffered assistan
     window.__POTATO_PREFILL_FINISH_DURATION_MS__ = 1200;
     window.__POTATO_PREFILL_FINISH_HOLD_MS__ = 250;
   });
+
+  // Mock the chat route with a delay so the prefill finish animation has
+  // time to ramp up before the response completes.
+  await page.route("**/v1/chat/completions", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await fulfillStreamingChat(route, {
+      content: "Buffered content that should NOT appear after cancel",
+      timings: { prompt_ms: 500, predicted_ms: 200, predicted_n: 8, predicted_per_second: 40 },
+    });
+  });
+
   await waitUntilReady(page);
 
   await page.locator("#userPrompt").fill("Give me a streamed response.");

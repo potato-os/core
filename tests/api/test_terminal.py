@@ -152,3 +152,40 @@ def test_terminal_unknown_message_type_ignored(terminal_client):
         )
         combined = "".join(m.get("data", "") for m in msgs if m["type"] == "output")
         assert "type-ok" in combined
+
+
+def test_terminal_rejects_bad_origin(terminal_client):
+    """P1: Cross-origin WebSocket connections must be rejected."""
+    from starlette.websockets import WebSocketDisconnect as _WSD
+
+    with pytest.raises(_WSD):
+        with terminal_client.websocket_connect(
+            "/ws/terminal",
+            headers={"origin": "https://evil.example.com"},
+        ) as ws:
+            ws.receive_text()
+
+
+def test_terminal_allows_valid_origin(terminal_client):
+    with terminal_client.websocket_connect(
+        "/ws/terminal",
+        headers={"origin": "http://potato.local"},
+    ) as ws:
+        msgs = _recv_until(ws, lambda m: m["type"] == "output")
+        assert any(m["type"] == "output" for m in msgs)
+
+
+def test_terminal_shell_exit_closes_websocket(terminal_client):
+    """P3: When the user types 'exit', the WS should close and session should be freed."""
+    with terminal_client.websocket_connect("/ws/terminal") as ws:
+        _recv_until(ws, lambda m: m["type"] == "output")
+
+        # Tell the shell to exit
+        ws.send_text(json.dumps({"type": "input", "data": "exit\r"}))
+
+        # Should receive an exit message before the connection closes
+        msgs = _recv_until(ws, lambda m: m["type"] == "exit", timeout=5)
+        assert any(m["type"] == "exit" for m in msgs)
+
+    # Session should be cleaned up with no zombies
+    assert len(terminal_client.app.state.terminal_sessions) == 0
