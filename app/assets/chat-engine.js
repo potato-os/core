@@ -549,7 +549,7 @@ import { saveActiveSession } from "./session-manager.js";
         if (settings.system_prompt) {
           reqBody.messages.push({ role: "system", content: settings.system_prompt });
         }
-        reqBody.messages = reqBody.messages.concat(appState.chatHistory);
+        reqBody.messages = reqBody.messages.concat(appState.chatHistory.map(({ meta, ...msg }) => msg));
         reqBody.messages.push(userMessage);
         appState.chatHistory.push(userMessage);
 
@@ -693,13 +693,13 @@ import { saveActiveSession } from "./session-manager.js";
           }
           if (activeAssistantView) {
             const partial = activeAssistantView.bubble.textContent.trim();
+            streamStats.finish_reason = "cancelled";
             if (!partial) {
               updateMessage(activeAssistantView, "(stopped)", { showActions: true });
             } else {
               const cancelStatsText = formatAssistantStats(streamStats, elapsedSeconds, requestCtx.firstTokenLatencyMs);
               appState.chatHistory.push({ role: "assistant", content: partial, meta: cancelStatsText });
             }
-            streamStats.finish_reason = "cancelled";
             setMessageMeta(activeAssistantView, formatAssistantStats(streamStats, elapsedSeconds, requestCtx.firstTokenLatencyMs));
           } else {
             const stoppedDiv = appendMessage("assistant", "(stopped)");

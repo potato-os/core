@@ -252,7 +252,7 @@ def test_chat_ui_mobile_composer_keeps_actions_together():
 
 def test_chat_ui_uses_continuous_chat_history_in_openai_messages_format():
     assert "chatHistory: []," in CHAT_UI
-    assert "reqBody.messages = reqBody.messages.concat(appState.chatHistory);" in CHAT_UI
+    assert "reqBody.messages = reqBody.messages.concat(appState.chatHistory.map(({ meta, ...msg }) => msg));" in CHAT_UI
     assert "const userMessage = { role: \"user\", content: buildUserMessageContent(content) };" in CHAT_UI
     assert "appState.chatHistory.push(userMessage);" in CHAT_UI
     assert CHAT_ENGINE_JS.index("reqBody.messages.push(userMessage);") < CHAT_ENGINE_JS.index("appState.chatHistory.push(userMessage);")
