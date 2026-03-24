@@ -104,9 +104,21 @@ if [ -f "${OPENCLAW_DIR}/openclaw.json" ]; then
     fi
   fi
 
-  # Migration: add image input if model is text-only
-  if grep -q '"input": \["text"\]' "${CONFIG}" 2>/dev/null; then
-    sed -i 's/"input": \["text"\]/"input": ["text", "image"]/' "${CONFIG}" && printf '  migrated: enabled image input for vision models\n'
+  # Migration: enable image input on the Potato-managed model only.
+  # Target the "Potato OS Local Model" entry, not any user-added models.
+  if python3 -c "
+import json, sys
+cfg = json.load(open('${CONFIG}'))
+models = cfg.get('models',{}).get('providers',{}).get('potato',{}).get('models',[])
+potato_model = next((m for m in models if m.get('id') == 'local'), None)
+if potato_model and potato_model.get('input') == ['text']:
+    potato_model['input'] = ['text', 'image']
+    json.dump(cfg, open('${CONFIG}', 'w'), indent=2)
+    print('migrated')
+else:
+    print('skip')
+" 2>/dev/null | grep -q migrated; then
+    printf '  migrated: enabled image input for Potato local model\n'
   fi
 else
   printf '[3/7] Deploying Potato OS config (fresh install)...\n'
