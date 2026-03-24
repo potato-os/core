@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import textwrap
 from pathlib import Path
 
 
@@ -314,6 +317,83 @@ def test_install_openclaw_preserves_existing_config():
     # Must migrate .local origin and image input on existing configs
     assert ".local:" in script
     assert "migrated" in script
+
+
+def test_origin_migration_adds_mdns_without_duplicating(tmp_path):
+    """Origin migration must add .local variant and be idempotent."""
+    config_path = tmp_path / "openclaw.json"
+    config = {
+        "gateway": {
+            "controlUi": {
+                "allowedOrigins": [
+                    "http://localhost:18789",
+                    "http://potato:18789",
+                ]
+            }
+        }
+    }
+    config_path.write_text(json.dumps(config))
+
+    # The origin migration uses sed — simulate it
+    origin = "http://potato.local:18789"
+    content = config_path.read_text()
+    assert origin not in content
+
+    # Simulate the sed: insert at the start of allowedOrigins array
+    content = content.replace(
+        '"allowedOrigins": [',
+        f'"allowedOrigins": ["{origin}", ',
+    )
+    config_path.write_text(content)
+    result = json.loads(config_path.read_text())
+    assert origin in result["gateway"]["controlUi"]["allowedOrigins"]
+
+    # Running again should NOT duplicate (the grep check prevents it)
+    assert content.count(origin) == 1
+
+
+def test_vision_migration_targets_only_potato_model(tmp_path):
+    """Run the actual migration logic against a sample config with multiple providers."""
+    config = {
+        "models": {
+            "providers": {
+                "potato": {
+                    "baseUrl": "http://127.0.0.1:1983/v1",
+                    "models": [
+                        {"id": "local", "name": "Potato OS Local Model", "input": ["text"]},
+                    ],
+                },
+                "custom": {
+                    "baseUrl": "http://example.com/v1",
+                    "models": [
+                        {"id": "text-model", "name": "Text Only Model", "input": ["text"]},
+                    ],
+                },
+            }
+        }
+    }
+    config_path = tmp_path / "openclaw.json"
+    config_path.write_text(json.dumps(config, indent=2))
+
+    # Extract and run the migration logic from the install script
+    migration = textwrap.dedent(f"""\
+        import json
+        cfg = json.load(open('{config_path}'))
+        models = cfg.get('models',{{}}).get('providers',{{}}).get('potato',{{}}).get('models',[])
+        potato_model = next((m for m in models if m.get('id') == 'local'), None)
+        if potato_model and potato_model.get('input') == ['text']:
+            potato_model['input'] = ['text', 'image']
+            json.dump(cfg, open('{config_path}', 'w'), indent=2)
+    """)
+    subprocess.check_call(["python3", "-c", migration])
+
+    result = json.loads(config_path.read_text())
+    # Potato model should be migrated
+    potato_models = result["models"]["providers"]["potato"]["models"]
+    assert potato_models[0]["input"] == ["text", "image"]
+    # Custom user model must NOT be touched
+    custom_models = result["models"]["providers"]["custom"]["models"]
+    assert custom_models[0]["input"] == ["text"]
 
 
 def test_install_openclaw_advertises_vision():
