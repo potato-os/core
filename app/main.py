@@ -1533,9 +1533,10 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                 app.state.llama_consecutive_failures = 0
 
             # First-boot auto-update: check once, apply if available, then never again.
-            # Runs AFTER llama readiness to avoid blocking first boot.
-            # Re-reads download state fresh (stale from top of loop after auto-download fires).
-            if not read_first_boot_update_done(runtime):
+            # Gated on READY — won't fire until llama is healthy (or no model present).
+            llama_state = getattr(app.state, "llama_readiness_state", {}) or {}
+            device_ready = llama_state.get("ready", False) or not active_model_is_present
+            if device_ready and not read_first_boot_update_done(runtime):
                 if not is_download_task_active(app.state.model_download_task):
                     safe, _reason = is_update_safe(runtime)
                     if safe:
