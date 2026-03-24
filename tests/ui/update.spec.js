@@ -324,3 +324,51 @@ test("reloads page after update completes", async ({ page }) => {
   await expect(page.locator("#composerActivity")).toContainText(/update complete/i, { timeout: 10000 });
   await expect(page.locator("#composerActivity")).toContainText(/reloading/i);
 });
+
+test("skips reload if a request is in flight after update", async ({ page }) => {
+  let pollCount = 0;
+  let transitionToIdle = false;
+  const restartPending = makeUpdatePayload({
+    available: true,
+    current_version: "0.4.0",
+    latest_version: "0.5.0",
+    state: "restart_pending",
+    progress: { phase: null, percent: 100, error: null },
+  });
+  const updateDone = makeUpdatePayload({
+    available: false,
+    current_version: "0.5.0",
+    latest_version: "0.5.0",
+    state: "idle",
+    progress: { phase: null, percent: 0, error: null },
+  });
+
+  await page.route("**/status", (route) => {
+    pollCount++;
+    const payload = transitionToIdle ? updateDone : restartPending;
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+  });
+  // Stall chat requests so requestInFlight stays true
+  await page.route("**/v1/chat/completions", (route) => new Promise(() => {}));
+
+  await page.goto("/");
+  await waitForStatusApplied(page);
+
+  // Submit a chat message WHILE still in restart_pending — this sets requestInFlight
+  await page.locator("#userPrompt").fill("hello");
+  await page.locator("#sendBtn").click();
+
+  // Now let the update complete — reconnect watch will see idle on next poll
+  transitionToIdle = true;
+
+  // Track navigations from this point
+  let reloadFired = false;
+  page.on("load", () => { reloadFired = true; });
+
+  // Wait for update success message
+  await expect(page.locator("#composerActivity")).toContainText(/update complete/i, { timeout: 10000 });
+
+  // Wait past the 2s reload window — reload should be skipped
+  await page.waitForTimeout(3000);
+  expect(reloadFired).toBe(false);
+});
