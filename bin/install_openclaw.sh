@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-OPENCLAW_VERSION="${POTATO_OPENCLAW_VERSION:-2026.3.22}"
+OPENCLAW_VERSION="${POTATO_OPENCLAW_VERSION:-2026.3.23}"
 OPENCLAW_PORT=18789
 REQUIRED_NODE_MAJOR=22
 TARGET_NODE_MAJOR=24

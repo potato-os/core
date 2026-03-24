@@ -262,11 +262,14 @@ def test_install_openclaw_installs_nodejs():
 
 
 def test_install_openclaw_pins_version():
-    """Must pin to a specific version, not @latest."""
+    """Must pin to a specific version, not @latest, and not the broken 2026.3.22."""
     script = Path("bin/install_openclaw.sh").read_text(encoding="utf-8")
     assert "OPENCLAW_VERSION=" in script
     assert "openclaw@${OPENCLAW_VERSION}" in script
     assert "@latest" not in script
+    # v2026.3.22 has a confirmed packaging regression — missing Control UI assets.
+    # See: https://github.com/openclaw/openclaw/issues/52808
+    assert "2026.3.22" not in script
 
 
 def test_install_openclaw_embeds_config_as_heredoc():
