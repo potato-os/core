@@ -917,12 +917,8 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
       if (updateState === "idle") {
         stopUpdateReconnectWatch();
         const version = String(statusPayload?.update?.current_version || "");
-        setComposerActivity(version ? `Update complete! Now running v${version}.` : "Update complete!");
-        window.setTimeout(() => {
-          if (!appState.updateReconnectActive && !appState.requestInFlight) {
-            setComposerActivity("");
-          }
-        }, 3000);
+        setComposerActivity(version ? `Update complete! Now running v${version}. Reloading...` : "Update complete! Reloading...");
+        window.setTimeout(() => window.location.reload(), 2000);
         return;
       }
       if (updateState === "failed") {

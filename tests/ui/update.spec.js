@@ -292,3 +292,35 @@ test("shows check error when update check fails", async ({ page }) => {
   await expect(page.locator("#updateCardTitle")).toContainText(/check failed/i);
   await expect(page.locator("#updateCardHint")).toContainText(/rate limit/i);
 });
+
+test("reloads page after update completes", async ({ page }) => {
+  let pollCount = 0;
+  const restartPending = makeUpdatePayload({
+    available: true,
+    current_version: "0.4.0",
+    latest_version: "0.5.0",
+    state: "restart_pending",
+    progress: { phase: null, percent: 100, error: null },
+  });
+  const updateDone = makeUpdatePayload({
+    available: false,
+    current_version: "0.5.0",
+    latest_version: "0.5.0",
+    state: "idle",
+    progress: { phase: null, percent: 0, error: null },
+  });
+
+  await page.route("**/status", (route) => {
+    pollCount++;
+    // First few polls return restart_pending, then switch to idle
+    const payload = pollCount <= 3 ? restartPending : updateDone;
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+  });
+
+  await page.goto("/");
+  await waitForStatusApplied(page);
+
+  // Wait for the success message — "Reloading..." confirms the reload path was triggered
+  await expect(page.locator("#composerActivity")).toContainText(/update complete/i, { timeout: 10000 });
+  await expect(page.locator("#composerActivity")).toContainText(/reloading/i);
+});
