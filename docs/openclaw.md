@@ -62,16 +62,26 @@ Type a message and press **Enter**. OpenClaw sends it to the local model running
 
 <img src="assets/openclaw_steps/08-chat-ready.jpg" alt="OpenClaw chat showing a question and response from the local model" width="680">
 
-## Configuration
+## How it works
 
-OpenClaw is pre-configured to work within your Pi's 16k token context window:
+This is a **standard OpenClaw installation** — the same version you'd run anywhere else. The only difference is the configuration: stock OpenClaw assumes a cloud model with 100k+ tokens of context, but your Pi runs a local 2B model with 16k. The installer writes a config that strips the prompt down to fit:
+
+- **Bootstrap skipped** — OpenClaw normally spends ~5,000 tokens on startup instructions. The config disables this.
+- **All 51 bundled skills disabled** — Skills like web search, code analysis, and file editing each inject hundreds of tokens into every prompt. They're disabled so none of that gets loaded.
+- **Minimal tool profile** — Only essential tools are enabled, keeping tool descriptions short.
+- **Memory search off** — Prevents the agent from pulling in past conversation context that would eat into your budget.
+- **Aggressive compaction** — When the conversation gets long, OpenClaw summarises earlier messages to stay within the window.
+
+**What this means in practice:** You get a capable chat assistant that can answer questions and have conversations, but it won't have OpenClaw's full agent toolkit (no file editing, no web browsing, no multi-step coding workflows). Think of it as OpenClaw on a diet — same engine, smaller appetite. Fast, local, and private, but simpler.
+
+**Note:** The current configuration has been tested with a 16,384-token context window. I have an open ticket to explore the limits — larger context budgets, re-enabling skills, and finding the sweet spot for different models. For now, 16,384 tokens is the proven baseline.
+
+If you connect a larger model in the future (or run on a Pi with more headroom), you can expand the budget and re-enable features:
 
 | Setting | Default | Override with |
 |---------|---------|---------------|
 | Context window | 16,384 tokens | `POTATO_CONTEXT_WINDOW` |
 | Max output tokens | 4,096 tokens | `POTATO_MAX_TOKENS` |
-
-To override defaults, set the environment variable before running the installer:
 
 ```bash
 POTATO_CONTEXT_WINDOW=32768 curl -fsSL https://raw.githubusercontent.com/slomin/potato-os/main/bin/install_openclaw.sh | sudo bash
