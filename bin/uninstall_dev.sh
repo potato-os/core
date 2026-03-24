@@ -23,10 +23,11 @@ OPENCLAW_USER="${SUDO_USER:-$(logname 2>/dev/null || whoami)}"
 OPENCLAW_HOME="$(eval echo "~${OPENCLAW_USER}")"
 if command -v openclaw &>/dev/null; then
   OC_UID="$(id -u "${OPENCLAW_USER}" 2>/dev/null || echo 1000)"
-  OC_BUS="XDG_RUNTIME_DIR=/run/user/${OC_UID} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${OC_UID}/bus"
-  su - "${OPENCLAW_USER}" -c "${OC_BUS} systemctl --user disable --now openclaw-gateway 2>/dev/null" || true
+  sudo -u "${OPENCLAW_USER}" XDG_RUNTIME_DIR="/run/user/${OC_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${OC_UID}/bus" \
+    systemctl --user disable --now openclaw-gateway 2>/dev/null || true
   rm -f "${OPENCLAW_HOME}/.config/systemd/user/openclaw-gateway.service"
-  su - "${OPENCLAW_USER}" -c "${OC_BUS} systemctl --user daemon-reload 2>/dev/null" || true
+  sudo -u "${OPENCLAW_USER}" XDG_RUNTIME_DIR="/run/user/${OC_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${OC_UID}/bus" \
+    systemctl --user daemon-reload 2>/dev/null || true
   rm -rf "${OPENCLAW_HOME}/.openclaw"
 fi
 

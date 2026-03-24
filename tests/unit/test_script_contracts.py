@@ -453,5 +453,6 @@ def test_uninstall_dev_targets_real_user():
     """Must use SUDO_USER to clean up the real user's service, not root's."""
     script = Path("bin/uninstall_dev.sh").read_text(encoding="utf-8")
     assert "SUDO_USER" in script
-    assert "su -" in script
+    assert "sudo -u" in script
+    assert "XDG_RUNTIME_DIR" in script
 

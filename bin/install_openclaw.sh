@@ -255,16 +255,17 @@ printf '[6/7] Setting up systemd gateway service...\n'
 loginctl enable-linger "${REAL_USER}"
 
 # Running systemctl --user from sudo requires the target user's D-Bus session.
-# Set XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS explicitly.
 REAL_UID="$(id -u "${REAL_USER}")"
-USER_BUS_ENV="XDG_RUNTIME_DIR=/run/user/${REAL_UID} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${REAL_UID}/bus"
 
 run_as_user() {
-  su - "${REAL_USER}" -c "${USER_BUS_ENV} $*"
+  sudo -u "${REAL_USER}" \
+    XDG_RUNTIME_DIR="/run/user/${REAL_UID}" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${REAL_UID}/bus" \
+    "$@"
 }
 
 # Let OpenClaw create its own service unit
-run_as_user "openclaw gateway install --port ${OPENCLAW_PORT} --token '${GATEWAY_TOKEN}'" 2>/dev/null || true
+run_as_user openclaw gateway install --port "${OPENCLAW_PORT}" --token "${GATEWAY_TOKEN}" 2>/dev/null || true
 
 SERVICE_DIR="${REAL_HOME}/.config/systemd/user"
 SERVICE_FILE="${SERVICE_DIR}/openclaw-gateway.service"
@@ -273,7 +274,8 @@ if [ -f "${SERVICE_FILE}" ]; then
   if ! grep -q 'NODE_COMPILE_CACHE' "${SERVICE_FILE}"; then
     sed -i "/\[Service\]/a Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache\nEnvironment=OPENCLAW_NO_RESPAWN=1" "${SERVICE_FILE}"
   fi
-  run_as_user "systemctl --user daemon-reload && systemctl --user enable --now openclaw-gateway"
+  run_as_user systemctl --user daemon-reload
+  run_as_user systemctl --user enable --now openclaw-gateway
 fi
 
 # ── Phase 7: Verify ──────────────────────────────────────────────────────────
@@ -281,7 +283,7 @@ fi
 printf '[7/7] Waiting for gateway to start (this takes ~55s on Pi)...\n'
 READY=0
 for i in $(seq 1 70); do
-  if run_as_user "curl -sf http://127.0.0.1:${OPENCLAW_PORT}/ >/dev/null 2>&1"; then
+  if curl -sf "http://127.0.0.1:${OPENCLAW_PORT}/" >/dev/null 2>&1; then
     READY=1
     break
   fi
