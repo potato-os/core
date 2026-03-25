@@ -28,6 +28,12 @@ def test_nginx_config_allows_large_streaming_uploads():
 
 
 def test_prepare_imager_bundle_script_wires_first_boot_installer():
+    """Contract: prepare_imager_bundle.sh wires the first-boot installer flow.
+
+    Kept as text-inspection — the script rsyncs the full repo (including
+    models/ and projectors/ which are multi-GB locally), making subprocess
+    testing too slow without script-level changes to add test exclusions.
+    """
     script = Path("bin/prepare_imager_bundle.sh").read_text(encoding="utf-8")
 
     assert "--boot-path" in script
