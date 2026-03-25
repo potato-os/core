@@ -107,13 +107,15 @@ if [ "${RSYNC_PROGRESS}" = "1" ]; then
 fi
 
 stage_started_at="$(now_epoch)"
-log_stage "Syncing repository to Pi (excluding local heavy artifacts)..."
+log_stage "Syncing install paths to Pi..."
 SSHPASS="${PI_PASSWORD}" sshpass -e rsync "${rsync_flags[@]}" "${rsync_progress_flags[@]}" \
   -e "ssh ${PI_SSH_OPTIONS}" \
-  --exclude '.git' --exclude '.venv' --exclude '__pycache__' --exclude 'references/' \
-  --exclude 'models/' --exclude 'projectors/' --exclude 'node_modules/' --exclude 'output/' \
-  --exclude '.cache/' --exclude 'test-results/' --exclude 'playwright-report/' \
-  --exclude '.pytest_cache/' \
+  --include='/app/' --include='/app/**' \
+  --include='/bin/' --include='/bin/**' \
+  --include='/nginx/' --include='/nginx/**' \
+  --include='/systemd/' --include='/systemd/**' \
+  --include='/requirements.txt' \
+  --exclude='*' \
   "${PROJECT_ROOT}/" "${PI_USER}@${PI_HOST}:/tmp/potato-os/"
 report_stage_time "Repository sync" "${stage_started_at}"
 
