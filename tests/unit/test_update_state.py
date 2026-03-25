@@ -1052,6 +1052,118 @@ async def test_apply_staged_update_restores_on_copy_failure(runtime, monkeypatch
 
 
 # ---------------------------------------------------------------------------
+# Phase B — ownership drift
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_repairs_ownership_drift(runtime, monkeypatch):
+    """Apply auto-repairs non-writable target dirs via sudo chown."""
+    import subprocess as subprocess_mod
+
+    # Set up staged content
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "app").mkdir(parents=True)
+    (staged / "app" / "main.py").write_text("# new version")
+    (staged / "bin").mkdir(parents=True)
+    (staged / "bin" / "run.sh").write_text("#!/bin/bash\necho new")
+
+    # Pre-create target dirs with non-writable file (simulates root ownership)
+    app_dir = runtime.base_dir / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    old_file = app_dir / "main.py"
+    old_file.write_text("# old version")
+    old_file.chmod(0o444)
+
+    chown_calls: list[list[str]] = []
+
+    def _mock_chown_run(args, **kwargs):
+        chown_calls.append(list(args))
+        # Simulate successful chown by making files writable again
+        for f in app_dir.rglob("*"):
+            if f.is_file():
+                f.chmod(0o644)
+        app_dir.chmod(0o755)
+
+        class _Result:
+            returncode = 0
+        return _Result()
+
+    monkeypatch.setattr(subprocess_mod, "run", _mock_chown_run)
+
+    await apply_staged_update(runtime, staged)
+
+    assert (runtime.base_dir / "app" / "main.py").read_text() == "# new version"
+    assert len(chown_calls) > 0
+    assert "chown" in chown_calls[0]
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_fails_early_on_unwritable_target(runtime, monkeypatch):
+    """Apply fails early with actionable message when repair is unavailable."""
+    import subprocess as subprocess_mod
+
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "app").mkdir(parents=True)
+    (staged / "app" / "main.py").write_text("# new version")
+
+    # Pre-create target with non-writable file
+    app_dir = runtime.base_dir / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    old_file = app_dir / "main.py"
+    old_file.write_text("# old version")
+    old_file.chmod(0o444)
+
+    def _mock_chown_fail(args, **kwargs):
+        class _Result:
+            returncode = 1
+            stderr = b"sudo: a password is required"
+        return _Result()
+
+    monkeypatch.setattr(subprocess_mod, "run", _mock_chown_fail)
+
+    with pytest.raises(PermissionError, match="chown"):
+        await apply_staged_update(runtime, staged)
+
+    # Backup should NOT have been created (early exit before backup)
+    backup_dir = staging_dir(runtime) / "_backup"
+    assert not backup_dir.exists()
+
+    # Original content should be untouched
+    old_file.chmod(0o644)  # restore for cleanup
+    assert old_file.read_text() == "# old version"
+
+
+@pytest.mark.anyio
+async def test_apply_staged_update_skips_repair_when_writable(runtime, monkeypatch):
+    """Apply does not attempt sudo chown when target is already writable."""
+    import subprocess as subprocess_mod
+
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "app").mkdir(parents=True)
+    (staged / "app" / "main.py").write_text("# new version")
+
+    # Pre-create writable target (normal case)
+    (runtime.base_dir / "app").mkdir(parents=True, exist_ok=True)
+    (runtime.base_dir / "app" / "main.py").write_text("# old version")
+
+    chown_calls: list = []
+    original_run = subprocess_mod.run
+
+    def _tracking_run(args, **kwargs):
+        if "chown" in str(args):
+            chown_calls.append(list(args))
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess_mod, "run", _tracking_run)
+
+    await apply_staged_update(runtime, staged)
+
+    assert chown_calls == [], "sudo chown should not be called when target is writable"
+    assert (runtime.base_dir / "app" / "main.py").read_text() == "# new version"
+
+
+# ---------------------------------------------------------------------------
 # Phase B — signal_service_restart
 # ---------------------------------------------------------------------------
 
