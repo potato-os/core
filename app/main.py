@@ -90,10 +90,7 @@ try:
         write_execution_state,
     )
     from app.runtime_state import (
-        LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
         LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME,
-        MODEL_UPLOAD_LIMIT_16GB_BYTES,
-        MODEL_UPLOAD_LIMIT_8GB_BYTES,
         MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES,
         POWER_CALIBRATION_DEFAULT_A,
         POWER_CALIBRATION_DEFAULT_B,
@@ -214,10 +211,7 @@ except ModuleNotFoundError:
         write_execution_state,
     )
     from runtime_state import (  # type: ignore[no-redef]
-        LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
         LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME,
-        MODEL_UPLOAD_LIMIT_16GB_BYTES,
-        MODEL_UPLOAD_LIMIT_8GB_BYTES,
         MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES,
         POWER_CALIBRATION_DEFAULT_A,
         POWER_CALIBRATION_DEFAULT_B,
@@ -284,7 +278,7 @@ except ModuleNotFoundError:
 logger = logging.getLogger("potato")
 logging.basicConfig(level=logging.INFO)
 
-MAX_MODEL_UPLOAD_BYTES = MODEL_UPLOAD_LIMIT_16GB_BYTES
+
 MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS = 20.0
 MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
 # One-off auto-download: on first start with no model, downloads the default
