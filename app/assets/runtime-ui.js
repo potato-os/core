@@ -36,6 +36,10 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
       const coresDetail = document.getElementById("runtimeDetailCoresValue");
       const cpuClockDetail = document.getElementById("runtimeDetailCpuClockValue");
       const memoryDetail = document.getElementById("runtimeDetailMemoryValue");
+      const llamaRssRow = document.getElementById("runtimeDetailLlamaRssRow");
+      const llamaRssDetail = document.getElementById("runtimeDetailLlamaRssValue");
+      const modelRamRow = document.getElementById("runtimeDetailModelRamRow");
+      const modelRamDetail = document.getElementById("runtimeDetailModelRamValue");
       const pressureRow = document.getElementById("runtimeDetailPressureRow");
       const pressureDetail = document.getElementById("runtimeDetailPressureValue");
       const swapLabelDetail = document.getElementById("runtimeDetailSwapLabel");
@@ -60,6 +64,10 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
         if (coresDetail) coresDetail.textContent = "--";
         if (cpuClockDetail) cpuClockDetail.textContent = "--";
         if (memoryDetail) memoryDetail.textContent = "--";
+        if (llamaRssRow) llamaRssRow.style.display = "none";
+        if (llamaRssDetail) llamaRssDetail.textContent = "--";
+        if (modelRamRow) modelRamRow.style.display = "none";
+        if (modelRamDetail) modelRamDetail.textContent = "--";
         if (pressureRow) pressureRow.style.display = "none";
         if (pressureDetail) pressureDetail.textContent = "--";
         if (swapLabelDetail) swapLabelDetail.textContent = "zram";
@@ -105,9 +113,14 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
       const storageFree = formatBytes(systemPayload?.storage_free_bytes);
       const storagePercent = formatPercent(systemPayload?.storage_percent, 0);
       const throttlingNow = systemPayload?.throttling?.any_current === true ? "Yes" : "No";
-      const memAvailCompact = Number(systemPayload?.memory_available_bytes);
-      const memCompactText = Number.isFinite(memAvailCompact) && memAvailCompact > 0
-        ? `Mem ${formatBytes(memAvailCompact)} free`
+      const memTotalCompact = Number(systemPayload?.memory_total_bytes);
+      const memFreeCompact = Number(systemPayload?.memory_free_bytes);
+      const ramUsedCompact = Number.isFinite(memTotalCompact) && Number.isFinite(memFreeCompact) ? memTotalCompact - memFreeCompact : 0;
+      const ramPctCompact = Number.isFinite(ramUsedCompact) && Number.isFinite(memTotalCompact) && memTotalCompact > 0
+        ? Math.round(ramUsedCompact / memTotalCompact * 100)
+        : null;
+      const memCompactText = ramPctCompact !== null
+        ? `RAM ${ramPctCompact}%`
         : `Mem ${formatPercent(systemPayload?.memory_percent, 0)}`;
       compact.textContent = `CPU ${cpuTotal} @ ${cpuClock} | Cores ${coresText} | GPU ${gpuCompact} | ${memCompactText} | ${swapLabel} ${swapPercent} | Free ${storageFree} | Throttle ${throttlingNow}`;
 
@@ -116,32 +129,38 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
       if (cpuClockDetail) cpuClockDetail.textContent = cpuClock;
       applyRuntimeMetricSeverity(cpuClockDetail, percentFromRatio(systemPayload?.cpu_clock_arm_hz, _cpuMaxHz(systemPayload)));
 
-      const memTotal = formatBytes(systemPayload?.memory_total_bytes);
       const memTotalBytes = Number(systemPayload?.memory_total_bytes);
+      const memFreeBytes = Number(systemPayload?.memory_free_bytes);
+      const memTotal = formatBytes(systemPayload?.memory_total_bytes);
+      const ramUsedBytes = Number.isFinite(memTotalBytes) && Number.isFinite(memFreeBytes) ? memTotalBytes - memFreeBytes : Number(systemPayload?.memory_used_bytes);
+      const ramUsedPct = Number.isFinite(ramUsedBytes) && Number.isFinite(memTotalBytes) && memTotalBytes > 0
+        ? Math.round(ramUsedBytes / memTotalBytes * 100)
+        : null;
+      if (memoryDetail) {
+        const pctText = ramUsedPct !== null ? ` (${ramUsedPct}%)` : "";
+        memoryDetail.textContent = `${formatBytes(ramUsedBytes)}${pctText} / ${memTotal}`;
+      }
+      applyMemoryPressureSeverity(memoryDetail, systemPayload);
+
       const llamaRss = systemPayload?.llama_rss;
       const llamaRssBytes = Number(llamaRss?.rss_bytes);
       const llamaFileBytes = Number(llamaRss?.rss_file_bytes);
-      if (memoryDetail) {
-        if (llamaRss?.available === true && Number.isFinite(llamaRssBytes) && llamaRssBytes > 0) {
-          const rssPercent = Number.isFinite(memTotalBytes) && memTotalBytes > 0
-            ? ` (${Math.round(llamaRssBytes / memTotalBytes * 100)}%)`
-            : "";
-          const modelPart = Number.isFinite(llamaFileBytes) && llamaFileBytes > 0
-            ? `, model ${formatBytes(llamaFileBytes)}`
-            : "";
-          memoryDetail.textContent = `${formatBytes(llamaRssBytes)}${rssPercent} resident${modelPart} / ${memTotal}`;
-        } else {
-          const memAvailable = Number(systemPayload?.memory_available_bytes);
-          const memUsed = formatBytes(systemPayload?.memory_used_bytes);
-          if (Number.isFinite(memAvailable) && memAvailable > 0) {
-            memoryDetail.textContent = `${formatBytes(memAvailable)} available (${memUsed} used / ${memTotal})`;
-          } else {
-            const memPercent = formatPercent(systemPayload?.memory_percent, 0);
-            memoryDetail.textContent = `${memUsed} / ${memTotal} (${memPercent})`;
-          }
+      if (llamaRss?.available === true && Number.isFinite(llamaRssBytes) && llamaRssBytes > 0) {
+        if (llamaRssRow) llamaRssRow.style.display = "";
+        const llPct = Number.isFinite(memTotalBytes) && memTotalBytes > 0
+          ? ` (${Math.round(llamaRssBytes / memTotalBytes * 100)}%)`
+          : "";
+        if (llamaRssDetail) llamaRssDetail.textContent = `${formatBytes(llamaRssBytes)}${llPct}`;
+        if (modelRamRow) modelRamRow.style.display = "";
+        if (modelRamDetail) {
+          modelRamDetail.textContent = Number.isFinite(llamaFileBytes) && llamaFileBytes > 0
+            ? formatBytes(llamaFileBytes)
+            : "--";
         }
+      } else {
+        if (llamaRssRow) llamaRssRow.style.display = "none";
+        if (modelRamRow) modelRamRow.style.display = "none";
       }
-      applyMemoryPressureSeverity(memoryDetail, systemPayload);
 
       const pressure = systemPayload?.memory_pressure;
       if (pressureRow) pressureRow.style.display = "";

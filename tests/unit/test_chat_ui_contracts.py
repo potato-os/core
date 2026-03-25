@@ -338,7 +338,8 @@ def test_chat_ui_shows_pi_runtime_compact_with_details_toggle_above_settings():
     assert '>Bootloader</span>' in CHAT_UI
     assert '>Firmware</span>' in CHAT_UI
     assert "Performance" in CHAT_UI
-    assert "Memory &amp; storage" in CHAT_UI
+    assert 'aria-label="Memory"' in CHAT_UI
+    assert 'aria-label="Storage"' in CHAT_UI
     assert "Platform" in CHAT_UI
     assert '>zram</span>' in CHAT_UI
     assert "Power note:" not in CHAT_UI

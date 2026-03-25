@@ -481,7 +481,7 @@ test("runtime dropdown shows all compatible runtimes on Pi 5 mock", async ({ pag
 
 // ── Memory pressure diagnostics tests ─────────────────────────────────
 
-test("memory row shows available headroom when memory_available_bytes present", async ({ page }) => {
+test("memory row shows RAM used as total minus free", async ({ page }) => {
   await page.route("**/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -493,10 +493,11 @@ test("memory row shows available headroom when memory_available_bytes present", 
           cpu_percent: 10,
           cpu_cores_percent: [10, 10, 10, 10],
           cpu_clock_arm_hz: 1500000000,
-          memory_total_bytes: 8000000000,
-          memory_used_bytes: 2500000000,
-          memory_available_bytes: 5520000000,
-          memory_percent: 31,
+          memory_total_bytes: 8450000000,
+          memory_used_bytes: 1940000000,
+          memory_available_bytes: 6120000000,
+          memory_free_bytes: 284000000,
+          memory_percent: 23,
           swap_total_bytes: 2000000000,
           swap_used_bytes: 0,
           swap_percent: 0,
@@ -510,8 +511,52 @@ test("memory row shows available headroom when memory_available_bytes present", 
   });
   await page.goto("/");
   await waitForStatusApplied(page);
-  await expect(page.locator("#runtimeDetailMemoryValue")).toContainText("available");
-  await expect(page.locator("#runtimeDetailMemoryValue")).toContainText("5.52 GB");
+  // RAM used = total - free = 8.45 GB - 284 MB ≈ 8.17 GB (97%)
+  await expect(page.locator("#runtimeDetailMemoryValue")).toContainText("8.17 GB");
+  await expect(page.locator("#runtimeDetailMemoryValue")).toContainText("97%");
+  await expect(page.locator("#runtimeDetailMemoryValue")).toContainText("8.45 GB");
+});
+
+test("llama-server and model rows shown when llama_rss available", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(makeStatusPayload({
+        system: {
+          available: true,
+          updated_at_unix: 1771778048,
+          cpu_percent: 10,
+          cpu_cores_percent: [10, 10, 10, 10],
+          cpu_clock_arm_hz: 1500000000,
+          memory_total_bytes: 8450000000,
+          memory_used_bytes: 1940000000,
+          memory_free_bytes: 284000000,
+          memory_percent: 23,
+          llama_rss: {
+            available: true,
+            rss_bytes: 3760000000,
+            rss_anon_bytes: 622000000,
+            rss_file_bytes: 2400000000,
+          },
+          swap_total_bytes: 2000000000,
+          swap_used_bytes: 0,
+          swap_percent: 0,
+          temperature_c: 50,
+          gpu_clock_core_hz: 500000000,
+          gpu_clock_v3d_hz: 500000000,
+          throttling: { raw: "0x0", any_current: false, any_history: false, current_flags: [], history_flags: [] },
+        },
+      })),
+    });
+  });
+  await page.goto("/");
+  await waitForStatusApplied(page);
+  await expect(page.locator("#runtimeDetailLlamaRssRow")).toBeVisible();
+  await expect(page.locator("#runtimeDetailLlamaRssValue")).toContainText("3.76 GB");
+  await expect(page.locator("#runtimeDetailLlamaRssValue")).toContainText("44%");
+  await expect(page.locator("#runtimeDetailModelRamRow")).toBeVisible();
+  await expect(page.locator("#runtimeDetailModelRamValue")).toContainText("2.40 GB");
 });
 
 

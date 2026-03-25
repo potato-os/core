@@ -1072,6 +1072,7 @@ def default_system_metrics_snapshot() -> dict[str, Any]:
         "memory_total_bytes": 0,
         "memory_used_bytes": 0,
         "memory_available_bytes": 0,
+        "memory_free_bytes": 0,
         "memory_percent": None,
         "memory_pressure": _default_psi_memory(),
         "zram_compression": _default_zram_compression(),
@@ -1641,6 +1642,7 @@ def collect_system_metrics_snapshot(*, llama_pid: int | None = None) -> dict[str
             snapshot["memory_total_bytes"] = int(memory.total)
             snapshot["memory_used_bytes"] = int(memory.used)
             snapshot["memory_available_bytes"] = int(memory.available)
+            snapshot["memory_free_bytes"] = int(getattr(memory, "free", 0))
             snapshot["memory_percent"] = round(_safe_float(memory.percent), 2)
             snapshot["swap_label"] = _read_swap_label()
             snapshot["swap_total_bytes"] = int(swap.total)

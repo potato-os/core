@@ -267,6 +267,10 @@
       font-weight: 600;
     }
 
+    .runtime-detail-label--indent {
+      padding-left: 12px;
+    }
+
     .runtime-detail-value {
       color: var(--text);
       min-width: 0;

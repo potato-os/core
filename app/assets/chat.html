@@ -71,12 +71,17 @@
               <div class="runtime-detail-row"><span class="runtime-detail-label">Throttling</span><span id="runtimeDetailThrottleValue" class="runtime-detail-value">--</span></div>
               <div class="runtime-detail-row"><span class="runtime-detail-label">History</span><span id="runtimeDetailThrottleHistoryValue" class="runtime-detail-value">--</span></div>
             </section>
-            <section id="runtimeDetailsMemoryGroup" class="runtime-detail-group" aria-label="Memory and storage">
-              <div class="runtime-detail-group-title">Memory &amp; storage</div>
-              <div class="runtime-detail-row"><span class="runtime-detail-label">Memory</span><span id="runtimeDetailMemoryValue" class="runtime-detail-value">--</span></div>
+            <section id="runtimeDetailsMemoryGroup" class="runtime-detail-group" aria-label="Memory">
+              <div class="runtime-detail-group-title">Memory</div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">RAM used</span><span id="runtimeDetailMemoryValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row" id="runtimeDetailLlamaRssRow"><span class="runtime-detail-label">llama-server</span><span id="runtimeDetailLlamaRssValue" class="runtime-detail-value">--</span></div>
+              <div class="runtime-detail-row" id="runtimeDetailModelRamRow"><span class="runtime-detail-label runtime-detail-label--indent">model in RAM</span><span id="runtimeDetailModelRamValue" class="runtime-detail-value">--</span></div>
               <div class="runtime-detail-row" id="runtimeDetailPressureRow"><span class="runtime-detail-label">Pressure</span><span id="runtimeDetailPressureValue" class="runtime-detail-value">--</span></div>
               <div class="runtime-detail-row"><span id="runtimeDetailSwapLabel" class="runtime-detail-label">zram</span><span id="runtimeDetailSwapValue" class="runtime-detail-value">--</span></div>
-              <div class="runtime-detail-row"><span class="runtime-detail-label">Storage free</span><span id="runtimeDetailStorageValue" class="runtime-detail-value">--</span></div>
+            </section>
+            <section id="runtimeDetailsStorageGroup" class="runtime-detail-group" aria-label="Storage">
+              <div class="runtime-detail-group-title">Storage</div>
+              <div class="runtime-detail-row"><span class="runtime-detail-label">Free</span><span id="runtimeDetailStorageValue" class="runtime-detail-value">--</span></div>
             </section>
             <section id="runtimeDetailsPlatformGroup" class="runtime-detail-group" aria-label="Platform">
               <div class="runtime-detail-group-title">Platform</div>

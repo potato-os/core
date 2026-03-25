@@ -1138,6 +1138,8 @@ def test_snapshot_includes_memory_available_bytes(monkeypatch):
 
     assert "memory_available_bytes" in snapshot
     assert isinstance(snapshot["memory_available_bytes"], int)
+    assert "memory_free_bytes" in snapshot
+    assert isinstance(snapshot["memory_free_bytes"], int)
 
 
 def test_snapshot_includes_memory_pressure_and_zram_compression(monkeypatch):
