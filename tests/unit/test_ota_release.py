@@ -48,8 +48,9 @@ def _package_ota_tarball(source_root: Path, staging: Path, version: str) -> Path
     prefix = staging / archive_name
     prefix.mkdir(parents=True)
 
-    subprocess.run(["cp", "-a", str(source_root / "app"), str(prefix / "app")], check=True)
-    subprocess.run(["cp", "-a", str(source_root / "bin"), str(prefix / "bin")], check=True)
+    env = {**os.environ, "COPYFILE_DISABLE": "1"}
+    subprocess.run(["cp", "-a", str(source_root / "app"), str(prefix / "app")], check=True, env=env)
+    subprocess.run(["cp", "-a", str(source_root / "bin"), str(prefix / "bin")], check=True, env=env)
     subprocess.run(["cp", str(source_root / "requirements.txt"), str(prefix / "requirements.txt")], check=True)
 
     tarball_path = staging / tarball_name
@@ -60,6 +61,7 @@ def _package_ota_tarball(source_root: Path, staging: Path, version: str) -> Path
             archive_name,
         ],
         check=True,
+        env=env,
     )
     return tarball_path
 

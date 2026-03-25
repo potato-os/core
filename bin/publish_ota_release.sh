@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export COPYFILE_DISABLE=1  # Prevent macOS tar from embedding ._ resource forks
 
 # Publish an OTA-consumable app tarball to GitHub Releases.
 #
