@@ -225,6 +225,8 @@ download_mmproj() {
   local repo
   local url
   local remote_name
+  local local_name
+  local preferred_local
   local target
   local tmp
   local candidate
@@ -235,15 +237,34 @@ download_mmproj() {
     return 1
   fi
 
+  # Determine preferred model-specific local name (last entry before generic).
+  preferred_local=""
+  while read -r candidate; do
+    [ -n "${candidate}" ] || continue
+    [ "${candidate}" = "mmproj-F16.gguf" ] && break
+    preferred_local="${candidate}"
+  done < <(qwen35_mmproj_name_candidates)
+
   while read -r candidate; do
     [ -n "${candidate}" ] || continue
     url="https://huggingface.co/${repo}/resolve/main/${candidate}?download=true"
     remote_name="$(basename "${url%%\?*}")"
-    target="${model_dir}/${remote_name}"
+    # When downloading the generic file, save with model-specific name
+    # to prevent stale reuse across model switches (#136).
+    if [ "${remote_name}" = "mmproj-F16.gguf" ] && [ -n "${preferred_local}" ]; then
+      local_name="${preferred_local}"
+    else
+      local_name="${remote_name}"
+    fi
+    target="${model_dir}/${local_name}"
     tmp="${target}.part"
     rm -f "${tmp}"
     if ionice -c3 nice -n 19 curl --fail --location --continue-at - --output "${tmp}" "${url}"; then
       mv -f "${tmp}" "${target}"
+      # Clean up stale generic after saving model-specific file.
+      if [ "${local_name}" != "mmproj-F16.gguf" ]; then
+        rm -f "${model_dir}/mmproj-F16.gguf"
+      fi
       MMPROJ_PATH="${target}"
       return 0
     fi
@@ -288,6 +309,11 @@ pick_mmproj() {
   if model_is_qwen35_vision; then
     while read -r candidate_base; do
       [ -n "${candidate_base}" ] || continue
+      # Skip stale generic when auto-download is on — it may belong to a
+      # different model (#136).
+      if [ "${candidate_base}" = "mmproj-F16.gguf" ] && [ "${AUTO_DOWNLOAD_MMPROJ}" = "1" ]; then
+        continue
+      fi
       for candidate in "${mmproj_candidates[@]}"; do
         if [ "$(basename "${candidate}")" = "${candidate_base}" ]; then
           MMPROJ_PATH="${candidate}"
@@ -298,7 +324,12 @@ pick_mmproj() {
 
     for candidate in "${mmproj_candidates[@]}"; do
       candidate_base="$(basename "${candidate}" | tr '[:upper:]' '[:lower:]')"
-      if [[ "${candidate_base}" == mmproj-f16.gguf || "${candidate_base}" == *qwen*3.5* ]]; then
+      if [[ "${candidate_base}" == *qwen*3.5* ]]; then
+        compatible_candidates+=("${candidate}")
+      elif [[ "${candidate_base}" == mmproj-f16.gguf ]] && [ "${AUTO_DOWNLOAD_MMPROJ}" != "1" ]; then
+        # Accept generic only when auto-download is off (manual placement).
+        # When auto-download is on, the generic may be stale from a different
+        # model — skip it and let auto-download provide the right one (#136).
         compatible_candidates+=("${candidate}")
       fi
     done

@@ -712,13 +712,36 @@ def download_default_projector_for_model(*, runtime: RuntimeConfig, model_id: st
 
     models_dir = runtime.base_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine preferred model-specific local name (last candidate before generic).
+    # E.g. for Qwen3.5-2B-Q4_K_M.gguf → "mmproj-Qwen3.5-2B-f16.gguf"
+    preferred_local: str | None = None
+    for c in candidates:
+        if c == "mmproj-F16.gguf":
+            break
+        preferred_local = c
+
+    # Check for existing model-specific files first (skip stale generic).
+    for candidate in candidates:
+        if candidate == "mmproj-F16.gguf" and preferred_local:
+            continue
+        target_path = models_dir / candidate
+        if target_path.exists():
+            return True, "downloaded", candidate
+
     client = httpx.Client(follow_redirects=True, timeout=120.0)
     try:
         for candidate in candidates:
-            target_path = models_dir / candidate
-            if target_path.exists():
-                return True, "downloaded", candidate
             url = f"https://huggingface.co/{repo}/resolve/main/{candidate}"
+            # When downloading the generic file, save with model-specific name
+            # to prevent stale reuse across model switches (#136).
+            if candidate == "mmproj-F16.gguf" and preferred_local:
+                local_name = preferred_local
+            else:
+                local_name = candidate
+            target_path = models_dir / local_name
+            if target_path.exists():
+                return True, "downloaded", local_name
             part_path = target_path.with_suffix(target_path.suffix + ".part")
             try:
                 with client.stream("GET", url) as response:
@@ -728,7 +751,10 @@ def download_default_projector_for_model(*, runtime: RuntimeConfig, model_id: st
                             if chunk:
                                 handle.write(chunk)
                 part_path.replace(target_path)
-                return True, "downloaded", candidate
+                # Clean up stale generic after saving model-specific file.
+                if local_name != "mmproj-F16.gguf":
+                    (models_dir / "mmproj-F16.gguf").unlink(missing_ok=True)
+                return True, "downloaded", local_name
             except Exception:
                 part_path.unlink(missing_ok=True)
                 continue
@@ -759,7 +785,12 @@ def build_model_projector_status(runtime: RuntimeConfig, model: dict[str, Any]) 
     resolved_name = configured_filename
     present = False
     resolved_path = None
+    has_model_specific = any(c != "mmproj-F16.gguf" for c in default_candidates)
     for candidate in search_names:
+        # Skip stale generic fallback when model-specific candidates exist —
+        # the generic file may belong to a different model (#136).
+        if candidate == "mmproj-F16.gguf" and has_model_specific and projector_mode != "custom":
+            continue
         candidate_path = runtime.base_dir / "models" / candidate
         if candidate_path.exists():
             present = True

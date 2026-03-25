@@ -982,3 +982,101 @@ exit 0
     assert "FIRST_USER_NAME=pi" in config_text
     assert "FIRST_USER_PASS=raspberry" in config_text
     assert "TARGET_HOSTNAME=potato" in config_text
+
+
+def test_pick_mmproj_skips_stale_generic_with_auto_download_enabled(tmp_path: Path):
+    """When only mmproj-F16.gguf exists and auto-download is on, pick_mmproj must
+    NOT use the stale generic — it should trigger auto-download instead.
+    Regression test for #136."""
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model_path = model_dir / "Qwen3.5-4B-Q4_K_M.gguf"
+    model_path.write_bytes(b"gguf")
+    stale_generic = model_dir / "mmproj-F16.gguf"
+    stale_generic.write_bytes(b"stale-2b-projector")
+
+    args_out = tmp_path / "args.txt"
+    _write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "1"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+    env["ARGS_OUT"] = str(args_out)
+    # No real HF repo — download will fail, which is fine; we want to confirm
+    # the stale generic was NOT used.
+    env["POTATO_HF_MMPROJ_REPO"] = "nonexistent/repo"
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "bin" / "start_llama.sh")],
+        check=False,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    # Script should fail (download fails, no model-specific mmproj available)
+    # but it must NOT succeed by silently using the stale generic.
+    if result.returncode == 0:
+        args = args_out.read_text(encoding="utf-8")
+        assert str(stale_generic) not in args, (
+            "pick_mmproj must not use stale generic mmproj-F16.gguf when "
+            "auto-download is enabled (regression #136)"
+        )
+
+
+def test_pick_mmproj_accepts_generic_when_auto_download_disabled(tmp_path: Path):
+    """When auto-download is off and only mmproj-F16.gguf exists, pick_mmproj
+    should accept it — the user placed it manually."""
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model_path = model_dir / "Qwen3.5-4B-Q4_K_M.gguf"
+    model_path.write_bytes(b"gguf")
+    generic_mmproj = model_dir / "mmproj-F16.gguf"
+    generic_mmproj.write_bytes(b"manual-placement")
+
+    args_out = tmp_path / "args.txt"
+    _write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run(
+        [str(REPO_ROOT / "bin" / "start_llama.sh")],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--mmproj" in args
+    assert str(generic_mmproj) in args
+
