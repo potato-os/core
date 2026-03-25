@@ -24,6 +24,10 @@ from app.runtime_state import (
     _apply_power_calibration,
     _fit_linear_power_calibration,
     _estimate_power_from_cpu_load,
+    _parse_psi_memory_lines,
+    _parse_zram_mm_stat,
+    _read_psi_memory,
+    _read_zram_mm_stat,
     ensure_compatible_runtime,
     _parse_vcgencmd_bootloader_version,
     _parse_vcgencmd_firmware_version,
@@ -980,3 +984,183 @@ def test_available_runtimes_works_with_single_slot(runtime, monkeypatch):
     assert len(status["available_runtimes"]) == 1
     assert status["available_runtimes"][0]["family"] == "llama_cpp"
     assert status["available_runtimes"][0]["compatible"] is True
+
+
+# ── PSI memory pressure parser tests ──────────────────────────────────
+
+
+SAMPLE_PSI_OUTPUT = (
+    "some avg10=2.31 avg60=1.05 avg300=0.42 total=123456789\n"
+    "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+)
+
+
+def test_parse_psi_memory_lines_extracts_all_fields():
+    result = _parse_psi_memory_lines(SAMPLE_PSI_OUTPUT)
+
+    assert result["available"] is True
+    assert result["some_avg10"] == pytest.approx(2.31)
+    assert result["some_avg60"] == pytest.approx(1.05)
+    assert result["some_avg300"] == pytest.approx(0.42)
+    assert result["full_avg10"] == pytest.approx(0.0)
+    assert result["full_avg60"] == pytest.approx(0.0)
+    assert result["full_avg300"] == pytest.approx(0.0)
+
+
+def test_parse_psi_memory_lines_handles_active_pressure():
+    raw = (
+        "some avg10=15.20 avg60=8.33 avg300=3.01 total=999888777\n"
+        "full avg10=4.50 avg60=2.10 avg300=0.80 total=55443322\n"
+    )
+    result = _parse_psi_memory_lines(raw)
+
+    assert result["available"] is True
+    assert result["some_avg10"] == pytest.approx(15.20)
+    assert result["full_avg10"] == pytest.approx(4.50)
+    assert result["full_avg300"] == pytest.approx(0.80)
+
+
+def test_parse_psi_memory_lines_handles_malformed_input():
+    result = _parse_psi_memory_lines("garbage data\n")
+
+    assert result["available"] is False
+    assert result["some_avg10"] is None
+    assert result["full_avg10"] is None
+
+
+def test_parse_psi_memory_lines_handles_empty_string():
+    result = _parse_psi_memory_lines("")
+
+    assert result["available"] is False
+
+
+def test_read_psi_memory_returns_unavailable_on_oserror(monkeypatch):
+    monkeypatch.setattr(
+        "app.runtime_state.Path.read_text",
+        lambda self, encoding="utf-8": (_ for _ in ()).throw(OSError("No such file")),
+    )
+    result = _read_psi_memory()
+
+    assert result["available"] is False
+    assert result["some_avg10"] is None
+    assert result["full_avg10"] is None
+
+
+def test_read_psi_memory_parses_real_output(monkeypatch):
+    monkeypatch.setattr(
+        "app.runtime_state.Path.read_text",
+        lambda self, encoding="utf-8": SAMPLE_PSI_OUTPUT,
+    )
+    result = _read_psi_memory()
+
+    assert result["available"] is True
+    assert result["some_avg10"] == pytest.approx(2.31)
+
+
+# ── zram mm_stat parser tests ─────────────────────────────────────────
+
+
+SAMPLE_MM_STAT = "  119439360  44892922  51118080 2147483648  53608448       0       0       0       0\n"
+
+
+def test_parse_zram_mm_stat_extracts_columns():
+    result = _parse_zram_mm_stat(SAMPLE_MM_STAT)
+
+    assert result["available"] is True
+    assert result["orig_data_size"] == 119439360
+    assert result["compr_data_size"] == 44892922
+    assert result["mem_used_total"] == 51118080
+    assert result["mem_limit"] == 2147483648
+    assert result["compression_ratio"] == pytest.approx(2.66, abs=0.01)
+
+
+def test_parse_zram_mm_stat_handles_zero_compr():
+    raw = "  0  0  0 2147483648  0       0       0       0       0\n"
+    result = _parse_zram_mm_stat(raw)
+
+    assert result["available"] is True
+    assert result["orig_data_size"] == 0
+    assert result["compression_ratio"] is None
+
+
+def test_parse_zram_mm_stat_handles_malformed_input():
+    result = _parse_zram_mm_stat("not a valid line")
+
+    assert result["available"] is False
+    assert result["orig_data_size"] is None
+
+
+def test_parse_zram_mm_stat_handles_empty_string():
+    result = _parse_zram_mm_stat("")
+
+    assert result["available"] is False
+
+
+def test_read_zram_mm_stat_returns_unavailable_on_oserror(monkeypatch):
+    monkeypatch.setattr(
+        "app.runtime_state.Path.read_text",
+        lambda self, encoding="utf-8": (_ for _ in ()).throw(OSError("No such file")),
+    )
+    result = _read_zram_mm_stat()
+
+    assert result["available"] is False
+    assert result["compression_ratio"] is None
+
+
+def test_read_zram_mm_stat_parses_real_output(monkeypatch):
+    monkeypatch.setattr(
+        "app.runtime_state.Path.read_text",
+        lambda self, encoding="utf-8": SAMPLE_MM_STAT,
+    )
+    result = _read_zram_mm_stat()
+
+    assert result["available"] is True
+    assert result["compression_ratio"] == pytest.approx(2.66, abs=0.01)
+
+
+# ── memory_available_bytes in snapshot ────────────────────────────────
+
+
+def test_snapshot_includes_memory_available_bytes(monkeypatch):
+    monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "expires_at_unix", 0)
+    monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "value", None)
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: None)
+    monkeypatch.setattr("app.runtime_state._read_os_release_pretty_name", lambda: None)
+    monkeypatch.setattr("app.runtime_state._read_kernel_version_info", lambda: {})
+    monkeypatch.setattr("app.runtime_state._run_vcgencmd", lambda *args: None)
+    monkeypatch.setattr("app.runtime_state._read_sysfs_temp", lambda: None)
+    monkeypatch.setattr("app.runtime_state._read_swap_label", lambda: "swap")
+    monkeypatch.setattr("app.runtime_state._read_psi_memory", lambda: {"available": False, "some_avg10": None, "some_avg60": None, "some_avg300": None, "full_avg10": None, "full_avg60": None, "full_avg300": None})
+    monkeypatch.setattr("app.runtime_state._read_zram_mm_stat", lambda: {"available": False, "orig_data_size": None, "compr_data_size": None, "mem_used_total": None, "mem_limit": None, "compression_ratio": None})
+
+    snapshot = collect_system_metrics_snapshot()
+
+    assert "memory_available_bytes" in snapshot
+    assert isinstance(snapshot["memory_available_bytes"], int)
+
+
+def test_snapshot_includes_memory_pressure_and_zram_compression(monkeypatch):
+    monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "expires_at_unix", 0)
+    monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "value", None)
+    monkeypatch.setattr("app.runtime_state.psutil", None)
+    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: None)
+    monkeypatch.setattr("app.runtime_state._read_os_release_pretty_name", lambda: None)
+    monkeypatch.setattr("app.runtime_state._read_kernel_version_info", lambda: {})
+    monkeypatch.setattr("app.runtime_state._run_vcgencmd", lambda *args: None)
+    monkeypatch.setattr("app.runtime_state._read_sysfs_temp", lambda: None)
+    monkeypatch.setattr("app.runtime_state._read_swap_label", lambda: "swap")
+    monkeypatch.setattr(
+        "app.runtime_state._read_psi_memory",
+        lambda: {"available": True, "some_avg10": 1.5, "some_avg60": 0.8, "some_avg300": 0.3, "full_avg10": 0.0, "full_avg60": 0.0, "full_avg300": 0.0},
+    )
+    monkeypatch.setattr(
+        "app.runtime_state._read_zram_mm_stat",
+        lambda: {"available": True, "orig_data_size": 119439360, "compr_data_size": 44892922, "mem_used_total": 51118080, "mem_limit": 2147483648, "compression_ratio": 2.66},
+    )
+
+    snapshot = collect_system_metrics_snapshot()
+
+    assert snapshot["memory_pressure"]["available"] is True
+    assert snapshot["memory_pressure"]["some_avg10"] == pytest.approx(1.5)
+    assert snapshot["zram_compression"]["available"] is True
+    assert snapshot["zram_compression"]["compression_ratio"] == pytest.approx(2.66)
