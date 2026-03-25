@@ -8,7 +8,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+from tests.unit.conftest import REPO_ROOT
 
 
 def _build_fake_runtime_slot(slot_dir: Path, *, family: str = "ik_llama", commit: str = "abc12345", profile: str = "pi5-opt") -> dict:

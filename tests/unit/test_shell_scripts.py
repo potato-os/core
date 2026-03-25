@@ -5,13 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _write_stub(path: Path, content: str) -> None:
-    path.write_text(content, encoding="utf-8")
-    path.chmod(0o755)
+from tests.unit.conftest import REPO_ROOT, write_stub
 
 
 def test_shell_scripts_have_valid_bash_syntax():
@@ -120,7 +114,7 @@ def test_uninstall_script_executes_pi_cleanup_without_package_removal(tmp_path: 
     fakebin.mkdir()
     calls = tmp_path / "calls.log"
 
-    _write_stub(
+    write_stub(
         fakebin / "sudo",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -141,21 +135,21 @@ done
 "${args[@]}"
 """,
     )
-    _write_stub(
+    write_stub(
         fakebin / "systemctl",
         """#!/usr/bin/env bash
 set -euo pipefail
 echo "systemctl $*" >> "$CALLS_FILE"
 """,
     )
-    _write_stub(
+    write_stub(
         fakebin / "rm",
         """#!/usr/bin/env bash
 set -euo pipefail
 echo "rm $*" >> "$CALLS_FILE"
 """,
     )
-    _write_stub(
+    write_stub(
         fakebin / "id",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -166,7 +160,7 @@ fi
 exit 1
 """,
     )
-    _write_stub(
+    write_stub(
         fakebin / "getent",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -177,21 +171,21 @@ fi
 exit 2
 """,
     )
-    _write_stub(
+    write_stub(
         fakebin / "userdel",
         """#!/usr/bin/env bash
 set -euo pipefail
 echo "userdel $*" >> "$CALLS_FILE"
 """,
     )
-    _write_stub(
+    write_stub(
         fakebin / "groupdel",
         """#!/usr/bin/env bash
 set -euo pipefail
 echo "groupdel $*" >> "$CALLS_FILE"
 """,
     )
-    _write_stub(
+    write_stub(
         fakebin / "apt-get",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -222,7 +216,7 @@ def test_uninstall_script_can_optionally_remove_packages(tmp_path: Path):
     fakebin.mkdir()
     calls = tmp_path / "calls.log"
 
-    _write_stub(
+    write_stub(
         fakebin / "sudo",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -244,7 +238,7 @@ done
 """,
     )
     for cmd in ("systemctl", "rm", "userdel", "groupdel", "apt-get"):
-        _write_stub(
+        write_stub(
             fakebin / cmd,
             f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -252,14 +246,14 @@ echo "{cmd} $*" >> "$CALLS_FILE"
 """,
         )
 
-    _write_stub(
+    write_stub(
         fakebin / "id",
         """#!/usr/bin/env bash
 set -euo pipefail
 exit 0
 """,
     )
-    _write_stub(
+    write_stub(
         fakebin / "getent",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -289,7 +283,7 @@ def test_start_llama_script_builds_expected_command(tmp_path: Path):
     model_path.write_bytes(b"gguf")
     mmproj_path.write_bytes(b"mmproj")
 
-    _write_stub(
+    write_stub(
         fakebin / "fake-llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -336,7 +330,7 @@ def test_start_llama_text_model_skips_mmproj(tmp_path: Path):
     model_path.write_bytes(b"gguf")
     mmproj_path.write_bytes(b"mmproj")
 
-    _write_stub(
+    write_stub(
         fakebin / "fake-llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -366,7 +360,7 @@ def test_start_llama_qwen35_a3b_uses_smaller_default_ctx_without_mmproj(tmp_path
     model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
     model_path.write_bytes(b"gguf")
 
-    _write_stub(
+    write_stub(
         fakebin / "fake-llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -404,7 +398,7 @@ def test_start_llama_qwen35_a3b_vision_enabled_uses_mmproj(tmp_path: Path):
     mmproj_path.write_bytes(b"mmproj")
 
     args_out = tmp_path / "args.txt"
-    _write_stub(
+    write_stub(
         runtime_bin / "llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -439,7 +433,7 @@ def test_start_llama_qwen35_a3b_honors_explicit_ctx_override(tmp_path: Path):
     model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
     model_path.write_bytes(b"gguf")
 
-    _write_stub(
+    write_stub(
         fakebin / "fake-llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -470,7 +464,7 @@ def test_start_llama_qwen35_a3b_pi5_16gb_auto_disables_mmap(tmp_path: Path):
     model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
     model_path.write_bytes(b"gguf")
 
-    _write_stub(
+    write_stub(
         fakebin / "fake-llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -507,7 +501,7 @@ def test_start_llama_qwen35_a3b_no_mmap_can_be_disabled_explicitly(tmp_path: Pat
     model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
     model_path.write_bytes(b"gguf")
 
-    _write_stub(
+    write_stub(
         fakebin / "fake-llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -538,7 +532,7 @@ def test_start_llama_qwen35_a3b_auto_no_mmap_skips_unknown_runtime_profile(tmp_p
     model_path = tmp_path / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
     model_path.write_bytes(b"gguf")
 
-    _write_stub(
+    write_stub(
         fakebin / "fake-llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -574,7 +568,7 @@ def test_start_llama_qwen35_vision_uses_f16_mmproj(tmp_path: Path):
     f16_mmproj.write_bytes(b"f16")
 
     args_out = tmp_path / "args.txt"
-    _write_stub(
+    write_stub(
         runtime_bin / "llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -612,7 +606,7 @@ def test_start_llama_qwen35_vision_prefers_model_specific_mmproj_over_generic(tm
     specific_mmproj.write_bytes(b"specific")
 
     args_out = tmp_path / "args.txt"
-    _write_stub(
+    write_stub(
         runtime_bin / "llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -647,7 +641,7 @@ def test_start_llama_qwen35_vision_fails_without_any_mmproj(tmp_path: Path):
     model_path.write_bytes(b"gguf")
     # No mmproj files at all
 
-    _write_stub(
+    write_stub(
         runtime_bin / "llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -688,7 +682,7 @@ def test_start_llama_qwen35_text_model_does_not_require_mmproj_by_default(tmp_pa
     generic_mmproj.write_bytes(b"f16")
 
     args_out = tmp_path / "args.txt"
-    _write_stub(
+    write_stub(
         runtime_bin / "llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -727,7 +721,7 @@ def test_start_llama_script_uses_bundle_runtime_and_prefers_q8_mmproj(tmp_path: 
 
     args_out = tmp_path / "args.txt"
     ld_out = tmp_path / "ld.txt"
-    _write_stub(
+    write_stub(
         runtime_bin / "llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -938,7 +932,7 @@ def test_vision_e2e_script_exercises_multimodal_requests():
 def test_image_build_lite_dry_run_writes_manifest_and_stage(tmp_path: Path):
     pigen_dir = tmp_path / "pi-gen"
     pigen_dir.mkdir()
-    _write_stub(
+    write_stub(
         pigen_dir / "build.sh",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -949,7 +943,7 @@ exit 0
     llama_bundle = tmp_path / "llama_bundle"
     (llama_bundle / "bin").mkdir(parents=True)
     (llama_bundle / "lib").mkdir(parents=True)
-    _write_stub(llama_bundle / "bin" / "llama-server", "#!/usr/bin/env bash\nexit 0\n")
+    write_stub(llama_bundle / "bin" / "llama-server", "#!/usr/bin/env bash\nexit 0\n")
 
     output_dir = tmp_path / "out"
     env = os.environ.copy()
@@ -1000,7 +994,7 @@ def test_pick_mmproj_rejects_wrong_model_specific_projector(tmp_path: Path):
     wrong_projector.write_bytes(b"2b-projector")
 
     args_out = tmp_path / "args.txt"
-    _write_stub(
+    write_stub(
         runtime_bin / "llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -1052,7 +1046,7 @@ def test_pick_mmproj_uses_generic_as_offline_fallback_when_passed_via_env(tmp_pa
     generic_mmproj.write_bytes(b"generic-projector")
 
     args_out = tmp_path / "args.txt"
-    _write_stub(
+    write_stub(
         runtime_bin / "llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -1097,7 +1091,7 @@ def test_pick_mmproj_accepts_generic_when_auto_download_disabled(tmp_path: Path)
     generic_mmproj.write_bytes(b"manual-placement")
 
     args_out = tmp_path / "args.txt"
-    _write_stub(
+    write_stub(
         runtime_bin / "llama-server",
         """#!/usr/bin/env bash
 set -euo pipefail

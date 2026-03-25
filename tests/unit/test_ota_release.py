@@ -8,8 +8,7 @@ import tarfile
 from pathlib import Path
 
 from app.update_state import _find_update_root
-
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+from tests.unit.conftest import REPO_ROOT
 
 
 def _build_fake_app_tree(root: Path) -> None:
