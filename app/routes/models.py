@@ -392,7 +392,7 @@ async def upload_model_endpoint(
             return JSONResponse(status_code=409, content={"uploaded": False, "reason": "upload_already_running"})
 
         declared_total = max(0, _safe_int(request.headers.get("content-length"), 0))
-        max_upload_bytes = _main.get_model_upload_max_bytes()
+        max_upload_bytes = _main.get_model_upload_max_bytes(runtime_cfg)
         request.app.state.model_upload_cancel_requested = False
         request.app.state.model_upload_state = {
             "active": True,
@@ -404,7 +404,7 @@ async def upload_model_endpoint(
         }
         if max_upload_bytes is not None and declared_total > 0 and declared_total > max_upload_bytes:
             request.app.state.model_upload_state.update({"active": False, "error": "upload_too_large"})
-            return JSONResponse(status_code=413, content={"uploaded": False, "reason": "upload_too_large"})
+            return JSONResponse(status_code=413, content={"uploaded": False, "reason": "upload_too_large", "max_upload_bytes": max_upload_bytes})
 
         state = _main.ensure_models_state(runtime_cfg)
         existing_names = {
@@ -450,7 +450,7 @@ async def upload_model_endpoint(
 
             if error_reason == "upload_too_large":
                 _cleanup_partial_upload()
-                return JSONResponse(status_code=413, content={"uploaded": False, "reason": error_reason})
+                return JSONResponse(status_code=413, content={"uploaded": False, "reason": error_reason, "max_upload_bytes": max_upload_bytes})
             if error_reason == "upload_cancelled":
                 _cleanup_partial_upload()
                 return JSONResponse(status_code=200, content={"uploaded": False, "reason": error_reason})

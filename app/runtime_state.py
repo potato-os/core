@@ -201,7 +201,7 @@ def _detect_total_memory_bytes() -> int | None:
     return total if total > 0 else None
 
 
-def get_model_upload_max_bytes() -> int | None:
+def get_model_upload_max_bytes(runtime: RuntimeConfig) -> int | None:
     raw_override = os.getenv("POTATO_MODEL_UPLOAD_MAX_BYTES", "").strip()
     if raw_override:
         lowered = raw_override.lower()
@@ -212,12 +212,10 @@ def get_model_upload_max_bytes() -> int | None:
             return parsed
         logger.warning("Invalid POTATO_MODEL_UPLOAD_MAX_BYTES=%r; falling back to auto limit", raw_override)
 
-    total_memory_bytes = _detect_total_memory_bytes()
-    if total_memory_bytes is None:
-        return MODEL_UPLOAD_LIMIT_16GB_BYTES
-    if total_memory_bytes >= MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES:
-        return MODEL_UPLOAD_LIMIT_16GB_BYTES
-    return MODEL_UPLOAD_LIMIT_8GB_BYTES
+    free_bytes = get_free_storage_bytes(runtime)
+    if free_bytes is not None:
+        return max(0, int(free_bytes * MODEL_UPLOAD_STORAGE_SAFETY_FRACTION))
+    return None
 
 
 def _read_pi_device_model_name() -> str | None:
@@ -335,18 +333,19 @@ async def ensure_compatible_runtime(runtime: RuntimeConfig) -> tuple[bool, str]:
     return True, "pi4_incompatible_runtime"
 
 
-def get_large_model_warn_threshold_bytes() -> int:
+def get_large_model_warn_threshold_bytes(runtime: RuntimeConfig) -> int:
     raw = os.getenv("POTATO_UNSUPPORTED_PI_LARGE_MODEL_WARN_BYTES", "").strip()
-    if not raw:
-        return LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT
-    parsed = _safe_int(raw, default=-1)
-    if parsed > 0:
-        return parsed
-    logger.warning(
-        "Invalid POTATO_UNSUPPORTED_PI_LARGE_MODEL_WARN_BYTES=%r; using default %d",
-        raw,
-        LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
-    )
+    if raw:
+        parsed = _safe_int(raw, default=-1)
+        if parsed > 0:
+            return parsed
+        logger.warning(
+            "Invalid POTATO_UNSUPPORTED_PI_LARGE_MODEL_WARN_BYTES=%r; using default",
+            raw,
+        )
+    free_bytes = get_free_storage_bytes(runtime)
+    if free_bytes is not None:
+        return max(0, int(free_bytes * MODEL_UPLOAD_STORAGE_SAFETY_FRACTION))
     return LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT
 
 
@@ -839,7 +838,8 @@ def build_large_model_compatibility(
         total_memory_bytes=total_memory_bytes,
         pi_model_name=pi_model_name,
     )
-    threshold_bytes = get_large_model_warn_threshold_bytes()
+    threshold_bytes = get_large_model_warn_threshold_bytes(runtime)
+    storage_free = get_free_storage_bytes(runtime)
     override_enabled = (
         normalize_allow_unsupported_large_models(allow_override)
         if allow_override is not None
@@ -852,15 +852,15 @@ def build_large_model_compatibility(
         size_bytes = 0
 
     warnings: list[dict[str, Any]] = []
-    if size_bytes > threshold_bytes and device_class != "pi5-16gb" and not override_enabled:
+    if size_bytes > threshold_bytes and not override_enabled:
         filename = str(model_filename or runtime.model_path.name or "model.gguf")
         warnings.append(
             {
                 "code": "large_model_unsupported_pi_warning",
                 "severity": "warning",
                 "message": (
-                    f"{filename} is larger than the unsupported-device warning threshold "
-                    f"({threshold_bytes} bytes). Qwen3.5-35B-A3B is validated on Raspberry Pi 5 16GB only."
+                    f"{filename} ({size_bytes} bytes) may exceed available storage "
+                    f"({threshold_bytes} bytes usable). Upload or loading may fail."
                 ),
                 "model_filename": filename,
                 "model_size_bytes": size_bytes,
@@ -875,6 +875,7 @@ def build_large_model_compatibility(
         "pi_model_name": pi_model_name,
         "memory_total_bytes": total_memory_bytes or 0,
         "large_model_warn_threshold_bytes": threshold_bytes,
+        "storage_free_bytes": storage_free,
         "supported_target": "raspberry-pi-5-16gb",
         "override_enabled": override_enabled,
         "runtime_compatibility": runtime_compat,

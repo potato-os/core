@@ -663,7 +663,11 @@ import { registerChatEngineCallbacks, setSendEnabled, setComposerActivity, setCo
           }
         })();
         if (xhr.status < 200 || xhr.status >= 300) {
-          setModelUploadStatus(`Upload failed (${body?.reason || xhr.status}).`);
+          if (body?.reason === "upload_too_large" && body?.max_upload_bytes) {
+            setModelUploadStatus(`Upload too large — limit is ${formatBytes(body.max_upload_bytes)} (available storage).`);
+          } else {
+            setModelUploadStatus(`Upload failed (${body?.reason || xhr.status}).`);
+          }
         } else if (body?.uploaded) {
           if (input) input.value = "";
           setModelUploadStatus("Upload completed.");
