@@ -133,7 +133,9 @@ test("runtime details apply threshold colors for clock, memory, swap, and temper
   await page.locator("#runtimeViewToggle").click();
 
   await expect(page.locator("#runtimeDetailCpuClockValue")).toHaveClass(/runtime-metric-critical/);
-  await expect(page.locator("#runtimeDetailMemoryValue")).toHaveClass(/runtime-metric-critical/);
+  // Memory severity uses relaxed fallback thresholds when PSI unavailable:
+  // 93.75% maps to "high" (>=90%), not "critical" (>=95%).
+  await expect(page.locator("#runtimeDetailMemoryValue")).toHaveClass(/runtime-metric-high/);
   await expect(page.locator("#runtimeDetailSwapValue")).toHaveClass(/runtime-metric-high/);
   await expect(page.locator("#runtimeDetailTempValue")).toHaveClass(/runtime-metric-high/);
 });
@@ -477,3 +479,204 @@ test("runtime dropdown shows all compatible runtimes on Pi 5 mock", async ({ pag
 });
 
 
+// ── Memory pressure diagnostics tests ─────────────────────────────────
+
+test("memory row shows available headroom when memory_available_bytes present", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(makeStatusPayload({
+        system: {
+          available: true,
+          updated_at_unix: 1771778048,
+          cpu_percent: 10,
+          cpu_cores_percent: [10, 10, 10, 10],
+          cpu_clock_arm_hz: 1500000000,
+          memory_total_bytes: 8000000000,
+          memory_used_bytes: 2500000000,
+          memory_available_bytes: 5520000000,
+          memory_percent: 31,
+          swap_total_bytes: 2000000000,
+          swap_used_bytes: 0,
+          swap_percent: 0,
+          temperature_c: 50,
+          gpu_clock_core_hz: 500000000,
+          gpu_clock_v3d_hz: 500000000,
+          throttling: { raw: "0x0", any_current: false, any_history: false, current_flags: [], history_flags: [] },
+        },
+      })),
+    });
+  });
+  await page.goto("/");
+  await waitForStatusApplied(page);
+  await expect(page.locator("#runtimeDetailMemoryValue")).toContainText("available");
+  await expect(page.locator("#runtimeDetailMemoryValue")).toContainText("5.52 GB");
+});
+
+
+test("pressure row appears when PSI data available", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(makeStatusPayload({
+        system: {
+          available: true,
+          updated_at_unix: 1771778048,
+          cpu_percent: 10,
+          cpu_cores_percent: [10, 10, 10, 10],
+          cpu_clock_arm_hz: 1500000000,
+          memory_total_bytes: 8000000000,
+          memory_used_bytes: 6000000000,
+          memory_available_bytes: 1800000000,
+          memory_percent: 75,
+          memory_pressure: {
+            available: true,
+            some_avg10: 5.2,
+            some_avg60: 2.1,
+            some_avg300: 0.8,
+            full_avg10: 0.0,
+            full_avg60: 0.0,
+            full_avg300: 0.0,
+          },
+          swap_total_bytes: 2000000000,
+          swap_used_bytes: 100000000,
+          swap_percent: 5,
+          temperature_c: 55,
+          gpu_clock_core_hz: 500000000,
+          gpu_clock_v3d_hz: 500000000,
+          throttling: { raw: "0x0", any_current: false, any_history: false, current_flags: [], history_flags: [] },
+        },
+      })),
+    });
+  });
+  await page.goto("/");
+  await waitForStatusApplied(page);
+  await expect(page.locator("#runtimeDetailPressureRow")).toBeVisible();
+  await expect(page.locator("#runtimeDetailPressureValue")).toContainText("minimal");
+  await expect(page.locator("#runtimeDetailPressureValue")).toContainText("5.2");
+});
+
+
+test("pressure row hidden when PSI unavailable", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(makeStatusPayload({
+        system: {
+          available: true,
+          updated_at_unix: 1771778048,
+          cpu_percent: 10,
+          cpu_cores_percent: [10, 10, 10, 10],
+          cpu_clock_arm_hz: 1500000000,
+          memory_total_bytes: 8000000000,
+          memory_used_bytes: 2000000000,
+          memory_percent: 25,
+          memory_pressure: { available: false },
+          swap_total_bytes: 2000000000,
+          swap_used_bytes: 0,
+          swap_percent: 0,
+          temperature_c: 45,
+          gpu_clock_core_hz: 500000000,
+          gpu_clock_v3d_hz: 500000000,
+          throttling: { raw: "0x0", any_current: false, any_history: false, current_flags: [], history_flags: [] },
+        },
+      })),
+    });
+  });
+  await page.goto("/");
+  await waitForStatusApplied(page);
+  await expect(page.locator("#runtimeDetailPressureRow")).toBeHidden();
+});
+
+
+test("zram row shows compression ratio when zram_compression available", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(makeStatusPayload({
+        system: {
+          available: true,
+          updated_at_unix: 1771778048,
+          cpu_percent: 10,
+          cpu_cores_percent: [10, 10, 10, 10],
+          cpu_clock_arm_hz: 1500000000,
+          memory_total_bytes: 8000000000,
+          memory_used_bytes: 6000000000,
+          memory_percent: 75,
+          swap_label: "zram",
+          swap_total_bytes: 2147483648,
+          swap_used_bytes: 119439360,
+          swap_percent: 5.6,
+          zram_compression: {
+            available: true,
+            orig_data_size: 119439360,
+            compr_data_size: 44892922,
+            mem_used_total: 51118080,
+            mem_limit: 2147483648,
+            compression_ratio: 2.7,
+          },
+          temperature_c: 55,
+          gpu_clock_core_hz: 500000000,
+          gpu_clock_v3d_hz: 500000000,
+          throttling: { raw: "0x0", any_current: false, any_history: false, current_flags: [], history_flags: [] },
+        },
+      })),
+    });
+  });
+  await page.goto("/");
+  await waitForStatusApplied(page);
+  await expect(page.locator("#runtimeDetailSwapValue")).toContainText("compressed");
+  await expect(page.locator("#runtimeDetailSwapValue")).toContainText("2.7x");
+  await expect(page.locator("#runtimeDetailSwapValue")).toContainText("limit");
+});
+
+
+test("memory severity uses PSI thresholds when pressure data available", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(makeStatusPayload({
+        system: {
+          available: true,
+          updated_at_unix: 1771778048,
+          cpu_percent: 80,
+          cpu_cores_percent: [80, 80, 80, 80],
+          cpu_clock_arm_hz: 2400000000,
+          memory_total_bytes: 8000000000,
+          memory_used_bytes: 7500000000,
+          memory_available_bytes: 300000000,
+          memory_percent: 93.75,
+          memory_pressure: {
+            available: true,
+            some_avg10: 25.0,
+            some_avg60: 18.0,
+            some_avg300: 10.0,
+            full_avg10: 15.0,
+            full_avg60: 8.0,
+            full_avg300: 3.0,
+          },
+          swap_total_bytes: 2000000000,
+          swap_used_bytes: 1800000000,
+          swap_percent: 90,
+          temperature_c: 85,
+          gpu_clock_core_hz: 500000000,
+          gpu_clock_v3d_hz: 500000000,
+          throttling: { raw: "0x0", any_current: false, any_history: false, current_flags: [], history_flags: [] },
+        },
+      })),
+    });
+  });
+  await page.goto("/");
+  await waitForStatusApplied(page);
+  // full_avg10 > 10 → critical severity on memory row
+  await expect(page.locator("#runtimeDetailMemoryValue")).toHaveClass(/runtime-metric-critical/);
+  // Pressure row shows thrashing state
+  await expect(page.locator("#runtimeDetailPressureRow")).toBeVisible();
+  await expect(page.locator("#runtimeDetailPressureValue")).toContainText("thrashing");
+  await expect(page.locator("#runtimeDetailPressureValue")).toContainText("15.0");
+});

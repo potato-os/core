@@ -60,6 +60,30 @@ export function applyRuntimeMetricSeverity(element, rawPercent) {
   element.classList.add(runtimeMetricSeverityClass(rawPercent));
 }
 
+export function memoryPressureSeverityClass(systemPayload) {
+  const pressure = systemPayload?.memory_pressure;
+  if (pressure?.available === true) {
+    const fullAvg10 = Number(pressure.full_avg10);
+    const someAvg10 = Number(pressure.some_avg10);
+    if (Number.isFinite(fullAvg10) && fullAvg10 > 10) return "runtime-metric-critical";
+    if (Number.isFinite(fullAvg10) && fullAvg10 > 0) return "runtime-metric-high";
+    if (Number.isFinite(someAvg10) && someAvg10 > 10) return "runtime-metric-warn";
+    return "runtime-metric-normal";
+  }
+  const percent = normalizePercent(systemPayload?.memory_percent);
+  if (!Number.isFinite(percent)) return "runtime-metric-normal";
+  if (percent >= 95) return "runtime-metric-critical";
+  if (percent >= 90) return "runtime-metric-high";
+  if (percent >= 80) return "runtime-metric-warn";
+  return "runtime-metric-normal";
+}
+
+export function applyMemoryPressureSeverity(element, systemPayload) {
+  if (!element) return;
+  element.classList.remove(...RUNTIME_METRIC_SEVERITY_CLASSES);
+  element.classList.add(memoryPressureSeverityClass(systemPayload));
+}
+
 export function formatCountdownSeconds(rawSeconds) {
   const totalSeconds = Math.max(0, Math.floor(Number(rawSeconds) || 0));
   const minutes = Math.floor(totalSeconds / 60);

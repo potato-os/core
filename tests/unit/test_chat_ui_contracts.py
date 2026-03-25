@@ -112,7 +112,7 @@ def test_chat_ui_runtime_details_hide_compact_and_apply_metric_threshold_classes
     assert "runtime-metric-critical" in CHAT_UI
     assert "CPU_CLOCK_MAX_HZ_PI5" in CHAT_UI
     assert "GPU_CLOCK_MAX_HZ_PI5" in CHAT_UI
-    assert "applyRuntimeMetricSeverity(memoryDetail, systemPayload?.memory_percent);" in CHAT_UI
+    assert "applyMemoryPressureSeverity(memoryDetail, systemPayload);" in CHAT_UI
     assert "applyRuntimeMetricSeverity(swapDetail, systemPayload?.swap_percent);" in CHAT_UI
     assert "applyRuntimeMetricSeverity(tempDetail, tempValue);" in CHAT_UI
     assert 'case "tool_calls"' in CHAT_UI

@@ -8,7 +8,7 @@ import { appState, CPU_CLOCK_MAX_HZ_PI5, GPU_CLOCK_MAX_HZ_PI5 } from "./state.js
     function _gpuMaxHz(systemPayload) {
       return Number(systemPayload?.device_clock_limits?.gpu_max_hz) || GPU_CLOCK_MAX_HZ_PI5;
     }
-import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRuntimeMetricSeverity } from "./utils.js";
+import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRuntimeMetricSeverity, applyMemoryPressureSeverity } from "./utils.js";
 
     export function setRuntimeDetailsExpanded(expanded) {
       appState.runtimeDetailsExpanded = Boolean(expanded);
@@ -36,6 +36,8 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
       const coresDetail = document.getElementById("runtimeDetailCoresValue");
       const cpuClockDetail = document.getElementById("runtimeDetailCpuClockValue");
       const memoryDetail = document.getElementById("runtimeDetailMemoryValue");
+      const pressureRow = document.getElementById("runtimeDetailPressureRow");
+      const pressureDetail = document.getElementById("runtimeDetailPressureValue");
       const swapLabelDetail = document.getElementById("runtimeDetailSwapLabel");
       const swapDetail = document.getElementById("runtimeDetailSwapValue");
       const storageDetail = document.getElementById("runtimeDetailStorageValue");
@@ -58,6 +60,8 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
         if (coresDetail) coresDetail.textContent = "--";
         if (cpuClockDetail) cpuClockDetail.textContent = "--";
         if (memoryDetail) memoryDetail.textContent = "--";
+        if (pressureRow) pressureRow.style.display = "none";
+        if (pressureDetail) pressureDetail.textContent = "--";
         if (swapLabelDetail) swapLabelDetail.textContent = "zram";
         if (swapDetail) swapDetail.textContent = "--";
         if (storageDetail) storageDetail.textContent = "--";
@@ -74,7 +78,8 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
         if (throttleHistoryDetail) throttleHistoryDetail.textContent = "--";
         if (updatedDetail) updatedDetail.textContent = "--";
         applyRuntimeMetricSeverity(cpuClockDetail, Number.NaN);
-        applyRuntimeMetricSeverity(memoryDetail, Number.NaN);
+        applyMemoryPressureSeverity(memoryDetail, null);
+        applyRuntimeMetricSeverity(pressureDetail, Number.NaN);
         applyRuntimeMetricSeverity(swapDetail, Number.NaN);
         applyRuntimeMetricSeverity(storageDetail, Number.NaN);
         applyRuntimeMetricSeverity(tempDetail, Number.NaN);
@@ -100,7 +105,11 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
       const storageFree = formatBytes(systemPayload?.storage_free_bytes);
       const storagePercent = formatPercent(systemPayload?.storage_percent, 0);
       const throttlingNow = systemPayload?.throttling?.any_current === true ? "Yes" : "No";
-      compact.textContent = `CPU ${cpuTotal} @ ${cpuClock} | Cores ${coresText} | GPU ${gpuCompact} | ${swapLabel} ${swapPercent} | Free ${storageFree} | Throttle ${throttlingNow}`;
+      const memAvailCompact = Number(systemPayload?.memory_available_bytes);
+      const memCompactText = Number.isFinite(memAvailCompact) && memAvailCompact > 0
+        ? `Mem ${formatBytes(memAvailCompact)} free`
+        : `Mem ${formatPercent(systemPayload?.memory_percent, 0)}`;
+      compact.textContent = `CPU ${cpuTotal} @ ${cpuClock} | Cores ${coresText} | GPU ${gpuCompact} | ${memCompactText} | ${swapLabel} ${swapPercent} | Free ${storageFree} | Throttle ${throttlingNow}`;
 
       if (cpuDetail) cpuDetail.textContent = cpuTotal;
       if (coresDetail) coresDetail.textContent = coresText;
@@ -109,14 +118,58 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
 
       const memUsed = formatBytes(systemPayload?.memory_used_bytes);
       const memTotal = formatBytes(systemPayload?.memory_total_bytes);
-      const memPercent = formatPercent(systemPayload?.memory_percent, 0);
-      if (memoryDetail) memoryDetail.textContent = `${memUsed} / ${memTotal} (${memPercent})`;
-      applyRuntimeMetricSeverity(memoryDetail, systemPayload?.memory_percent);
+      const memAvailable = Number(systemPayload?.memory_available_bytes);
+      if (memoryDetail) {
+        if (Number.isFinite(memAvailable) && memAvailable > 0) {
+          memoryDetail.textContent = `${formatBytes(memAvailable)} available (${memUsed} used / ${memTotal})`;
+        } else {
+          const memPercent = formatPercent(systemPayload?.memory_percent, 0);
+          memoryDetail.textContent = `${memUsed} / ${memTotal} (${memPercent})`;
+        }
+      }
+      applyMemoryPressureSeverity(memoryDetail, systemPayload);
+
+      const pressure = systemPayload?.memory_pressure;
+      if (pressure?.available === true) {
+        if (pressureRow) pressureRow.style.display = "";
+        const fullAvg10 = Number(pressure.full_avg10);
+        const someAvg10 = Number(pressure.some_avg10);
+        let pressureText = "none";
+        if (Number.isFinite(fullAvg10) && fullAvg10 > 0) {
+          pressureText = `thrashing (full ${fullAvg10.toFixed(1)}%)`;
+        } else if (Number.isFinite(someAvg10) && someAvg10 > 10) {
+          pressureText = `some stalls (${someAvg10.toFixed(1)}%)`;
+        } else if (Number.isFinite(someAvg10) && someAvg10 > 0) {
+          pressureText = `minimal (${someAvg10.toFixed(1)}%)`;
+        }
+        if (pressureDetail) pressureDetail.textContent = pressureText;
+        applyRuntimeMetricSeverity(pressureDetail, fullAvg10 > 10 ? 100 : fullAvg10 > 0 ? 80 : someAvg10 > 10 ? 70 : 0);
+      } else {
+        if (pressureRow) pressureRow.style.display = "none";
+        if (pressureDetail) pressureDetail.textContent = "--";
+      }
 
       const swapUsed = formatBytes(systemPayload?.swap_used_bytes);
       const swapTotal = formatBytes(systemPayload?.swap_total_bytes);
+      const zramCompr = systemPayload?.zram_compression;
       if (swapLabelDetail) swapLabelDetail.textContent = swapLabel;
-      if (swapDetail) swapDetail.textContent = `${swapUsed} / ${swapTotal} (${swapPercent})`;
+      if (swapDetail) {
+        if (zramCompr?.available === true && swapLabel === "zram") {
+          const origSize = Number(zramCompr.orig_data_size);
+          const ratio = Number(zramCompr.compression_ratio);
+          const limit = Number(zramCompr.mem_limit);
+          if (origSize > 0 && Number.isFinite(ratio)) {
+            const ratioText = `${ratio.toFixed(1)}x`;
+            const limitText = Number.isFinite(limit) && limit > 0 ? ` / ${formatBytes(limit)} limit` : "";
+            swapDetail.textContent = `${formatBytes(origSize)} compressed (${ratioText})${limitText}`;
+          } else {
+            const limitText = Number.isFinite(limit) && limit > 0 ? ` / ${formatBytes(limit)} limit` : "";
+            swapDetail.textContent = `idle${limitText}`;
+          }
+        } else {
+          swapDetail.textContent = `${swapUsed} / ${swapTotal} (${swapPercent})`;
+        }
+      }
       applyRuntimeMetricSeverity(swapDetail, systemPayload?.swap_percent);
 
       const storageUsed = formatBytes(systemPayload?.storage_used_bytes);
