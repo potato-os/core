@@ -158,13 +158,13 @@ import { formatBytes, formatPercent, formatClockMHz, percentFromRatio, applyRunt
           const origSize = Number(zramCompr.orig_data_size);
           const ratio = Number(zramCompr.compression_ratio);
           const limit = Number(zramCompr.mem_limit);
+          const swapTotalNum = Number(systemPayload?.swap_total_bytes);
+          const capacityBytes = (Number.isFinite(limit) && limit > 0) ? limit : (Number.isFinite(swapTotalNum) && swapTotalNum > 0 ? swapTotalNum : 0);
+          const capacityText = capacityBytes > 0 ? ` / ${formatBytes(capacityBytes)}` : "";
           if (origSize > 0 && Number.isFinite(ratio)) {
-            const ratioText = `${ratio.toFixed(1)}x`;
-            const limitText = Number.isFinite(limit) && limit > 0 ? ` / ${formatBytes(limit)} limit` : "";
-            swapDetail.textContent = `${formatBytes(origSize)} compressed (${ratioText})${limitText}`;
+            swapDetail.textContent = `${formatBytes(origSize)} compressed (${ratio.toFixed(1)}x)${capacityText}`;
           } else {
-            const limitText = Number.isFinite(limit) && limit > 0 ? ` / ${formatBytes(limit)} limit` : "";
-            swapDetail.textContent = `idle${limitText}`;
+            swapDetail.textContent = `idle${capacityText}`;
           }
         } else {
           swapDetail.textContent = `${swapUsed} / ${swapTotal} (${swapPercent})`;

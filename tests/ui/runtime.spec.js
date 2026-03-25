@@ -631,7 +631,7 @@ test("zram row shows compression ratio when zram_compression available", async (
   await waitForStatusApplied(page);
   await expect(page.locator("#runtimeDetailSwapValue")).toContainText("compressed");
   await expect(page.locator("#runtimeDetailSwapValue")).toContainText("2.7x");
-  await expect(page.locator("#runtimeDetailSwapValue")).toContainText("limit");
+  await expect(page.locator("#runtimeDetailSwapValue")).toContainText("2.15 GB");
 });
 
 
