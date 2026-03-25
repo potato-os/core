@@ -79,10 +79,13 @@ def test_smoke_script_retries_connection_refused():
 
     assert "--retry-connrefused" in script
     assert "--retry-all-errors" in script
-    assert "Syncing repository to Pi (excluding local heavy artifacts)..." in script
-    assert "--exclude 'models/'" in script
-    assert "--exclude 'node_modules/'" in script
-    assert "--exclude 'output/'" in script
+    assert "Syncing install paths to Pi..." in script
+    assert "--include='/app/'" in script
+    assert "--include='/bin/'" in script
+    assert "--include='/nginx/'" in script
+    assert "--include='/systemd/'" in script
+    assert "--include='/requirements.txt'" in script
+    assert "--exclude='*'" in script
     assert 'PI_SSH_OPTIONS="${PI_SSH_OPTIONS:--o StrictHostKeyChecking=accept-new}"' in script
     assert 'RSYNC_PROGRESS="${RSYNC_PROGRESS:-1}"' in script
     assert "if rsync --help 2>/dev/null | grep -q -- '--info='" in script
