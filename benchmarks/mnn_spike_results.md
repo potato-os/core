@@ -61,10 +61,14 @@ xychart-beta
     title "Decode Speed by Runtime + Model (tok/s, higher is better)"
     x-axis ["MNN 4t HQQ", "MNN 2t HQQ", "IK Q4_K_M", "IK BS 4.74bpw", "IK BS 3.87bpw"]
     y-axis "Tokens per second" 0 --> 7
-    bar [4.1, 4.5, 3.2, 5.0, 5.9]
+    bar [4.1, 0, 0, 0, 0]
+    bar [0, 4.5, 0, 0, 0]
+    bar [0, 0, 3.2, 0, 0]
+    bar [0, 0, 0, 5.0, 0]
+    bar [0, 0, 0, 0, 5.9]
 ```
 
-Purple: MNN — Blue: IK unsloth — Orange/Red: IK ByteShape (BS). bpw = actual bits per weight.
+Purple: MNN — Blue: IK unsloth Q4_K_M — Orange: IK BS 4.74 bpw — Red: IK BS 3.87 bpw
 
 #### Model size vs decode speed
 
@@ -97,7 +101,11 @@ xychart-beta
     title "Prefill Speed by Runtime + Model (tok/s, higher is better)"
     x-axis ["MNN 4t HQQ", "MNN 2t HQQ", "IK Q4_K_M", "IK BS 4.74bpw", "IK BS 3.87bpw"]
     y-axis "Tokens per second" 0 --> 30
-    bar [27.6, 13.8, 11.0, 5.0, 6.0]
+    bar [27.6, 0, 0, 0, 0]
+    bar [0, 13.8, 0, 0, 0]
+    bar [0, 0, 11.0, 0, 0]
+    bar [0, 0, 0, 5.0, 0]
+    bar [0, 0, 0, 0, 6.0]
 ```
 
 MNN dominates prefill (compute-bound) but loses decode (memory-bandwidth-bound).
@@ -216,7 +224,7 @@ Snapdragon numbers from MNN Android app benchmark (MnnLlmChat v0.8.0.1, `nPrompt
 config:
     themeVariables:
         xyChart:
-            plotColorPalette: "#2563eb, #f97316, #2563eb, #f97316"
+            plotColorPalette: "#2563eb, #f97316"
 ---
 xychart-beta
     title "MNN Cross-Device: Pi 5 vs Snapdragon 8 Gen 2"
@@ -249,24 +257,25 @@ Blue: Pi 5 (32-bit bus, ~5 GB/s) — Orange: Snapdragon 8 Gen 2 (64-bit bus, ~17
 
 2. **No ByteShape-style quants exist for Qwen3.5 yet.** The ByteShape GGUF models used here are Qwen3 (not Qwen3.5), so the IK comparison crosses model generations. A same-model comparison would require either a ByteShape Qwen3.5-4B GGUF or an MNN-converted Qwen3-4B — neither was available at time of testing.
 
-## Recommendation: side experiment only
+## Recommendation: pursue as a complementary runtime for prefill-bound tasks
 
-**Do not pursue MNN as a primary runtime for Potato OS on Pi 5.**
+**MNN is worth integrating into Potato OS as a sidecar runtime, specifically for prefill-heavy workloads.**
 
 ### Reasoning
 
-1. **Decode speed is the user-facing metric**, and MNN does not win. Even size-matched, IK llama with ByteShape Qwen3-4B Q5_K_S (4.74 bpw, 2.3GB) achieves 5.0 tok/s — 11% faster than MNN's best decode of 4.5 tok/s at a similar model size (2.5GB). The smaller ByteShape Q4_K_S (3.87 bpw, 1.9GB) reaches 5.9 tok/s — 31% faster. The GGUF ecosystem's flexibility to choose more efficient quants is a bigger lever than runtime optimizations.
+1. **MNN's prefill advantage is real and large.** At 27.6 tok/s vs ~5-11 tok/s for IK llama on size-matched models, MNN delivers 2.5-5x faster prompt processing. This matters for summarization, RAG context ingestion, long-document processing, code analysis, and any task where the input is much larger than the output.
 
-2. **The Pi 5's 32-bit memory bus is the fundamental bottleneck.** No runtime optimization can overcome it. MNN's claimed 8.6x speedup comes from Snapdragon hardware with 3x the memory bandwidth and i8mm instructions. On Pi 5, the advantage evaporates.
+2. **Decode is not MNN's strength on Pi 5**, but that's OK. For interactive chat (where decode dominates the experience), IK llama with ByteShape Q4_K_S (3.87 bpw) at 5.9 tok/s is the better choice. The two runtimes have complementary strengths — use MNN for prefill-heavy tasks, IK for decode-heavy chat.
 
-3. **MNN's prefill is genuinely impressive** (27.6 vs ~11 tok/s for IK), but prefill only affects time-to-first-token for the initial prompt. For multi-turn conversations, decode throughput dominates the experience.
+3. **The build and runtime experience is solid.** MNN compiled cleanly on Pi 5 in 6.5 minutes, the pre-converted model worked out of the box, and the `llm_demo` benchmark mode is well-designed. This is a production-grade framework, not a research prototype.
 
-4. **Integration cost is high.** MNN has no HTTP server — Potato OS would need a custom API wrapper. No prompt caching across requests. No vision support without additional build complexity. The entire Potato architecture routes through llama-server's OpenAI-compatible API.
+4. **Integration cost is real but manageable.** MNN has no HTTP server — Potato OS would need a lightweight wrapper. No prompt caching across requests. But for batch/prefill tasks, these gaps matter less than for interactive chat. A sidecar approach (MNN for specific tasks, IK for general chat) avoids rearchitecting the existing llama-server integration.
 
-5. **MNN is worth revisiting** if/when: (a) Pi hardware gains i8mm support (ARMv8.6+), (b) Pi gains a wider memory bus, or (c) MNN adds an HTTP server mode. The framework itself is solid and the build experience was smooth.
+5. **The Pi 5's 32-bit memory bus is the decode bottleneck**, not MNN. No runtime can fix this for decode. But prefill is compute-bound and MNN's fused transformer ops + ARM82 kernels extract more from the available compute than IK does.
 
 ### Action items
 
-- Keep this spike's research and benchmark data for reference
-- No follow-up MNN integration work
-- Consider ByteShape Qwen3-4B-Instruct-2507 Q4_K_S (3.87 bpw) as a potential default model — 5.9 tok/s decode in 1.9GB is compelling
+- Follow up with an MNN sidecar integration ticket — lightweight HTTP wrapper around `llm_demo` for prefill-heavy API endpoints
+- Keep IK llama as the primary runtime for interactive chat
+- Consider ByteShape Qwen3-4B-Instruct-2507 Q4_K_S (3.87 bpw) as a potential default model for IK — 5.9 tok/s decode in 1.9GB is compelling
+- Investigate MNN's `mls_server` (found in the repo at `transformers/llm/engine/app/mls_server.cpp`) as a potential HTTP server path
