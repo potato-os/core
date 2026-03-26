@@ -298,11 +298,11 @@ Why this layering works:
 
 ---
 
-## Patterns to Steal
+## Research Influences
 
-Proven patterns from existing systems that directly apply to this architecture.
+Proven patterns from existing systems that directly inform this architecture.
 
-| Pattern | Source | What to steal |
+| Pattern | Source | How it applies |
 |---------|--------|---------------|
 | LLM syscall abstraction + scheduler | AIOS (COLM 2025) | Apps don't talk to the model directly — inference requests are dispatched and scheduled by the platform |
 | Sidecar supervisor with behavioral memory | VIGIL (arxiv:2512.07094) | Mother watches system health, builds a persistent model with decay, emits targeted fixes — not just restart |
