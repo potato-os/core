@@ -12,7 +12,7 @@ Refs #24
 | MNN version | 3.4.1 (commit 6b1db4c) |
 | IK runtime | ik_llama (installed at /opt/potato/llama/) |
 | MNN model | taobao-mnn/Qwen3.5-4B-MNN (4-bit HQQ, quant_block=64, embed/act=fp16) |
-| IK model 1 | Qwen3.5-4B-Q4_K_M.gguf (2.6GB) — standard llama.cpp K-quant |
+| IK model 1 | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) Q4_K_M (2.6GB) — standard llama.cpp K-quant |
 | IK model 2 | ByteShape Qwen3-4B-Instruct-2507-Q5_K_S-4.74bpw.gguf (2.3GB) |
 | IK model 3 | ByteShape Qwen3-4B-Instruct-2507-Q4_K_S-3.87bpw.gguf (1.9GB) |
 
@@ -130,6 +130,46 @@ xychart-beta
 ```
 
 Blue: prefill (scales with threads) — Red: decode (peaks at 2 threads, bus-contention-limited)
+
+### IK llama thread count sweep
+
+#### ByteShape Qwen3-4B Q4_K_S (3.87 bpw, 1.9 GB)
+
+| Threads | Prefill tok/s | Decode tok/s |
+|---------|--------------|-------------|
+| 4 | ~5.4 | **6.0** |
+| 3 | ~5.1 | 5.2 |
+| 2 | ~3.8 | 3.8 |
+| 1 | ~1.9 | 1.9 |
+
+#### ByteShape Qwen3-4B Q5_K_S (4.74 bpw, 2.3 GB)
+
+| Threads | Prefill tok/s | Decode tok/s |
+|---------|--------------|-------------|
+| 4 | ~4.8 | 5.0 |
+| 3 | ~5.0 | **5.2** |
+| 2 | ~4.1 | 4.1 |
+| 1 | ~2.1 | 2.1 |
+
+IK llama shows the opposite pattern from MNN — **more threads = faster decode**. IK's GEMV parallelizes efficiently across threads without hitting the bus contention that hurts MNN. Best decode at 4 threads for the smaller model, 3 threads for the larger.
+
+```mermaid
+---
+config:
+    themeVariables:
+        xyChart:
+            plotColorPalette: "#2563eb, #dc2626, #16a34a"
+---
+xychart-beta
+    title "Decode tok/s vs Thread Count — MNN vs IK"
+    x-axis "Threads" [1, 2, 3, 4]
+    y-axis "Decode tok/s" 0 --> 7
+    line [4.4, 4.5, 4.3, 4.1]
+    line [1.9, 3.8, 5.2, 6.0]
+    line [2.1, 4.1, 5.2, 5.0]
+```
+
+Blue: MNN Qwen3.5-4B HQQ 4bit — Red: IK BS Q4_K_S 3.87bpw — Green: IK BS Q5_K_S 4.74bpw. MNN's decode is flat across threads (bus-contention-limited). IK scales linearly — its GEMV implementation handles multi-threading better.
 
 ### MNN config sweep (2 threads)
 
