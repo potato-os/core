@@ -118,17 +118,8 @@ xychart-beta
 ### Speed degradation is linear, not cliff-based
 Generation speed follows a smooth, nearly linear decline from empty to full context. There is no sudden performance cliff. At 50% fill, speed is already ~70% degraded. At 99% fill, speed is ~83% degraded. This pattern is consistent across both hardware configurations.
 
-### The 8 GB Pi survives 48K on zram alone
-The 8 GB Pi successfully completed the entire 48K context sweep without OOM or crash. Zram compression peaked at ~595 MB compressed (holding ~2 GB of original data), giving an effective 3.4:1 compression ratio. Swap usage actually *decreased* over the run (2,047 MB → 666 MB) as the OS settled memory pages into the KV cache working set.
-
 ### 16 GB Pi has massive headroom
-The 16 GB Pi never touched swap. Available memory stayed above 12.8 GB throughout, meaning it could theoretically handle even larger context windows. RSS grew only 94 MB over 70 turns (12,254 → 12,348 MB).
-
-### Temperature differential
-The 8 GB Pi runs 12–15°C hotter (72–76°C vs 58–63°C), likely due to continuous zram compression/decompression overhead. Both stayed well below thermal throttle (85°C).
-
-### Cold-start penalty on 8 GB
-Turn 1 on the 8 GB Pi shows an 18.9s TTFT (vs 3.4s on 16 GB) due to initial mmap page faults pulling model weights from SSD into RAM. After turn 1, TTFT converges to similar ranges on both platforms.
+The 16 GB Pi never touched swap. Available memory stayed above 12.8 GB throughout. RSS grew only 94 MB over 70 turns (12,254 → 12,348 MB).
 
 ### Context shift behavior
 Both Pis hit context shift at exactly the same point (turn 71, n_past 48,846 → 25,346). The shift turn took significantly longer (712s on 16 GB, 773s on 8 GB) as the server reprocessed the truncated context.
@@ -136,7 +127,3 @@ Both Pis hit context shift at exactly the same point (turn 71, n_past 48,846 →
 ## Raw Data
 
 Full turn-by-turn data: [`context_window_48k_raw.txt`](context_window_48k_raw.txt)
-
-JSONL source files:
-- `output/benchmarks/ctx_window_48k_pi5-16gb.jsonl`
-- `output/benchmarks/ctx_window_48k_pi5-8gb-ssd.jsonl`
