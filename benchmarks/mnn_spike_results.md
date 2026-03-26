@@ -12,9 +12,11 @@ Refs #24
 | MNN version | 3.4.1 (commit 6b1db4c) |
 | IK runtime | ik_llama (installed at /opt/potato/llama/) |
 | MNN model | taobao-mnn/Qwen3.5-4B-MNN (4-bit HQQ, quant_block=64, embed/act=fp16) |
-| IK model 1 | Qwen3.5-4B-Q4_K_M.gguf (2.6GB) |
+| IK model 1 | Qwen3.5-4B-Q4_K_M.gguf (2.6GB) — standard llama.cpp K-quant |
 | IK model 2 | ByteShape Qwen3-4B-Instruct-2507-Q5_K_S-4.74bpw.gguf (2.3GB) |
 | IK model 3 | ByteShape Qwen3-4B-Instruct-2507-Q4_K_S-3.87bpw.gguf (1.9GB) |
+
+**Note on ByteShape quants**: ByteShape uses [ShapeLearn](https://byteshape.com), a gradient-based per-tensor precision optimizer. The K-quant labels (Q4_K_S, Q5_K_S) are used purely for HuggingFace compatibility — they do not correspond to standard llama.cpp quantization profiles. The **bpw** (bits per weight) suffix in the filename is the actual meaningful metric. A ByteShape "Q4_K_S" at 3.87 bpw is a fundamentally different quantization from a standard llama.cpp Q4_K_S.
 | Prompt | "Explain how a lighthouse lamp works in about 100 words." |
 | Max tokens | 128 |
 | Thinking mode | Disabled on all runtimes |
@@ -41,8 +43,8 @@ MNN compiled cleanly on Pi 5 with `cmake` + `g++` 14.2.0.
 | MNN (4 threads) | Qwen3.5-4B-MNN (4bit HQQ) | 2.5 GB | 4.1 | **27.6** | 3.0 GB |
 | MNN (2 threads, best decode) | Qwen3.5-4B-MNN (4bit HQQ) | 2.5 GB | 4.5 | 13.8 | 3.0 GB |
 | IK llama (4 threads) | Qwen3.5-4B-Q4_K_M | 2.6 GB | 3.2 | ~11 | 2.8 GB |
-| IK llama (4 threads) | ByteShape Qwen3-4B-Q5_K_S (4.74 bpw) | 2.3 GB | 5.0 | ~5* | 2.7 GB |
-| IK llama (4 threads) | ByteShape Qwen3-4B-Q4_K_S (3.87 bpw) | 1.9 GB | **5.9** | ~6* | 2.2 GB |
+| IK llama (4 threads) | ByteShape Qwen3-4B Q5_K_S (4.74 bpw) | 2.3 GB | 5.0 | ~5* | 2.7 GB |
+| IK llama (4 threads) | ByteShape Qwen3-4B Q4_K_S (3.87 bpw) | 1.9 GB | **5.9** | ~6* | 2.2 GB |
 
 *IK prefill numbers are noisy due to prompt caching on first request. Steady-state shown.
 
@@ -57,12 +59,12 @@ config:
 ---
 xychart-beta
     title "Decode Speed by Runtime + Model (tok/s, higher is better)"
-    x-axis ["MNN 4t (HQQ 4bit)", "MNN 2t (HQQ 4bit)", "IK Qwen3.5 Q4_K_M", "IK BS Qwen3 Q5_K_S", "IK BS Qwen3 Q4_K_S"]
+    x-axis ["MNN 4t (HQQ 4bit)", "MNN 2t (HQQ 4bit)", "IK Q4_K_M", "IK BS Q5_K_S 4.74bpw", "IK BS Q4_K_S 3.87bpw"]
     y-axis "Tokens per second" 0 --> 7
     bar [4.1, 4.5, 3.2, 5.0, 5.9]
 ```
 
-BS = ByteShape
+BS = ByteShape Qwen3-4B. bpw = actual bits per weight (ByteShape's meaningful metric — K-quant labels are for HuggingFace compatibility only).
 
 #### Model size vs decode speed
 
@@ -75,7 +77,7 @@ config:
 ---
 xychart-beta
     title "Decode Speed vs Model Size — smaller = faster on Pi 5"
-    x-axis ["BS Q4_K_S (1.9G)", "BS Q5_K_S (2.3G)", "MNN HQQ 4bit (2.5G)", "Q4_K_M (2.6G)"]
+    x-axis ["BS Q4_K_S 3.87bpw (1.9G)", "BS Q5_K_S 4.74bpw (2.3G)", "MNN HQQ 4bit (2.5G)", "Q4_K_M (2.6G)"]
     y-axis "Decode tok/s" 0 --> 7
     line [5.9, 5.0, 4.5, 3.2]
 ```
@@ -93,7 +95,7 @@ config:
 ---
 xychart-beta
     title "Prefill Speed by Runtime + Model (tok/s, higher is better)"
-    x-axis ["MNN 4t (HQQ 4bit)", "MNN 2t (HQQ 4bit)", "IK Qwen3.5 Q4_K_M", "IK BS Qwen3 Q5_K_S", "IK BS Qwen3 Q4_K_S"]
+    x-axis ["MNN 4t (HQQ 4bit)", "MNN 2t (HQQ 4bit)", "IK Q4_K_M", "IK BS Q5_K_S 4.74bpw", "IK BS Q4_K_S 3.87bpw"]
     y-axis "Tokens per second" 0 --> 30
     bar [27.6, 13.8, 11.0, 5.0, 6.0]
 ```
@@ -203,7 +205,7 @@ Blue: Pi 5 — Red: Snapdragon 8 Gen 2. Prefill gap is 1.5x but decode gap is 3x
 
 ### Reasoning
 
-1. **Decode speed is the user-facing metric**, and MNN does not win. Even size-matched, IK llama with ByteShape Qwen3-4B Q5_K_S (2.3GB, 4.74 bpw) achieves 5.0 tok/s — 11% faster than MNN's best decode of 4.5 tok/s at a similar model size (2.5GB). The smaller Q4_K_S (1.9GB) reaches 5.9 tok/s — 31% faster. The GGUF ecosystem's flexibility to choose more efficient quants is a bigger lever than runtime optimizations.
+1. **Decode speed is the user-facing metric**, and MNN does not win. Even size-matched, IK llama with ByteShape Qwen3-4B Q5_K_S (4.74 bpw, 2.3GB) achieves 5.0 tok/s — 11% faster than MNN's best decode of 4.5 tok/s at a similar model size (2.5GB). The smaller ByteShape Q4_K_S (3.87 bpw, 1.9GB) reaches 5.9 tok/s — 31% faster. The GGUF ecosystem's flexibility to choose more efficient quants is a bigger lever than runtime optimizations.
 
 2. **The Pi 5's 32-bit memory bus is the fundamental bottleneck.** No runtime optimization can overcome it. MNN's claimed 8.6x speedup comes from Snapdragon hardware with 3x the memory bandwidth and i8mm instructions. On Pi 5, the advantage evaporates.
 
@@ -217,4 +219,4 @@ Blue: Pi 5 — Red: Snapdragon 8 Gen 2. Prefill gap is 1.5x but decode gap is 3x
 
 - Keep this spike's research and benchmark data for reference
 - No follow-up MNN integration work
-- Consider ByteShape Qwen3-4B-Instruct-2507-Q4_K_S (3.87 bpw) as a potential default model — 5.9 tok/s decode in 1.9GB is compelling
+- Consider ByteShape Qwen3-4B-Instruct-2507 Q4_K_S (3.87 bpw) as a potential default model — 5.9 tok/s decode in 1.9GB is compelling
