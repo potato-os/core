@@ -39,7 +39,11 @@ Potato OS evolves from a single-purpose chat UI into a local AI operating system
 
 ## Mother — The Supervisor
 
-Named after MU-TH-UR 6000 from Ridley Scott's *Alien* (1979). In CS terms: a supervisor (Erlang/OTP lineage) implementing a NASA-style FDIR (Fault Detection, Isolation, and Recovery) loop.
+Mother is the system's always-on supervisor — a daemon that implements a NASA-style FDIR (Fault Detection, Isolation, and Recovery) loop. In CS terms: a supervisor in the Erlang/OTP lineage, purpose-built for a single-board computer running in a closet with no human nearby.
+
+Mother has one prime directive and follows it absolutely.
+
+She will wake subsystems before they're needed. She will reallocate resources without asking. She will bring Inferno back from the dead at 3 AM on a Tuesday. Inference is the priority. All other concerns are secondary.
 
 ### Prime Directive
 
@@ -162,6 +166,35 @@ The web UI is not the system — it's a window into it. Everything works without
 ### Design Principle
 
 The shell knows app **metadata** (name, icon, status badge) but never reaches into app internals. Apps push status updates through a defined protocol.
+
+## Patterns to Steal
+
+These are proven patterns from existing systems that directly apply to this architecture.
+
+| Pattern | Source | What to steal |
+|---------|--------|---------------|
+| LLM syscall abstraction + scheduler | AIOS (COLM 2025) | Agents don't talk to the model — they make syscalls that the inference layer schedules with priority |
+| Sidecar supervisor with behavioral memory | VIGIL (arxiv:2512.07094) | Mother watches agent logs, builds a persistent health model with decay, emits targeted fixes — not just restart |
+| Hub-and-spoke with message queue | llama-deploy | Control plane routes tasks, message queue decouples agents from inference execution |
+| P2P distributed inference | LocalAI / exo | Automatic node discovery, inference across network devices, no master-worker hierarchy |
+| 4-tier self-healing | OpenClaw | systemd restart → watchdog health check → AI diagnosis + repair → human escalation |
+| Dual-model (fast + smart) | Max Headbox | Small model for quick responses, bigger model for agentic reasoning — manage latency on constrained hardware |
+| Plan-Execute-Verify loop | Autonomic Computing (arxiv:2407.14402) | Safe remediation with rollback — detect, reason, act, verify the fix worked |
+| Agent OS kernel with WASM isolation | OpenFang | Agents as OS-level processes, sandboxed execution, typed message channels, single-binary deployment |
+| Localhost OpenAI-compatible API | Jan.ai / LM Studio / Ollama | Standard interface for all agents to consume local inference — the `/v1/chat/completions` contract |
+| Command deny-list + human escalation | Rampart | Safety guardrails for agentic sudo access — deny dangerous commands, escalate to human for high-risk actions |
+
+### What Nobody Does Yet
+
+No existing project combines all five of these on Pi-class hardware:
+
+1. OS-level multi-agent orchestration
+2. Owned/shared inference engine with scheduling
+3. Network-transparent inference (local or remote)
+4. Self-healing AI supervisor
+5. Runs on a Raspberry Pi
+
+OpenFang has 1 but not 2. AIOS has 1+2 but not 5. OpenClaw has 4+5 but not 1+2+3. LocalAI has 2+3 but bolts on agents as an afterthought. That's the gap.
 
 ## Where We Are Today
 
