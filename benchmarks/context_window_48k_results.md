@@ -41,7 +41,7 @@ Both hardware configurations filled the 48K context window to 99.4% (48,846/49,1
 | Speed degradation | -83% | -82% |
 | Peak swap | 0 MB | 2,047 MB |
 | Temperature range | 57–63°C | 71–76°C |
-| Stability | Zero swap, rock solid | Survived on zram swap |
+| Swap usage | None | 2 GB zram (peaked at 2,047 MB) |
 
 ## Generation Speed vs Context Fill
 
