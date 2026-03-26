@@ -224,17 +224,19 @@ Snapdragon numbers from MNN Android app benchmark (MnnLlmChat v0.8.0.1, `nPrompt
 config:
     themeVariables:
         xyChart:
-            plotColorPalette: "#2563eb, #f97316"
+            plotColorPalette: "#2563eb, #93c5fd, #f97316, #fdba74"
 ---
 xychart-beta
     title "MNN Cross-Device: Pi 5 vs Snapdragon 8 Gen 2"
-    x-axis ["Prefill", "Decode"]
-    y-axis "Tokens per second" 0 --> 45
-    bar [27.6, 4.1]
-    bar [42.5, 12.2]
+    x-axis ["Pi5 Prefill", "Pi5 Decode", "SD8G2 Prefill", "SD8G2 Decode"]
+    y-axis "Tokens per second" 0.5 --> 45
+    bar [27.6, 0.01, 0.01, 0.01]
+    bar [0.01, 4.1, 0.01, 0.01]
+    bar [0.01, 0.01, 42.5, 0.01]
+    bar [0.01, 0.01, 0.01, 12.2]
 ```
 
-Each group has two bars — Blue: Pi 5 (32-bit LPDDR4X, ~5 GB/s) — Orange: Snapdragon 8 Gen 2 (64-bit LPDDR5X, ~17 GB/s). Prefill gap is modest (1.5x — compute-bound, both CPUs are capable). Decode gap is 3x — directly tracks the ~3x effective memory bandwidth difference, since decode streams the entire model per token.
+Blue: Pi 5 (32-bit LPDDR4X, ~5 GB/s) — Orange: Snapdragon 8 Gen 2 (64-bit LPDDR5X, ~17 GB/s). Prefill gap is modest (1.5x — compute-bound, both CPUs are capable). Decode gap is 3x — directly tracks the ~3x effective memory bandwidth difference, since decode streams the entire model per token.
 
 ## Qualitative assessment
 
