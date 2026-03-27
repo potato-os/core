@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import Request
 
 try:
-    from app.runtime_state import RuntimeConfig
-    from app.repositories.chat_repository import ChatRepositoryManager
+    from core.runtime_state import RuntimeConfig
+    from core.repositories.chat_repository import ChatRepositoryManager
 except ModuleNotFoundError:
     from runtime_state import RuntimeConfig  # type: ignore[no-redef]
     from repositories.chat_repository import ChatRepositoryManager  # type: ignore[no-redef]

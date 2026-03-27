@@ -107,7 +107,7 @@ class RuntimeConfig:
         if model_path_env:
             model_path = Path(model_path_env)
         else:
-            from app.model_state import default_model_for_device
+            from core.model_state import default_model_for_device
             device_class = classify_runtime_device(pi_model_name=_read_pi_device_model_name())
             default_filename, _ = default_model_for_device(device_class)
             model_path = base_dir / "models" / default_filename

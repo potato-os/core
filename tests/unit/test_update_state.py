@@ -15,8 +15,8 @@ import httpx
 import pytest
 import respx
 
-from app.__version__ import __version__ as APP_VERSION
-from app.update_state import (
+from core.__version__ import __version__ as APP_VERSION
+from core.update_state import (
     EXECUTION_ACTIVE_STATES,
     GITHUB_RELEASES_LATEST_URL,
     UPDATE_APPLY_DIRS,
@@ -250,7 +250,7 @@ def test_build_update_status_recomputes_availability_from_live_version(runtime, 
     }
     runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
     # Simulate the app now running 0.4.0 (upgraded)
-    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+    monkeypatch.setattr("core.update_state.__version__", "0.4.0")
     result = build_update_status(runtime)
     assert result["available"] is False
     assert result["current_version"] == "0.4.0"
@@ -267,7 +267,7 @@ def test_build_update_status_uses_live_version_not_cached(runtime, monkeypatch):
     runtime.update_state_path.write_text(json.dumps(state), encoding="utf-8")
     # State was written by old build that thought newer wasn't newer (bug).
     # Live version is still old — should recompute as available.
-    monkeypatch.setattr("app.update_state.__version__", "0.3.6-pre-alpha")
+    monkeypatch.setattr("core.update_state.__version__", "0.3.6-pre-alpha")
     result = build_update_status(runtime)
     assert result["available"] is True
     assert result["current_version"] == "0.3.6-pre-alpha"
@@ -337,7 +337,7 @@ async def test_check_for_update_writes_state_on_success(runtime):
 
 @pytest.mark.anyio
 async def test_check_for_update_not_available_when_same_version(runtime, monkeypatch):
-    monkeypatch.setattr("app.update_state.__version__", TEST_NEWER_VERSION)
+    monkeypatch.setattr("core.update_state.__version__", TEST_NEWER_VERSION)
     with respx.mock(assert_all_called=True) as router:
         router.get(GITHUB_RELEASES_LATEST_URL).mock(
             return_value=httpx.Response(
@@ -741,7 +741,7 @@ def test_detect_post_update_state_noop_when_no_state(runtime):
 
 
 def test_detect_post_update_state_clears_restart_pending_on_success(runtime, monkeypatch):
-    monkeypatch.setattr("app.update_state.__version__", "0.5.0")
+    monkeypatch.setattr("core.update_state.__version__", "0.5.0")
     state = {
         "available": True,
         "latest_version": "0.5.0",
@@ -759,7 +759,7 @@ def test_detect_post_update_state_clears_restart_pending_on_success(runtime, mon
 
 
 def test_detect_post_update_state_fails_on_version_mismatch(runtime, monkeypatch):
-    monkeypatch.setattr("app.update_state.__version__", "0.4.0")
+    monkeypatch.setattr("core.update_state.__version__", "0.4.0")
     state = {
         "available": True,
         "latest_version": "0.5.0",
@@ -816,7 +816,7 @@ def _make_tarball_bytes(contents: dict[str, str]) -> bytes:
 
 @pytest.mark.anyio
 async def test_download_release_tarball_writes_file(runtime):
-    tarball_data = _make_tarball_bytes({"app/main.py": "print('hello')"})
+    tarball_data = _make_tarball_bytes({"core/main.py": "print('hello')"})
     dest = staging_dir(runtime) / "update.tar.gz"
 
     with respx.mock(assert_all_called=True) as router:
@@ -836,7 +836,7 @@ async def test_download_release_tarball_writes_file(runtime):
 
 @pytest.mark.anyio
 async def test_download_release_tarball_reports_progress(runtime):
-    tarball_data = _make_tarball_bytes({"app/main.py": "x" * 1000})
+    tarball_data = _make_tarball_bytes({"core/main.py": "x" * 1000})
     dest = staging_dir(runtime) / "update.tar.gz"
     progress_values: list[int] = []
 
@@ -879,7 +879,7 @@ async def test_download_release_tarball_raises_on_http_error(runtime):
 @pytest.mark.anyio
 async def test_extract_tarball_creates_expected_dirs(tmp_path):
     tarball_data = _make_tarball_bytes({
-        "potato-os-0.5.0/app/main.py": "print('hello')",
+        "potato-os-0.5.0/core/main.py": "print('hello')",
         "potato-os-0.5.0/bin/run.sh": "#!/bin/bash",
     })
     tarball_path = tmp_path / "update.tar.gz"
@@ -888,7 +888,7 @@ async def test_extract_tarball_creates_expected_dirs(tmp_path):
     dest = tmp_path / "extracted"
     await extract_tarball(tarball_path, dest)
 
-    assert (dest / "potato-os-0.5.0" / "app" / "main.py").exists()
+    assert (dest / "potato-os-0.5.0" / "core" / "main.py").exists()
     assert (dest / "potato-os-0.5.0" / "bin" / "run.sh").exists()
 
 
@@ -909,26 +909,26 @@ async def test_extract_tarball_raises_on_corrupt(tmp_path):
 @pytest.mark.anyio
 async def test_apply_staged_update_copies_app_and_bin(runtime):
     staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
-    (staged / "app").mkdir(parents=True)
-    (staged / "app" / "main.py").write_text("# new version")
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# new version")
     (staged / "bin").mkdir(parents=True)
     (staged / "bin" / "run.sh").write_text("#!/bin/bash\necho new")
 
     # Pre-create target dirs with old content
-    (runtime.base_dir / "app").mkdir(parents=True, exist_ok=True)
-    (runtime.base_dir / "app" / "main.py").write_text("# old version")
+    (runtime.base_dir / "core").mkdir(parents=True, exist_ok=True)
+    (runtime.base_dir / "core" / "main.py").write_text("# old version")
 
     await apply_staged_update(runtime, staged)
 
-    assert (runtime.base_dir / "app" / "main.py").read_text() == "# new version"
+    assert (runtime.base_dir / "core" / "main.py").read_text() == "# new version"
     assert (runtime.base_dir / "bin" / "run.sh").read_text() == "#!/bin/bash\necho new"
 
 
 @pytest.mark.anyio
 async def test_apply_staged_update_sets_executable_bits(runtime):
     staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
-    (staged / "app").mkdir(parents=True)
-    (staged / "app" / "main.py").write_text("# app")
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# app")
     (staged / "bin").mkdir(parents=True)
     (staged / "bin" / "start.sh").write_text("#!/bin/bash")
 
@@ -941,8 +941,8 @@ async def test_apply_staged_update_sets_executable_bits(runtime):
 @pytest.mark.anyio
 async def test_apply_staged_update_skips_state_dir(runtime):
     staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
-    (staged / "app").mkdir(parents=True)
-    (staged / "app" / "main.py").write_text("# new")
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# new")
 
     # Pre-create a state file that should not be touched
     state_dir = runtime.base_dir / "state"
@@ -958,12 +958,12 @@ async def test_apply_staged_update_skips_state_dir(runtime):
 async def test_apply_staged_update_handles_single_subdir_layout(runtime):
     staged = staging_dir(runtime) / "extracted"
     inner = staged / "potato-os-0.5.0"
-    (inner / "app").mkdir(parents=True)
-    (inner / "app" / "main.py").write_text("# new")
+    (inner / "core").mkdir(parents=True)
+    (inner / "core" / "main.py").write_text("# new")
 
     await apply_staged_update(runtime, staged)
 
-    assert (runtime.base_dir / "app" / "main.py").read_text() == "# new"
+    assert (runtime.base_dir / "core" / "main.py").read_text() == "# new"
 
 
 @pytest.mark.anyio
@@ -972,20 +972,20 @@ async def test_apply_staged_update_raises_on_missing_app_dir(runtime):
     staged.mkdir(parents=True)
     (staged / "random.txt").write_text("no app dir here")
 
-    with pytest.raises(FileNotFoundError, match="app/"):
+    with pytest.raises(FileNotFoundError, match="core/"):
         await apply_staged_update(runtime, staged)
 
 
 @pytest.mark.anyio
 async def test_apply_staged_update_copies_requirements_txt(runtime):
     staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
-    (staged / "app").mkdir(parents=True)
-    (staged / "app" / "main.py").write_text("# new")
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# new")
     (staged / "requirements.txt").write_text("httpx>=0.27\nfastapi>=0.111\n")
 
     await apply_staged_update(runtime, staged)
 
-    req_dst = runtime.base_dir / "app" / "requirements.txt"
+    req_dst = runtime.base_dir / "core" / "requirements.txt"
     assert req_dst.exists()
     assert "httpx>=0.27" in req_dst.read_text()
 
@@ -994,16 +994,16 @@ async def test_apply_staged_update_copies_requirements_txt(runtime):
 async def test_apply_staged_update_restores_on_pip_failure(runtime, monkeypatch):
     """If pip install fails after file copy, the old tree is restored."""
     # Set up old content
-    (runtime.base_dir / "app").mkdir(parents=True, exist_ok=True)
-    (runtime.base_dir / "app" / "main.py").write_text("# old version")
-    (runtime.base_dir / "app" / "requirements.txt").write_text("httpx>=0.25\n")
+    (runtime.base_dir / "core").mkdir(parents=True, exist_ok=True)
+    (runtime.base_dir / "core" / "main.py").write_text("# old version")
+    (runtime.base_dir / "core" / "requirements.txt").write_text("httpx>=0.25\n")
     (runtime.base_dir / "bin").mkdir(parents=True, exist_ok=True)
     (runtime.base_dir / "bin" / "run.sh").write_text("#!/bin/bash\necho old")
 
     # Set up staged new content
     staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
-    (staged / "app").mkdir(parents=True)
-    (staged / "app" / "main.py").write_text("# new version")
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# new version")
     (staged / "bin").mkdir(parents=True)
     (staged / "bin" / "run.sh").write_text("#!/bin/bash\necho new")
     (staged / "requirements.txt").write_text("httpx>=0.27\nnew-dep>=1.0\n")
@@ -1019,20 +1019,20 @@ async def test_apply_staged_update_restores_on_pip_failure(runtime, monkeypatch)
         await apply_staged_update(runtime, staged)
 
     # Old content should be restored
-    assert (runtime.base_dir / "app" / "main.py").read_text() == "# old version"
+    assert (runtime.base_dir / "core" / "main.py").read_text() == "# old version"
     assert (runtime.base_dir / "bin" / "run.sh").read_text() == "#!/bin/bash\necho old"
-    assert "httpx>=0.25" in (runtime.base_dir / "app" / "requirements.txt").read_text()
+    assert "httpx>=0.25" in (runtime.base_dir / "core" / "requirements.txt").read_text()
 
 
 @pytest.mark.anyio
 async def test_apply_staged_update_restores_on_copy_failure(runtime, monkeypatch):
     """If file copy itself fails, the old tree is restored."""
-    (runtime.base_dir / "app").mkdir(parents=True, exist_ok=True)
-    (runtime.base_dir / "app" / "main.py").write_text("# old version")
+    (runtime.base_dir / "core").mkdir(parents=True, exist_ok=True)
+    (runtime.base_dir / "core" / "main.py").write_text("# old version")
 
     staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
-    (staged / "app").mkdir(parents=True)
-    (staged / "app" / "main.py").write_text("# new version")
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# new version")
 
     # Make copytree fail on the live overwrite (dirs_exist_ok=True),
     # but allow backup copies (no dirs_exist_ok) to succeed.
@@ -1043,12 +1043,12 @@ async def test_apply_staged_update_restores_on_copy_failure(runtime, monkeypatch
             raise OSError("Disk full")
         return original_copytree(src, dst, **kwargs)
 
-    monkeypatch.setattr("app.update_state.shutil.copytree", _failing_copytree)
+    monkeypatch.setattr("core.update_state.shutil.copytree", _failing_copytree)
 
     with pytest.raises(OSError, match="Disk full"):
         await apply_staged_update(runtime, staged)
 
-    assert (runtime.base_dir / "app" / "main.py").read_text() == "# old version"
+    assert (runtime.base_dir / "core" / "main.py").read_text() == "# old version"
 
 
 # ---------------------------------------------------------------------------
@@ -1063,13 +1063,13 @@ async def test_apply_staged_update_repairs_ownership_drift(runtime, monkeypatch)
 
     # Set up staged content
     staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
-    (staged / "app").mkdir(parents=True)
-    (staged / "app" / "main.py").write_text("# new version")
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# new version")
     (staged / "bin").mkdir(parents=True)
     (staged / "bin" / "run.sh").write_text("#!/bin/bash\necho new")
 
     # Pre-create target dirs with non-writable file (simulates root ownership)
-    app_dir = runtime.base_dir / "app"
+    app_dir = runtime.base_dir / "core"
     app_dir.mkdir(parents=True, exist_ok=True)
     old_file = app_dir / "main.py"
     old_file.write_text("# old version")
@@ -1093,7 +1093,7 @@ async def test_apply_staged_update_repairs_ownership_drift(runtime, monkeypatch)
 
     await apply_staged_update(runtime, staged)
 
-    assert (runtime.base_dir / "app" / "main.py").read_text() == "# new version"
+    assert (runtime.base_dir / "core" / "main.py").read_text() == "# new version"
     assert len(chown_calls) > 0
     assert "chown" in chown_calls[0]
 
@@ -1104,11 +1104,11 @@ async def test_apply_staged_update_fails_early_on_unwritable_target(runtime, mon
     import subprocess as subprocess_mod
 
     staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
-    (staged / "app").mkdir(parents=True)
-    (staged / "app" / "main.py").write_text("# new version")
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# new version")
 
     # Pre-create target with non-writable file
-    app_dir = runtime.base_dir / "app"
+    app_dir = runtime.base_dir / "core"
     app_dir.mkdir(parents=True, exist_ok=True)
     old_file = app_dir / "main.py"
     old_file.write_text("# old version")
@@ -1140,12 +1140,12 @@ async def test_apply_staged_update_skips_repair_when_writable(runtime, monkeypat
     import subprocess as subprocess_mod
 
     staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
-    (staged / "app").mkdir(parents=True)
-    (staged / "app" / "main.py").write_text("# new version")
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# new version")
 
     # Pre-create writable target (normal case)
-    (runtime.base_dir / "app").mkdir(parents=True, exist_ok=True)
-    (runtime.base_dir / "app" / "main.py").write_text("# old version")
+    (runtime.base_dir / "core").mkdir(parents=True, exist_ok=True)
+    (runtime.base_dir / "core" / "main.py").write_text("# old version")
 
     chown_calls: list = []
     original_run = subprocess_mod.run
@@ -1160,7 +1160,7 @@ async def test_apply_staged_update_skips_repair_when_writable(runtime, monkeypat
     await apply_staged_update(runtime, staged)
 
     assert chown_calls == [], "sudo chown should not be called when target is writable"
-    assert (runtime.base_dir / "app" / "main.py").read_text() == "# new version"
+    assert (runtime.base_dir / "core" / "main.py").read_text() == "# new version"
 
 
 # ---------------------------------------------------------------------------
@@ -1210,20 +1210,20 @@ async def test_signal_service_restart_raises_on_failure(runtime, monkeypatch):
 
 
 def test_read_first_boot_update_done_false_when_no_state(runtime):
-    from app.update_state import read_first_boot_update_done
+    from core.update_state import read_first_boot_update_done
 
     assert read_first_boot_update_done(runtime) is False
 
 
 def test_read_first_boot_update_done_false_when_missing_field(runtime):
-    from app.update_state import read_first_boot_update_done
+    from core.update_state import read_first_boot_update_done
 
     runtime.update_state_path.write_text(json.dumps({"available": False}), encoding="utf-8")
     assert read_first_boot_update_done(runtime) is False
 
 
 def test_read_first_boot_update_done_true_when_set(runtime):
-    from app.update_state import read_first_boot_update_done
+    from core.update_state import read_first_boot_update_done
 
     runtime.update_state_path.write_text(
         json.dumps({"first_boot_update_done": True}), encoding="utf-8"
@@ -1232,14 +1232,14 @@ def test_read_first_boot_update_done_true_when_set(runtime):
 
 
 def test_mark_first_boot_update_done_creates_state(runtime):
-    from app.update_state import mark_first_boot_update_done, read_first_boot_update_done
+    from core.update_state import mark_first_boot_update_done, read_first_boot_update_done
 
     mark_first_boot_update_done(runtime)
     assert read_first_boot_update_done(runtime) is True
 
 
 def test_mark_first_boot_update_done_preserves_existing_state(runtime):
-    from app.update_state import mark_first_boot_update_done
+    from core.update_state import mark_first_boot_update_done
 
     runtime.update_state_path.write_text(
         json.dumps({"available": True, "latest_version": "0.6.0"}), encoding="utf-8"

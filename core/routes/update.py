@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 try:
-    from app.deps import get_runtime
-    from app.runtime_state import RuntimeConfig
-    from app.update_state import (
+    from core.deps import get_runtime
+    from core.runtime_state import RuntimeConfig
+    from core.update_state import (
         EXECUTION_ACTIVE_STATES,
         build_update_status,
         check_for_update,
@@ -21,7 +21,7 @@ try:
         read_execution_state,
         read_update_state,
     )
-    from app.__version__ import __version__
+    from core.__version__ import __version__
 except ModuleNotFoundError:
     from deps import get_runtime  # type: ignore[no-redef]
     from runtime_state import RuntimeConfig  # type: ignore[no-redef]

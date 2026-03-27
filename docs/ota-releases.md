@@ -15,20 +15,20 @@ These assets live on the `v<version>` GitHub Release alongside any image assets.
 
 ## Tarball layout
 
-The tarball contains a single top-level directory with `app/`, `bin/`, and `requirements.txt`:
+The tarball contains a single top-level directory with `core/`, `bin/`, and `requirements.txt`:
 
 ```
 potato-os-0.5.0/
-  app/              # Python application code + frontend assets
+  core/              # Python application code + frontend assets
   bin/              # Operational scripts (run.sh, install_dev.sh, etc.)
   requirements.txt  # Python dependencies
 ```
 
-This is the "single subdir" layout that `_find_update_root()` handles in `app/update_state.py`.
+This is the "single subdir" layout that `_find_update_root()` handles in `core/update_state.py`.
 
 ### Included
 
-- `app/` — all Python source and `assets/` (HTML, CSS, JS)
+- `core/` — all Python source and `assets/` (HTML, CSS, JS)
 - `bin/` — all shell scripts, `lib/`, and `assets/`
 - `requirements.txt` — from repo root
 
@@ -49,7 +49,7 @@ Two-space separator between hash and filename, matching BSD/GNU `sha256sum` outp
 
 ## How the updater discovers the tarball
 
-`check_for_update()` in `app/update_state.py`:
+`check_for_update()` in `core/update_state.py`:
 
 1. Queries `https://api.github.com/repos/slomin/potato-os/releases/latest`
 2. Iterates release assets looking for `name` matching `potato-os-*.tar.gz`
@@ -59,16 +59,16 @@ The `potato-os-` prefix prevents accidental matches against runtime tarballs (`i
 
 ## How the updater applies the tarball
 
-`run_update()` in `app/main.py`:
+`run_update()` in `core/main.py`:
 
 1. Downloads tarball to `.update_staging/update.tar.gz`
 2. Extracts to `.update_staging/extracted/`
-3. `_find_update_root()` locates the `app/` directory (handles single-subdir layout)
-4. Backs up live `app/` and `bin/`
-5. Copies new `app/` and `bin/` over the live installation
-6. Copies `requirements.txt` to `app/requirements.txt`
+3. `_find_update_root()` locates the `core/` directory (handles single-subdir layout)
+4. Backs up live `core/` and `bin/`
+5. Copies new `core/` and `bin/` over the live installation
+6. Copies `requirements.txt` to `core/requirements.txt`
 7. Sets executable bits on `bin/*.sh`
-8. Runs `pip install -r app/requirements.txt`
+8. Runs `pip install -r core/requirements.txt`
 9. Signals service restart via systemd
 10. On next boot, detects version change to confirm success
 
@@ -86,4 +86,4 @@ If the `v<version>` release already exists (e.g., image was published first), th
 
 ## Version source
 
-`app/__version__.py` is the single source of truth. The tag version should match.
+`core/__version__.py` is the single source of truth. The tag version should match.

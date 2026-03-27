@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 try:
-    from app.deps import get_runtime
-    from app.model_state import (
+    from core.deps import get_runtime
+    from core.model_state import (
         get_model_by_id,
         normalize_model_settings,
         save_models_state,
@@ -25,7 +25,7 @@ try:
         _unique_filename,
         _unique_model_id,
     )
-    from app.runtime_state import (
+    from core.runtime_state import (
         RuntimeConfig,
         build_large_model_compatibility,
         _safe_int,
@@ -290,7 +290,7 @@ async def delete_model_endpoint(
     cancelled_download = False
 
     try:
-        from app.model_state import delete_model, resolve_active_model
+        from core.model_state import delete_model, resolve_active_model
     except ModuleNotFoundError:
         from model_state import delete_model, resolve_active_model  # type: ignore[no-redef]
 

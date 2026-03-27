@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from app.main import compute_auto_download_remaining_seconds, create_app, start_model_download
-from app.model_state import (
+from core.main import compute_auto_download_remaining_seconds, create_app, start_model_download
+from core.model_state import (
     MODEL_FILENAME,
     MODEL_URL,
     MODEL_FILENAME_PI4,
@@ -16,7 +16,7 @@ from app.model_state import (
     resolve_model_runtime_path,
     validate_model_url,
 )
-from app.runtime_state import RuntimeConfig, get_free_storage_bytes, is_likely_too_large_for_storage, read_download_progress
+from core.runtime_state import RuntimeConfig, get_free_storage_bytes, is_likely_too_large_for_storage, read_download_progress
 
 
 def test_validate_model_url_accepts_https_gguf():
@@ -99,8 +99,8 @@ async def test_start_model_download_predicts_insufficient_storage(runtime: Runti
     async def _fake_length(_url: str) -> int:
         return 2_000
 
-    monkeypatch.setattr("app.main.fetch_remote_content_length_bytes", _fake_length)
-    monkeypatch.setattr("app.main.get_free_storage_bytes", lambda _runtime: 500)
+    monkeypatch.setattr("core.main.fetch_remote_content_length_bytes", _fake_length)
+    monkeypatch.setattr("core.main.get_free_storage_bytes", lambda _runtime: 500)
 
     started, reason = await start_model_download(app, runtime, trigger="manual")
 
@@ -115,7 +115,7 @@ async def test_start_model_download_predicts_insufficient_storage(runtime: Runti
 
 
 def test_get_free_storage_bytes_returns_unknown_when_psutil_missing(runtime: RuntimeConfig, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("app.runtime_state.psutil", None)
+    monkeypatch.setattr("core.runtime_state.psutil", None)
 
     free_bytes = get_free_storage_bytes(runtime)
 
@@ -156,9 +156,9 @@ async def test_start_model_download_does_not_fail_precheck_when_free_space_unkno
     async def _fake_spawn(*_args, **_kwargs):
         return _FakeProc()
 
-    monkeypatch.setattr("app.main.fetch_remote_content_length_bytes", _fake_length)
-    monkeypatch.setattr("app.main.get_free_storage_bytes", lambda _runtime: None)
-    monkeypatch.setattr("app.main.asyncio.create_subprocess_exec", _fake_spawn)
+    monkeypatch.setattr("core.main.fetch_remote_content_length_bytes", _fake_length)
+    monkeypatch.setattr("core.main.get_free_storage_bytes", lambda _runtime: None)
+    monkeypatch.setattr("core.main.asyncio.create_subprocess_exec", _fake_spawn)
 
     started, reason = await start_model_download(app, runtime, trigger="manual")
 

@@ -4,7 +4,7 @@ export COPYFILE_DISABLE=1  # Prevent macOS tar from embedding ._ resource forks
 
 # Publish an OTA-consumable app tarball to GitHub Releases.
 #
-# Packages app/ and bin/ into a tarball the on-device updater can
+# Packages core/ and bin/ into a tarball the on-device updater can
 # download, extract, and apply. Attaches to the v<version> release
 # (creating it if needed).
 #
@@ -62,18 +62,18 @@ VERSION_NUM="${VERSION#v}"
 # ── Read version from canonical source ─────────────────────────────────
 APP_VERSION="$(python3 -c "
 import sys; sys.path.insert(0, '${REPO_ROOT}')
-from app.__version__ import __version__; print(__version__)
+from core.__version__ import __version__; print(__version__)
 ")"
 
 printf 'Tag version:  %s\n' "${VERSION_NUM}"
 printf 'App version:  %s\n' "${APP_VERSION}"
 
 if [ "${VERSION_NUM}" != "${APP_VERSION}" ]; then
-  die "Tag version \"${VERSION_NUM}\" does not match app/__version__.py \"${APP_VERSION}\". Update __version__ first."
+  die "Tag version \"${VERSION_NUM}\" does not match core/__version__.py \"${APP_VERSION}\". Update __version__ first."
 fi
 
 # ── Validate source directories ────────────────────────────────────────
-[ -d "${REPO_ROOT}/app" ] || die "app/ directory not found at ${REPO_ROOT}/app"
+[ -d "${REPO_ROOT}/core" ] || die "core/ directory not found at ${REPO_ROOT}/core"
 [ -d "${REPO_ROOT}/bin" ] || die "bin/ directory not found at ${REPO_ROOT}/bin"
 
 # ── Create staging directory ───────────────────────────────────────────
@@ -87,9 +87,12 @@ PREFIX="${STAGING}/${ARCHIVE_NAME}"
 
 mkdir -p "${PREFIX}"
 
-# ── Copy app/ and bin/ into staging ────────────────────────────────────
-cp -a "${REPO_ROOT}/app" "${PREFIX}/app"
+# ── Copy core/, apps/, and bin/ into staging ───────────────────────────
+cp -a "${REPO_ROOT}/core" "${PREFIX}/core"
 cp -a "${REPO_ROOT}/bin" "${PREFIX}/bin"
+if [ -d "${REPO_ROOT}/apps" ]; then
+  cp -a "${REPO_ROOT}/apps" "${PREFIX}/apps"
+fi
 
 if [ -f "${REPO_ROOT}/requirements.txt" ]; then
   cp "${REPO_ROOT}/requirements.txt" "${PREFIX}/requirements.txt"

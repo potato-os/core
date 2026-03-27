@@ -5,11 +5,11 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.main import build_status, create_app, get_runtime, refresh_llama_readiness
+from core.main import build_status, create_app, get_runtime, refresh_llama_readiness
 
 
 def test_status_booting_when_model_missing(client, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     response = client.get("/status")
     assert response.status_code == 200
@@ -23,7 +23,7 @@ def test_status_booting_when_model_missing(client, monkeypatch):
 
 
 def test_status_downloading_when_progress_exists(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
     runtime.download_state_path.write_text(
         json.dumps(
             {
@@ -46,7 +46,7 @@ def test_status_downloading_when_progress_exists(client, runtime, monkeypatch):
 
 
 def test_status_ready_when_model_exists_and_llama_healthy(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
 
     response = client.get("/status")
@@ -93,7 +93,7 @@ def test_refresh_llama_readiness_marks_ready_after_strict_health_stabilizes(runt
         health_calls.append(busy_is_healthy)
         return True
 
-    monkeypatch.setattr("app.main.check_llama_health", _strict_true)
+    monkeypatch.setattr("core.main.check_llama_health", _strict_true)
 
     first = asyncio.run(refresh_llama_readiness(app, runtime, active_model_path=runtime.model_path))
     second = asyncio.run(refresh_llama_readiness(app, runtime, active_model_path=runtime.model_path))
@@ -132,7 +132,7 @@ def test_refresh_llama_readiness_stays_ready_when_busy_after_prior_readiness(run
         health_calls.append(busy_is_healthy)
         return busy_is_healthy
 
-    monkeypatch.setattr("app.main.check_llama_health", _busy_after_ready)
+    monkeypatch.setattr("core.main.check_llama_health", _busy_after_ready)
 
     result = asyncio.run(refresh_llama_readiness(app, runtime, active_model_path=runtime.model_path))
 
@@ -143,9 +143,9 @@ def test_refresh_llama_readiness_stays_ready_when_busy_after_prior_readiness(run
 
 
 def test_status_includes_large_model_warning_for_unsupported_pi(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
     with runtime.model_path.open("wb") as handle:
         handle.seek((6 * 1024 * 1024 * 1024) - 1)
         handle.write(b"x")
@@ -161,9 +161,9 @@ def test_status_includes_large_model_warning_for_unsupported_pi(client, runtime,
 
 
 def test_status_includes_llama_runtime_payload(client, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
     monkeypatch.setattr(
-        "app.main.build_llama_runtime_status",
+        "core.main.build_llama_runtime_status",
         lambda _runtime, app=None: {
             "current": {"install_dir": "/opt/potato/llama", "family": "ik_llama"},
             "available_runtimes": [{"family": "ik_llama", "path": "/opt/potato/runtimes/ik_llama"}],
@@ -210,7 +210,7 @@ def test_status_includes_active_model_storage_details(client, runtime):
 
 
 def test_status_reconciles_active_model_from_runtime_path_when_state_is_missing(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
 
     default_path = runtime.model_path
     default_path.write_bytes(b"default")
@@ -263,7 +263,7 @@ def test_status_reconciles_active_model_from_runtime_path_when_state_is_missing(
 
 
 def test_status_includes_canonical_version(client):
-    from app.__version__ import __version__
+    from core.__version__ import __version__
 
     response = client.get("/status")
     assert response.status_code == 200
@@ -304,7 +304,7 @@ def test_status_stays_ready_when_active_model_healthy_and_download_error_is_from
     runtime,
     monkeypatch,
 ):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
     runtime.models_state_path.write_text(
         json.dumps(
@@ -375,8 +375,8 @@ def test_llama_healthz_reports_strict_probe_result(client, monkeypatch):
     async def _probe_true(_runtime):
         return True
 
-    monkeypatch.setattr("app.main.check_llama_health", _strict_false)
-    monkeypatch.setattr("app.main.probe_llama_inference_slot", _probe_true)
+    monkeypatch.setattr("core.main.check_llama_health", _strict_false)
+    monkeypatch.setattr("core.main.probe_llama_inference_slot", _probe_true)
 
     response = client.get("/internal/llama-healthz")
     assert response.status_code == 200
@@ -427,7 +427,7 @@ def test_start_model_download_starts_when_enabled(runtime, monkeypatch):
         assert trigger == "manual"
         return True, "started"
 
-    monkeypatch.setattr("app.main.start_model_download", _start)
+    monkeypatch.setattr("core.main.start_model_download", _start)
 
     with TestClient(app) as test_client:
         response = test_client.post("/internal/start-model-download")
@@ -446,7 +446,7 @@ def test_start_model_download_insufficient_storage_includes_size_fields(runtime,
     async def _start(_app, _runtime, trigger: str):
         return False, "insufficient_storage"
 
-    monkeypatch.setattr("app.main.start_model_download", _start)
+    monkeypatch.setattr("core.main.start_model_download", _start)
     runtime.download_state_path.write_text(
         json.dumps({
             "bytes_total": 5000000000,
@@ -478,7 +478,7 @@ def test_reset_runtime_starts_when_enabled(runtime, monkeypatch):
     async def _start(_runtime):
         return True, "scheduled"
 
-    monkeypatch.setattr("app.main.start_runtime_reset", _start)
+    monkeypatch.setattr("core.main.start_runtime_reset", _start)
 
     with TestClient(app) as test_client:
         response = test_client.post("/internal/reset-runtime")
@@ -497,7 +497,7 @@ def test_reset_runtime_returns_not_started_reason(runtime, monkeypatch):
     async def _start(_runtime):
         return False, "script_missing"
 
-    monkeypatch.setattr("app.main.start_runtime_reset", _start)
+    monkeypatch.setattr("core.main.start_runtime_reset", _start)
 
     with TestClient(app) as test_client:
         response = test_client.post("/internal/reset-runtime")
@@ -513,8 +513,8 @@ def test_status_includes_auto_start_countdown(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     runtime.auto_download_idle_seconds = 300
     app.dependency_overrides[get_runtime] = lambda: runtime
-    monkeypatch.setattr("app.main.get_monotonic_time", lambda: 240.0)
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.get_monotonic_time", lambda: 240.0)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     with TestClient(app) as test_client:
         app.state.startup_monotonic = 100.0
@@ -558,8 +558,8 @@ def test_status_disables_auto_start_when_default_model_was_downloaded_once(runti
     )
     app = create_app(runtime=runtime, enable_orchestrator=False)
     app.dependency_overrides[get_runtime] = lambda: runtime
-    monkeypatch.setattr("app.main.get_monotonic_time", lambda: 2000.0)
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.get_monotonic_time", lambda: 2000.0)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     with TestClient(app) as test_client:
         app.state.startup_monotonic = 100.0
@@ -574,7 +574,7 @@ def test_status_disables_auto_start_when_default_model_was_downloaded_once(runti
 
 
 def test_status_falls_back_download_target_model_when_missing(runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
     runtime.download_state_path.write_text(
         json.dumps(
             {
@@ -620,7 +620,7 @@ def test_status_includes_model_settings_and_projector_metadata(client):
 def test_status_includes_system_runtime_payload(runtime, monkeypatch):
     app = create_app(runtime=runtime, enable_orchestrator=False)
     app.dependency_overrides[get_runtime] = lambda: runtime
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     sample_system = {
         "available": True,
@@ -674,8 +674,8 @@ def test_cancel_llama_uses_slot_action_when_available(runtime, monkeypatch):
     async def _restart(_app):
         raise AssertionError("restart should not be called when slot cancel succeeds")
 
-    monkeypatch.setattr("app.main.request_llama_slot_cancel", _slot_cancel)
-    monkeypatch.setattr("app.main.restart_managed_llama_process", _restart)
+    monkeypatch.setattr("core.main.request_llama_slot_cancel", _slot_cancel)
+    monkeypatch.setattr("core.main.restart_managed_llama_process", _restart)
 
     with TestClient(app) as test_client:
         response = test_client.post("/internal/cancel-llama")
@@ -698,8 +698,8 @@ def test_cancel_llama_returns_no_restart_when_slot_action_unavailable(runtime, m
     async def _restart(_app):
         raise AssertionError("restart should not be called by cancel endpoint")
 
-    monkeypatch.setattr("app.main.request_llama_slot_cancel", _slot_cancel)
-    monkeypatch.setattr("app.main.restart_managed_llama_process", _restart)
+    monkeypatch.setattr("core.main.request_llama_slot_cancel", _slot_cancel)
+    monkeypatch.setattr("core.main.restart_managed_llama_process", _restart)
 
     with TestClient(app) as test_client:
         response = test_client.post("/internal/cancel-llama")
@@ -737,7 +737,7 @@ def test_restart_llama_terminates_running_process_when_enabled(runtime, monkeypa
     async def _no_stale(_runtime):
         return 0
 
-    monkeypatch.setattr("app.main.terminate_stray_llama_processes", _no_stale)
+    monkeypatch.setattr("core.main.terminate_stray_llama_processes", _no_stale)
 
     with TestClient(app) as test_client:
         response = test_client.post("/internal/restart-llama")
@@ -758,7 +758,7 @@ def test_restart_llama_terminates_stale_processes_when_no_managed_process(runtim
     async def _terminate_stale(_runtime):
         return 1
 
-    monkeypatch.setattr("app.main.terminate_stray_llama_processes", _terminate_stale)
+    monkeypatch.setattr("core.main.terminate_stray_llama_processes", _terminate_stale)
 
     with TestClient(app) as test_client:
         response = test_client.post("/internal/restart-llama")

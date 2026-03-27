@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
+from core.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
 
 
 async def _healthy_true(_runtime):
@@ -23,7 +23,7 @@ def test_download_default_projector_for_model_uses_curated_helper(runtime, monke
         calls.append(model_id)
         return True, "downloaded", "mmproj-F16.gguf"
 
-    monkeypatch.setattr("app.main.download_default_projector_for_model", _fake_download)
+    monkeypatch.setattr("core.main.download_default_projector_for_model", _fake_download)
 
     with TestClient(app) as client:
         upload = client.post(

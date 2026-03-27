@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import httpx
 import pytest
-import app.runtime_state as runtime_state
+import core.runtime_state as runtime_state
 
-from app.main import compute_auto_download_remaining_seconds, should_auto_start_download
-from app.runtime_state import (
+from core.main import compute_auto_download_remaining_seconds, should_auto_start_download
+from core.runtime_state import (
     LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT,
     RuntimeConfig,
     build_power_estimate_status,
@@ -111,7 +111,7 @@ async def test_check_llama_health_treats_read_timeout_as_busy(runtime, monkeypat
         async def get(self, _url):
             raise httpx.ReadTimeout("busy")
 
-    monkeypatch.setattr("app.runtime_state.httpx.AsyncClient", lambda timeout: _BusyClient())
+    monkeypatch.setattr("core.runtime_state.httpx.AsyncClient", lambda timeout: _BusyClient())
 
     healthy = await check_llama_health(runtime)
 
@@ -130,7 +130,7 @@ async def test_check_llama_health_strict_mode_treats_read_timeout_as_unhealthy(r
         async def get(self, _url):
             raise httpx.ReadTimeout("busy")
 
-    monkeypatch.setattr("app.runtime_state.httpx.AsyncClient", lambda timeout: _BusyClient())
+    monkeypatch.setattr("core.runtime_state.httpx.AsyncClient", lambda timeout: _BusyClient())
 
     healthy = await check_llama_health(runtime, busy_is_healthy=False)
 
@@ -149,7 +149,7 @@ async def test_check_llama_health_returns_false_on_connect_error(runtime, monkey
         async def get(self, _url):
             raise httpx.ConnectError("down")
 
-    monkeypatch.setattr("app.runtime_state.httpx.AsyncClient", lambda timeout: _DownClient())
+    monkeypatch.setattr("core.runtime_state.httpx.AsyncClient", lambda timeout: _DownClient())
 
     healthy = await check_llama_health(runtime)
 
@@ -169,7 +169,7 @@ async def test_probe_llama_inference_slot_returns_false_on_timeout(runtime, monk
             assert json["max_tokens"] == 1
             raise httpx.ReadTimeout("stuck")
 
-    monkeypatch.setattr("app.runtime_state.httpx.AsyncClient", lambda timeout: _StuckClient())
+    monkeypatch.setattr("core.runtime_state.httpx.AsyncClient", lambda timeout: _StuckClient())
 
     healthy = await probe_llama_inference_slot(runtime)
 
@@ -192,7 +192,7 @@ async def test_request_llama_slot_cancel_returns_action_on_success(runtime, monk
             assert "/slots/0?action=erase" in url
             return _Response()
 
-    monkeypatch.setattr("app.runtime_state.httpx.AsyncClient", lambda timeout: _Client())
+    monkeypatch.setattr("core.runtime_state.httpx.AsyncClient", lambda timeout: _Client())
 
     cancelled, action = await request_llama_slot_cancel(runtime)
 
@@ -216,7 +216,7 @@ async def test_request_llama_slot_cancel_returns_false_when_all_actions_fail(run
             assert "/slots/0?action=" in url
             return _Response()
 
-    monkeypatch.setattr("app.runtime_state.httpx.AsyncClient", lambda timeout: _Client())
+    monkeypatch.setattr("core.runtime_state.httpx.AsyncClient", lambda timeout: _Client())
 
     cancelled, action = await request_llama_slot_cancel(runtime)
 
@@ -262,7 +262,7 @@ async def test_fetch_remote_content_length_uses_streaming_range_fallback_without
             assert headers == {"range": "bytes=0-0"}
             return _StreamCtx(_RangeResponse())
 
-    monkeypatch.setattr("app.runtime_state.httpx.AsyncClient", lambda timeout, follow_redirects: _Client())
+    monkeypatch.setattr("core.runtime_state.httpx.AsyncClient", lambda timeout, follow_redirects: _Client())
 
     size_bytes = await fetch_remote_content_length_bytes("https://example.com/model.gguf")
 
@@ -283,7 +283,7 @@ def test_runtime_from_env_defaults_to_llama_and_disables_fake_fallback(monkeypat
 def test_compute_auto_download_remaining_seconds_counts_down(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     runtime.auto_download_idle_seconds = 300
-    monkeypatch.setattr("app.main.AUTO_DOWNLOAD_BOOTSTRAP_ENABLED", True)
+    monkeypatch.setattr("core.main.AUTO_DOWNLOAD_BOOTSTRAP_ENABLED", True)
 
     remaining = compute_auto_download_remaining_seconds(
         runtime,
@@ -330,7 +330,7 @@ def test_compute_auto_download_remaining_seconds_zero_after_first_default_downlo
 def test_should_auto_start_download_only_after_timeout(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     runtime.auto_download_idle_seconds = 300
-    monkeypatch.setattr("app.main.AUTO_DOWNLOAD_BOOTSTRAP_ENABLED", True)
+    monkeypatch.setattr("core.main.AUTO_DOWNLOAD_BOOTSTRAP_ENABLED", True)
 
     before_timeout = should_auto_start_download(
         runtime,
@@ -480,8 +480,8 @@ def test_read_swap_label_prefers_zram_when_active(monkeypatch):
                 "/dev/zram0                              partition\t2097148\t114688\t100\n"
             )
 
-    monkeypatch.setattr("app.runtime_state.Path.exists", lambda self: str(self) == "/proc/swaps")
-    monkeypatch.setattr("app.runtime_state.Path.read_text", lambda self, encoding="utf-8": _SwapFile().read_text(encoding))
+    monkeypatch.setattr("core.runtime_state.Path.exists", lambda self: str(self) == "/proc/swaps")
+    monkeypatch.setattr("core.runtime_state.Path.read_text", lambda self, encoding="utf-8": _SwapFile().read_text(encoding))
 
     assert _read_swap_label() == "zram"
 
@@ -489,11 +489,11 @@ def test_read_swap_label_prefers_zram_when_active(monkeypatch):
 def test_collect_system_metrics_snapshot_includes_platform_and_power_fields(monkeypatch):
     monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "expires_at_unix", 0)
     monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "value", None)
-    monkeypatch.setattr("app.runtime_state.psutil", None)
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.1")
-    monkeypatch.setattr("app.runtime_state._read_os_release_pretty_name", lambda: "Debian GNU/Linux 12 (bookworm)")
+    monkeypatch.setattr("core.runtime_state.psutil", None)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.1")
+    monkeypatch.setattr("core.runtime_state._read_os_release_pretty_name", lambda: "Debian GNU/Linux 12 (bookworm)")
     monkeypatch.setattr(
-        "app.runtime_state._read_kernel_version_info",
+        "core.runtime_state._read_kernel_version_info",
         lambda: {
             "kernel_release": "6.12.62+rpt-rpi-2712",
             "kernel_version": "#1 SMP PREEMPT Debian 6.12.62-1+rpt1",
@@ -514,9 +514,9 @@ def test_collect_system_metrics_snapshot_includes_platform_and_power_fields(monk
             return "Nov 19 2025 12:34:56\nCopyright (c) 2012 Broadcom\nversion abc123"
         return None
 
-    monkeypatch.setattr("app.runtime_state._run_vcgencmd", _fake_vcgencmd)
-    monkeypatch.setattr("app.runtime_state._read_sysfs_temp", lambda: None)
-    monkeypatch.setattr("app.runtime_state._read_swap_label", lambda: "zram")
+    monkeypatch.setattr("core.runtime_state._run_vcgencmd", _fake_vcgencmd)
+    monkeypatch.setattr("core.runtime_state._read_sysfs_temp", lambda: None)
+    monkeypatch.setattr("core.runtime_state._read_swap_label", lambda: "zram")
 
     snapshot = collect_system_metrics_snapshot()
 
@@ -645,8 +645,8 @@ def test_large_model_warn_threshold_honors_env_override(monkeypatch):
 
 
 def test_build_large_model_compatibility_warns_on_unsupported_large_model(monkeypatch, runtime):
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
 
     payload = build_large_model_compatibility(
         runtime,
@@ -661,8 +661,8 @@ def test_build_large_model_compatibility_warns_on_unsupported_large_model(monkey
 
 
 def test_build_large_model_compatibility_no_warning_on_pi5_16gb(monkeypatch, runtime):
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.1")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 16 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.1")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 16 * 1024 * 1024 * 1024)
 
     payload = build_large_model_compatibility(
         runtime,
@@ -676,7 +676,7 @@ def test_build_large_model_compatibility_no_warning_on_pi5_16gb(monkeypatch, run
 
 def test_build_large_model_compatibility_includes_storage_free_bytes(monkeypatch, runtime):
     free = 20 * 1024 * 1024 * 1024
-    monkeypatch.setattr("app.runtime_state.get_model_volume_free_bytes", lambda _r: free)
+    monkeypatch.setattr("core.runtime_state.get_model_volume_free_bytes", lambda _r: free)
 
     payload = build_large_model_compatibility(runtime, model_size_bytes=1)
 
@@ -725,8 +725,8 @@ async def test_ensure_compatible_runtime_switches_on_pi4(monkeypatch, runtime, t
     marker_path.parent.mkdir(parents=True, exist_ok=True)
     marker_path.write_text(json.dumps({"family": "ik_llama", "profile": "pi5-opt"}))
 
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
 
     switched, reason = await ensure_compatible_runtime(runtime)
     assert switched is True
@@ -740,8 +740,8 @@ async def test_ensure_compatible_runtime_noop_on_pi5(monkeypatch, runtime):
     marker_path.parent.mkdir(parents=True, exist_ok=True)
     marker_path.write_text(json.dumps({"family": "ik_llama", "profile": "pi5-opt"}))
 
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
 
     switched, reason = await ensure_compatible_runtime(runtime)
     assert switched is False
@@ -767,8 +767,8 @@ async def test_ensure_compatible_runtime_detects_family_from_runtime_json_when_n
     (slot_dir / "lib").mkdir(exist_ok=True)
     (slot_dir / "runtime.json").write_text(json.dumps({"family": "llama_cpp", "commit": "abc", "profile": "pi4-opt"}))
 
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
 
     switched, reason = await ensure_compatible_runtime(runtime)
     assert switched is True
@@ -782,8 +782,8 @@ async def test_ensure_compatible_runtime_noop_when_already_llama_cpp(monkeypatch
     marker_path.parent.mkdir(parents=True, exist_ok=True)
     marker_path.write_text(json.dumps({"family": "llama_cpp", "profile": "pi4-opt"}))
 
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
 
     switched, reason = await ensure_compatible_runtime(runtime)
     assert switched is False
@@ -807,13 +807,13 @@ async def test_ensure_compatible_runtime_returns_false_when_install_fails(monkey
     (slot_dir / "lib").mkdir(exist_ok=True)
     (slot_dir / "runtime.json").write_text(json.dumps({"family": "llama_cpp"}))
 
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
 
     async def _fake_install_fail(_runtime, _path):
         return {"ok": False, "reason": "rsync_not_available"}
 
-    monkeypatch.setattr("app.runtime_state.install_llama_runtime_bundle", _fake_install_fail)
+    monkeypatch.setattr("core.runtime_state.install_llama_runtime_bundle", _fake_install_fail)
 
     switched, reason = await ensure_compatible_runtime(runtime)
     assert switched is False
@@ -827,8 +827,8 @@ def test_compatibility_detects_runtime_from_runtime_json_when_no_marker(monkeypa
     llama_dir.mkdir(parents=True, exist_ok=True)
     (llama_dir / "runtime.json").write_text(json.dumps({"family": "ik_llama"}))
 
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
 
     payload = build_large_model_compatibility(runtime)
     assert payload["runtime_compatibility"]["compatible"] is False
@@ -838,7 +838,7 @@ def test_compatibility_detects_runtime_from_runtime_json_when_no_marker(monkeypa
 def test_runtime_status_detects_family_from_runtime_json_when_no_marker(runtime):
     """P3: build_llama_runtime_status should show family from runtime.json on fresh installs."""
     import json
-    from app.runtime_state import build_llama_runtime_status
+    from core.runtime_state import build_llama_runtime_status
     llama_dir = runtime.base_dir / "llama"
     llama_dir.mkdir(parents=True, exist_ok=True)
     (llama_dir / "bin").mkdir(parents=True, exist_ok=True)
@@ -852,8 +852,8 @@ def test_runtime_status_detects_family_from_runtime_json_when_no_marker(runtime)
 
 def test_runtime_config_model_path_uses_device_default_on_pi4(monkeypatch):
     """P1: model_path should align with the Pi 4 default model, not hardcode 2B."""
-    from app.model_state import MODEL_FILENAME_PI4
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    from core.model_state import MODEL_FILENAME_PI4
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
     monkeypatch.delenv("POTATO_MODEL_PATH", raising=False)
     config = RuntimeConfig.from_env()
     assert config.model_path.name == MODEL_FILENAME_PI4
@@ -861,8 +861,8 @@ def test_runtime_config_model_path_uses_device_default_on_pi4(monkeypatch):
 
 def test_runtime_config_model_path_uses_2b_on_pi5(monkeypatch):
     """P1: Pi 5 should still default to 2B."""
-    from app.model_state import MODEL_FILENAME
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    from core.model_state import MODEL_FILENAME
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
     monkeypatch.delenv("POTATO_MODEL_PATH", raising=False)
     config = RuntimeConfig.from_env()
     assert config.model_path.name == MODEL_FILENAME
@@ -899,7 +899,7 @@ def test_cpu_load_power_estimate_unknown_device_returns_unavailable():
 
 
 def test_pi4_power_calibration_defaults_differ_from_pi5(monkeypatch):
-    from app.runtime_state import (
+    from core.runtime_state import (
         POWER_CALIBRATION_DEFAULT_A,
         POWER_CALIBRATION_DEFAULT_B,
         POWER_CALIBRATION_DEFAULT_A_PI4,
@@ -910,13 +910,13 @@ def test_pi4_power_calibration_defaults_differ_from_pi5(monkeypatch):
     monkeypatch.delenv("POTATO_POWER_ESTIMATE_ADJUST_B", raising=False)
 
     # Pi 4: uses Pi 4 coefficients
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
     a, b = _get_power_calibration_default_coefficients()
     assert a == pytest.approx(POWER_CALIBRATION_DEFAULT_A_PI4)
     assert b == pytest.approx(POWER_CALIBRATION_DEFAULT_B_PI4)
 
     # Pi 5: uses Pi 5 coefficients
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
     a, b = _get_power_calibration_default_coefficients()
     assert a == pytest.approx(POWER_CALIBRATION_DEFAULT_A)
     assert b == pytest.approx(POWER_CALIBRATION_DEFAULT_B)
@@ -946,10 +946,10 @@ def test_available_runtimes_marks_ik_llama_incompatible_on_pi4(runtime, monkeypa
     (marker_path / "runtime.json").write_text(
         json.dumps({"family": "llama_cpp"}), encoding="utf-8"
     )
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
 
-    from app.runtime_state import build_llama_runtime_status
+    from core.runtime_state import build_llama_runtime_status
     status = build_llama_runtime_status(runtime)
 
     runtimes_by_family = {rt["family"]: rt for rt in status["available_runtimes"]}
@@ -966,10 +966,10 @@ def test_available_runtimes_marks_both_compatible_on_pi5(runtime, monkeypatch):
     (marker_path / "runtime.json").write_text(
         json.dumps({"family": "ik_llama"}), encoding="utf-8"
     )
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
 
-    from app.runtime_state import build_llama_runtime_status
+    from core.runtime_state import build_llama_runtime_status
     status = build_llama_runtime_status(runtime)
 
     runtimes_by_family = {rt["family"]: rt for rt in status["available_runtimes"]}
@@ -985,10 +985,10 @@ def test_available_runtimes_works_with_single_slot(runtime, monkeypatch):
     (marker_path / "runtime.json").write_text(
         json.dumps({"family": "llama_cpp"}), encoding="utf-8"
     )
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
 
-    from app.runtime_state import build_llama_runtime_status
+    from core.runtime_state import build_llama_runtime_status
     status = build_llama_runtime_status(runtime)
 
     assert len(status["available_runtimes"]) == 1
@@ -1046,7 +1046,7 @@ def test_parse_psi_memory_lines_handles_empty_string():
 
 def test_read_psi_memory_returns_unavailable_on_oserror(monkeypatch):
     monkeypatch.setattr(
-        "app.runtime_state.Path.read_text",
+        "core.runtime_state.Path.read_text",
         lambda self, encoding="utf-8": (_ for _ in ()).throw(OSError("No such file")),
     )
     result = _read_psi_memory()
@@ -1058,7 +1058,7 @@ def test_read_psi_memory_returns_unavailable_on_oserror(monkeypatch):
 
 def test_read_psi_memory_parses_real_output(monkeypatch):
     monkeypatch.setattr(
-        "app.runtime_state.Path.read_text",
+        "core.runtime_state.Path.read_text",
         lambda self, encoding="utf-8": SAMPLE_PSI_OUTPUT,
     )
     result = _read_psi_memory()
@@ -1108,7 +1108,7 @@ def test_parse_zram_mm_stat_handles_empty_string():
 
 def test_read_zram_mm_stat_returns_unavailable_on_oserror(monkeypatch):
     monkeypatch.setattr(
-        "app.runtime_state.Path.read_text",
+        "core.runtime_state.Path.read_text",
         lambda self, encoding="utf-8": (_ for _ in ()).throw(OSError("No such file")),
     )
     result = _read_zram_mm_stat()
@@ -1119,7 +1119,7 @@ def test_read_zram_mm_stat_returns_unavailable_on_oserror(monkeypatch):
 
 def test_read_zram_mm_stat_parses_real_output(monkeypatch):
     monkeypatch.setattr(
-        "app.runtime_state.Path.read_text",
+        "core.runtime_state.Path.read_text",
         lambda self, encoding="utf-8": SAMPLE_MM_STAT,
     )
     result = _read_zram_mm_stat()
@@ -1134,14 +1134,14 @@ def test_read_zram_mm_stat_parses_real_output(monkeypatch):
 def test_snapshot_includes_memory_available_bytes(monkeypatch):
     monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "expires_at_unix", 0)
     monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "value", None)
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: None)
-    monkeypatch.setattr("app.runtime_state._read_os_release_pretty_name", lambda: None)
-    monkeypatch.setattr("app.runtime_state._read_kernel_version_info", lambda: {})
-    monkeypatch.setattr("app.runtime_state._run_vcgencmd", lambda *args: None)
-    monkeypatch.setattr("app.runtime_state._read_sysfs_temp", lambda: None)
-    monkeypatch.setattr("app.runtime_state._read_swap_label", lambda: "swap")
-    monkeypatch.setattr("app.runtime_state._read_psi_memory", lambda: {"available": False, "some_avg10": None, "some_avg60": None, "some_avg300": None, "full_avg10": None, "full_avg60": None, "full_avg300": None})
-    monkeypatch.setattr("app.runtime_state._read_zram_mm_stat", lambda: {"available": False, "orig_data_size": None, "compr_data_size": None, "mem_used_total": None, "mem_limit": None, "compression_ratio": None})
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: None)
+    monkeypatch.setattr("core.runtime_state._read_os_release_pretty_name", lambda: None)
+    monkeypatch.setattr("core.runtime_state._read_kernel_version_info", lambda: {})
+    monkeypatch.setattr("core.runtime_state._run_vcgencmd", lambda *args: None)
+    monkeypatch.setattr("core.runtime_state._read_sysfs_temp", lambda: None)
+    monkeypatch.setattr("core.runtime_state._read_swap_label", lambda: "swap")
+    monkeypatch.setattr("core.runtime_state._read_psi_memory", lambda: {"available": False, "some_avg10": None, "some_avg60": None, "some_avg300": None, "full_avg10": None, "full_avg60": None, "full_avg300": None})
+    monkeypatch.setattr("core.runtime_state._read_zram_mm_stat", lambda: {"available": False, "orig_data_size": None, "compr_data_size": None, "mem_used_total": None, "mem_limit": None, "compression_ratio": None})
 
     snapshot = collect_system_metrics_snapshot()
 
@@ -1154,19 +1154,19 @@ def test_snapshot_includes_memory_available_bytes(monkeypatch):
 def test_snapshot_includes_memory_pressure_and_zram_compression(monkeypatch):
     monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "expires_at_unix", 0)
     monkeypatch.setitem(runtime_state._SYSTEM_STATIC_INFO_CACHE, "value", None)
-    monkeypatch.setattr("app.runtime_state.psutil", None)
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: None)
-    monkeypatch.setattr("app.runtime_state._read_os_release_pretty_name", lambda: None)
-    monkeypatch.setattr("app.runtime_state._read_kernel_version_info", lambda: {})
-    monkeypatch.setattr("app.runtime_state._run_vcgencmd", lambda *args: None)
-    monkeypatch.setattr("app.runtime_state._read_sysfs_temp", lambda: None)
-    monkeypatch.setattr("app.runtime_state._read_swap_label", lambda: "swap")
+    monkeypatch.setattr("core.runtime_state.psutil", None)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: None)
+    monkeypatch.setattr("core.runtime_state._read_os_release_pretty_name", lambda: None)
+    monkeypatch.setattr("core.runtime_state._read_kernel_version_info", lambda: {})
+    monkeypatch.setattr("core.runtime_state._run_vcgencmd", lambda *args: None)
+    monkeypatch.setattr("core.runtime_state._read_sysfs_temp", lambda: None)
+    monkeypatch.setattr("core.runtime_state._read_swap_label", lambda: "swap")
     monkeypatch.setattr(
-        "app.runtime_state._read_psi_memory",
+        "core.runtime_state._read_psi_memory",
         lambda: {"available": True, "some_avg10": 1.5, "some_avg60": 0.8, "some_avg300": 0.3, "full_avg10": 0.0, "full_avg60": 0.0, "full_avg300": 0.0},
     )
     monkeypatch.setattr(
-        "app.runtime_state._read_zram_mm_stat",
+        "core.runtime_state._read_zram_mm_stat",
         lambda: {"available": True, "orig_data_size": 119439360, "compr_data_size": 44892922, "mem_used_total": 51118080, "mem_limit": 2147483648, "compression_ratio": 2.66},
     )
 

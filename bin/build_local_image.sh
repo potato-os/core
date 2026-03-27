@@ -248,7 +248,7 @@ collect_variant_bundle() {
   local imager_manifest="${bundle_dir}/potato-${target_variant}.rpi-imager-manifest"
   cp -f "${REPO_ROOT}/bin/assets/${POTATO_ICON_FILENAME}" "${bundle_dir}/${POTATO_ICON_FILENAME}"
   local app_version
-  app_version="$(python3 -c "import sys; sys.path.insert(0,'${REPO_ROOT}'); from app.__version__ import __version__; print(__version__)")"
+  app_version="$(python3 -c "import sys; sys.path.insert(0,'${REPO_ROOT}'); from core.__version__ import __version__; print(__version__)")"
   echo "[potato-local-build] Generating Raspberry Pi Imager manifest (this may take a minute)..."
   generate_potato_manifest "${bundle_dir}/${image_name}" "${imager_manifest}" "${bundle_dir}/${POTATO_ICON_FILENAME}" "${target_variant}" "v${app_version}" \
     || die "Manifest generation failed for ${bundle_dir}/${image_name}"

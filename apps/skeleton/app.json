@@ -1,0 +1,12 @@
+{
+  "id": "skeleton",
+  "name": "Skeleton Test App",
+  "version": "0.1.0",
+  "entry": "main.py",
+  "critical": true,
+  "has_ui": false,
+  "ui_path": "",
+  "socket": "skeleton.sock",
+  "inferno": false,
+  "description": "Minimal app for validating the isolation framework"
+}

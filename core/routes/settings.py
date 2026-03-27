@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 try:
-    from app.deps import get_runtime
-    from app.runtime_state import RuntimeConfig
-    from app.settings import apply_settings_document_yaml, export_settings_document_yaml
+    from core.deps import get_runtime
+    from core.runtime_state import RuntimeConfig
+    from core.settings import apply_settings_document_yaml, export_settings_document_yaml
 except ModuleNotFoundError:
     from deps import get_runtime  # type: ignore[no-redef]
     from runtime_state import RuntimeConfig  # type: ignore[no-redef]

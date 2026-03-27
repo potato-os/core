@@ -8,13 +8,13 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from app.update_state import _find_update_root
+from core.update_state import _find_update_root
 from tests.unit.conftest import REPO_ROOT
 
 
 def _build_fake_app_tree(root: Path) -> None:
-    """Create a minimal app/ + bin/ + requirements.txt tree for packaging tests."""
-    app = root / "app"
+    """Create a minimal core/ + bin/ + requirements.txt tree for packaging tests."""
+    app = root / "core"
     app.mkdir(parents=True)
     (app / "__init__.py").write_text("", encoding="utf-8")
     (app / "__version__.py").write_text('__version__ = "0.5.0"\n', encoding="utf-8")
@@ -49,7 +49,7 @@ def _package_ota_tarball(source_root: Path, staging: Path, version: str) -> Path
     prefix.mkdir(parents=True)
 
     env = {**os.environ, "COPYFILE_DISABLE": "1"}
-    subprocess.run(["cp", "-a", str(source_root / "app"), str(prefix / "app")], check=True, env=env)
+    subprocess.run(["cp", "-a", str(source_root / "core"), str(prefix / "core")], check=True, env=env)
     subprocess.run(["cp", "-a", str(source_root / "bin"), str(prefix / "bin")], check=True, env=env)
     subprocess.run(["cp", str(source_root / "requirements.txt"), str(prefix / "requirements.txt")], check=True)
 
@@ -89,7 +89,7 @@ def test_ota_tarball_name_follows_convention():
 
 
 def test_ota_tarball_contains_app_and_bin(tmp_path):
-    """Tarball includes potato-os-<version>/app/ and potato-os-<version>/bin/."""
+    """Tarball includes potato-os-<version>/core/ and potato-os-<version>/bin/."""
     source = tmp_path / "source"
     source.mkdir()
     _build_fake_app_tree(source)
@@ -101,9 +101,9 @@ def test_ota_tarball_contains_app_and_bin(tmp_path):
     with tarfile.open(tarball, "r:gz") as tf:
         names = tf.getnames()
 
-    assert "potato-os-0.5.0/app/__version__.py" in names
-    assert "potato-os-0.5.0/app/main.py" in names
-    assert "potato-os-0.5.0/app/assets/chat.html" in names
+    assert "potato-os-0.5.0/core/__version__.py" in names
+    assert "potato-os-0.5.0/core/main.py" in names
+    assert "potato-os-0.5.0/core/assets/chat.html" in names
     assert "potato-os-0.5.0/bin/run.sh" in names
     assert "potato-os-0.5.0/bin/install_dev.sh" in names
     assert "potato-os-0.5.0/bin/lib/build_helpers.sh" in names
@@ -162,7 +162,7 @@ def test_ota_tarball_extracts_with_find_update_root(tmp_path):
     subprocess.run(["tar", "-xzf", str(tarball), "-C", str(extract_dir)], check=True)
 
     root = _find_update_root(extract_dir)
-    assert (root / "app").is_dir()
+    assert (root / "core").is_dir()
     assert (root / "bin").is_dir()
     assert (root / "requirements.txt").is_file()
 
@@ -213,7 +213,7 @@ def test_publish_ota_script_tolerates_existing_remote_tag():
 
 def test_publish_ota_dry_run_produces_tarball_and_checksum(tmp_path: Path):
     """--dry-run builds the tarball and checksum without publishing."""
-    from app.__version__ import __version__
+    from core.__version__ import __version__
 
     env = os.environ.copy()
     env["POTATO_GITHUB_REPO"] = "test/repo"
@@ -235,7 +235,7 @@ def test_publish_ota_dry_run_produces_tarball_and_checksum(tmp_path: Path):
 
     with tf.open(str(tarball), "r:gz") as tar:
         names = tar.getnames()
-    assert any("app/" in n for n in names)
+    assert any("core/" in n for n in names)
     assert any("bin/" in n for n in names)
 
     checksum_text = checksum.read_text(encoding="utf-8").strip()
@@ -244,7 +244,7 @@ def test_publish_ota_dry_run_produces_tarball_and_checksum(tmp_path: Path):
 
 def test_publish_ota_dry_run_excludes_macos_resource_forks(tmp_path: Path):
     """OTA tarball must not contain ._ AppleDouble entries (macOS resource forks)."""
-    from app.__version__ import __version__
+    from core.__version__ import __version__
 
     env = os.environ.copy()
     env["POTATO_GITHUB_REPO"] = "test/repo"
@@ -280,7 +280,7 @@ def test_publish_ota_dry_run_rejects_invalid_version(tmp_path: Path):
 
 
 def test_publish_ota_dry_run_rejects_version_mismatch(tmp_path: Path):
-    """Tag version that doesn't match app/__version__.py must fail."""
+    """Tag version that doesn't match core/__version__.py must fail."""
     env = os.environ.copy()
     env["POTATO_GITHUB_REPO"] = "test/repo"
     result = subprocess.run(

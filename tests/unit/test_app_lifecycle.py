@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from app import main
+from core import main
 
 
 class _FakeTask:
@@ -165,7 +165,7 @@ def test_terminate_process_raises_when_kill_also_times_out(monkeypatch) -> None:
 
 
 def test_consecutive_failure_counter_initialized_on_app():
-    from app.main import create_app, RuntimeConfig
+    from core.main import create_app, RuntimeConfig
 
     app = create_app(enable_orchestrator=False)
     assert hasattr(app.state, "llama_consecutive_failures")

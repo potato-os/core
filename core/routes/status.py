@@ -10,8 +10,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 try:
-    from app.deps import get_runtime
-    from app.runtime_state import RuntimeConfig
+    from core.deps import get_runtime
+    from core.runtime_state import RuntimeConfig
 except ModuleNotFoundError:
     from deps import get_runtime  # type: ignore[no-redef]
     from runtime_state import RuntimeConfig  # type: ignore[no-redef]

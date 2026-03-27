@@ -16,11 +16,11 @@ Potato OS provides app-level OTA updates (see below) but does not yet offer a on
 
 ## OTA Update Recovery
 
-Potato OS supports app-level OTA updates that replace `app/` and `bin/` on the device. The updater creates a backup before applying changes and attempts automatic rollback on failure.
+Potato OS supports app-level OTA updates that replace `core/` and `bin/` on the device. The updater creates a backup before applying changes and attempts automatic rollback on failure.
 
 ### What the updater backs up
 
-Before overwriting live files, the updater copies the current `app/` and `bin/` directories (plus `app/requirements.txt`) to a staging backup at `/opt/potato/.update_staging/_backup/`. This backup is used for automatic rollback if the apply or pip install step fails.
+Before overwriting live files, the updater copies the current `core/` and `bin/` directories (plus `core/requirements.txt`) to a staging backup at `/opt/potato/.update_staging/_backup/`. This backup is used for automatic rollback if the apply or pip install step fails.
 
 ### Auto-recovered failures (no action needed)
 
@@ -52,10 +52,10 @@ export SSHPASS=raspberry
 sshpass -e ssh -o StrictHostKeyChecking=accept-new pi@potato.local \
   "echo raspberry | sudo -S chown -R pi:pi /opt/potato/app"
 
-# Rsync known-good app/ from your checkout
+# Rsync known-good core/ from your checkout
 sshpass -e rsync -az --delete \
   -e "ssh -o StrictHostKeyChecking=accept-new" \
-  app/ pi@potato.local:/opt/potato/app/
+  core/ pi@potato.local:/opt/potato/app/
 
 # Restart the service
 sshpass -e ssh -o StrictHostKeyChecking=accept-new pi@potato.local \
@@ -69,12 +69,12 @@ Reflash the SD card if:
 - Both the update apply and the automatic backup restore failed (system in unknown state)
 - The service repeatedly fails to start after manual re-deploy attempts
 - You need to roll back to a clean baseline with no risk of leftover state
-- The update changed system-level files outside `app/` and `bin/` (not currently supported, but guard against future changes)
+- The update changed system-level files outside `core/` and `bin/` (not currently supported, but guard against future changes)
 
 ### Known limitations
 
 - There is no one-click rollback button in the UI. If automatic rollback fails, recovery requires SSH access.
-- The updater only replaces `app/` and `bin/`. System packages, kernel, firmware, nginx config, and systemd units are not updated by OTA.
+- The updater only replaces `core/` and `bin/`. System packages, kernel, firmware, nginx config, and systemd units are not updated by OTA.
 - If the Pi loses power during the apply phase (after backup, before restart), the system may be left with partially applied code. SSH re-deploy or reflash is the recovery path.
 - The staging backup is removed after a successful restart. There is no persistent rollback snapshot.
 
@@ -136,4 +136,4 @@ It does not provide:
 - automatic rollback of system configuration changes
 - recovery of data that was not backed up first
 
-App-level OTA updates are now supported for routine `app/` and `bin/` changes. For full-system upgrades (kernel, firmware, system packages), reflashing remains the expected path.
+App-level OTA updates are now supported for routine `core/` and `bin/` changes. For full-system upgrades (kernel, firmware, system packages), reflashing remains the expected path.

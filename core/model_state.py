@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 try:
-    from app.runtime_state import RuntimeConfig, _atomic_write_json, _read_pi_device_model_name, classify_runtime_device
+    from core.runtime_state import RuntimeConfig, _atomic_write_json, _read_pi_device_model_name, classify_runtime_device
 except ModuleNotFoundError:
     from runtime_state import RuntimeConfig, _atomic_write_json, _read_pi_device_model_name, classify_runtime_device  # type: ignore[no-redef]
 
@@ -694,7 +694,7 @@ def download_default_projector_for_model(*, runtime: RuntimeConfig, model_id: st
     import httpx
 
     try:
-        from app.constants import projector_repo_for_model
+        from core.constants import projector_repo_for_model
     except ModuleNotFoundError:
         from constants import projector_repo_for_model  # type: ignore[no-redef]
 

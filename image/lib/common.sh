@@ -159,16 +159,19 @@ build_stage_payload() {
   local files_root="${stage_path}/00-potato/files"
   local potato_root="${files_root}/opt/potato"
   local bundle_root="${POTATO_LLAMA_BUNDLE_ROOT:-${repo_root}/references/old_reference_design/llama_cpp_binary}"
-  mkdir -p "${potato_root}/app" "${potato_root}/bin" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama" "${potato_root}/runtimes"
+  mkdir -p "${potato_root}/core" "${potato_root}/bin" "${potato_root}/apps" "${potato_root}/data" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama" "${potato_root}/runtimes"
   # Git does not preserve directory modes, and local umask can make files/opt too restrictive.
   # Normalize stage payload directories so the flashed image keeps /opt traversable by service users.
-  chmod 0755 "${files_root}/opt" "${potato_root}" "${potato_root}/app" "${potato_root}/bin" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama" "${potato_root}/runtimes"
+  chmod 0755 "${files_root}/opt" "${potato_root}" "${potato_root}/core" "${potato_root}/bin" "${potato_root}/apps" "${potato_root}/data" "${potato_root}/systemd" "${potato_root}/nginx" "${potato_root}/models" "${potato_root}/state" "${potato_root}/config" "${potato_root}/llama" "${potato_root}/runtimes"
 
-  rsync -a "${repo_root}/app/" "${potato_root}/app/"
+  rsync -a "${repo_root}/core/" "${potato_root}/core/"
   rsync -a "${repo_root}/bin/" "${potato_root}/bin/"
+  if [ -d "${repo_root}/apps" ]; then
+    rsync -a "${repo_root}/apps/" "${potato_root}/apps/"
+  fi
   rsync -a "${repo_root}/systemd/" "${potato_root}/systemd/"
   rsync -a "${repo_root}/nginx/" "${potato_root}/nginx/"
-  install -m 0644 "${repo_root}/requirements.txt" "${potato_root}/app/requirements.txt"
+  install -m 0644 "${repo_root}/requirements.txt" "${potato_root}/core/requirements.txt"
 
   for _notice_file in LICENSE THIRD_PARTY_NOTICES.md; do
     if [ -f "${repo_root}/${_notice_file}" ]; then

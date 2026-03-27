@@ -60,7 +60,7 @@ if [ ! -x /opt/potato/venv/bin/python ]; then
   python3 -m venv /opt/potato/venv
 fi
 /opt/potato/venv/bin/pip install --upgrade pip
-/opt/potato/venv/bin/pip install -r /opt/potato/app/requirements.txt
+/opt/potato/venv/bin/pip install -r /opt/potato/core/requirements.txt
 
 chown -R potato:potato /opt/potato
 chmod 0755 /opt /opt/potato

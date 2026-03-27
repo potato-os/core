@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.main import CHAT_HTML, WEB_ASSETS_DIR
+from core.main import CHAT_HTML, WEB_ASSETS_DIR
 
 CHAT_CSS = (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8")
 CHAT_JS = (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8")

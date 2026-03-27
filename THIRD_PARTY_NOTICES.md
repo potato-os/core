@@ -82,7 +82,7 @@ SOFTWARE.
 - **Version:** 17.0.3
 - **License:** MIT
 - **Bundled in:** OTA tarballs, Pi images
-- **What ships:** `app/assets/vendor/marked.umd.js`
+- **What ships:** `core/assets/vendor/marked.umd.js`
 
 ```
 MIT License
@@ -117,7 +117,7 @@ SOFTWARE.
 - **Version:** 3.3.1
 - **License:** Apache-2.0 OR MPL-2.0 (dual-licensed)
 - **Bundled in:** OTA tarballs, Pi images
-- **What ships:** `app/assets/vendor/purify.min.js`
+- **What ships:** `core/assets/vendor/purify.min.js`
 
 DOMPurify is dual-licensed. Potato OS redistributes it under the
 Apache License 2.0, consistent with this project's own license.
@@ -136,7 +136,7 @@ https://github.com/cure53/DOMPurify/blob/3.3.1/LICENSE
 - **Upstream:** <https://github.com/xtermjs/xterm.js>
 - **License:** MIT
 - **Bundled in:** OTA tarballs, Pi images
-- **What ships:** `app/assets/vendor/xterm/xterm.mjs`, `addon-fit.mjs`, `addon-webgl.mjs`, `xterm.css`
+- **What ships:** `core/assets/vendor/xterm/xterm.mjs`, `addon-fit.mjs`, `addon-webgl.mjs`, `xterm.css`
 
 ```
 MIT License

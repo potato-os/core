@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 try:
-    from app.repositories import (
+    from core.repositories import (
         BackendProxyError,
         ChatRepositoryManager,
         FakeLlamaRepository,
@@ -33,11 +33,11 @@ except ModuleNotFoundError:
     )
 
 try:
-    from app.constants import (
+    from core.constants import (
         is_qwen35_filename,
         projector_repo_for_model,
     )
-    from app.model_state import (
+    from core.model_state import (
         DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
         MODEL_FILENAME_PI4,
@@ -74,7 +74,7 @@ try:
         _unique_filename,
         _unique_model_id,
     )
-    from app.update_state import (
+    from core.update_state import (
         build_update_status,
         check_for_update,
         cleanup_staging,
@@ -89,7 +89,7 @@ try:
         staging_dir,
         write_execution_state,
     )
-    from app.runtime_state import (
+    from core.runtime_state import (
         LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME,
         MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES,
         POWER_CALIBRATION_DEFAULT_A,
@@ -418,13 +418,13 @@ async def refresh_llama_readiness(
 
 
 try:
-    from app.deps import get_runtime, get_chat_repository  # noqa: F811
+    from core.deps import get_runtime, get_chat_repository  # noqa: F811
 except ModuleNotFoundError:
     from deps import get_runtime, get_chat_repository  # type: ignore[no-redef]  # noqa: F811
 
 
 try:
-    from app.process import (
+    from core.process import (
         terminate_process as _terminate_process,
         terminate_stray_llama_processes,
     )
@@ -728,7 +728,7 @@ def _build_status_fs(
     )
 
     try:
-        from app.__version__ import __version__ as _app_version
+        from core.__version__ import __version__ as _app_version
     except ModuleNotFoundError:
         from __version__ import __version__ as _app_version  # type: ignore[no-redef]
 
@@ -1598,7 +1598,7 @@ def shutil_which(cmd: str) -> str | None:
 
 
 try:
-    from app.settings import (
+    from core.settings import (
         apply_settings_document_yaml,
         build_settings_document_payload,
         export_settings_document_yaml,
@@ -1650,9 +1650,33 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 orchestrator_loop(app, app.state.runtime),
                 name="potato-orchestrator",
             )
+        if app.state.runtime.enable_orchestrator and (app.state.runtime.base_dir / "apps").is_dir():
+            try:
+                from core.app_supervisor import app_supervisor_loop
+            except ModuleNotFoundError:
+                from app_supervisor import app_supervisor_loop  # type: ignore[no-redef]
+            app.state.app_supervisor_task = asyncio.create_task(
+                app_supervisor_loop(app, app.state.runtime),
+                name="potato-app-supervisor",
+            )
         try:
             yield
         finally:
+            supervisor_task = app.state.app_supervisor_task
+            if supervisor_task is not None:
+                supervisor_task.cancel()
+                try:
+                    await supervisor_task
+                except asyncio.CancelledError:
+                    pass
+
+            for inst in app.state.app_instances.values():
+                if inst.process is not None and inst.process.returncode is None:
+                    try:
+                        await _terminate_process(inst.process, timeout=10.0)
+                    except (asyncio.TimeoutError, OSError):
+                        logger.critical("App %s did not exit during shutdown", inst.manifest.id)
+
             task = app.state.orchestrator_task
             if task is not None:
                 task.cancel()
@@ -1693,7 +1717,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                     pass
 
     try:
-        from app.__version__ import __version__ as _app_version
+        from core.__version__ import __version__ as _app_version
     except ModuleNotFoundError:
         from __version__ import __version__ as _app_version  # type: ignore[no-redef]
 
@@ -1720,6 +1744,8 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.state.llama_consecutive_failures = 0
     app.state.startup_monotonic = None
     app.state.orchestrator_task = None
+    app.state.app_instances: dict = {}
+    app.state.app_supervisor_task = None
     app.state.chat_repository = ChatRepositoryManager(
         llama=LlamaCppRepository(app.state.runtime.llama_base_url),
         fake=FakeLlamaRepository(),
@@ -1730,13 +1756,14 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
 
     # Routes — extracted to app/routes/*.py
     try:
-        from app.routes.chat import router as chat_router, register_chat_helpers
-        from app.routes.settings import router as settings_router, register_settings_helpers
-        from app.routes.status import router as status_router, register_status_helpers
-        from app.routes.runtime import router as runtime_router, register_runtime_helpers
-        from app.routes.models import router as models_router, register_models_helpers
-        from app.routes.update import router as update_router, register_update_helpers
-        from app.routes.terminal import router as terminal_router, register_terminal_helpers
+        from core.routes.chat import router as chat_router, register_chat_helpers
+        from core.routes.settings import router as settings_router, register_settings_helpers
+        from core.routes.status import router as status_router, register_status_helpers
+        from core.routes.runtime import router as runtime_router, register_runtime_helpers
+        from core.routes.models import router as models_router, register_models_helpers
+        from core.routes.update import router as update_router, register_update_helpers
+        from core.routes.terminal import router as terminal_router, register_terminal_helpers
+        from core.routes.apps import router as apps_router
     except ModuleNotFoundError:
         from routes.chat import router as chat_router, register_chat_helpers  # type: ignore[no-redef]
         from routes.settings import router as settings_router, register_settings_helpers  # type: ignore[no-redef]
@@ -1745,6 +1772,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         from routes.models import router as models_router, register_models_helpers  # type: ignore[no-redef]
         from routes.update import router as update_router, register_update_helpers  # type: ignore[no-redef]
         from routes.terminal import router as terminal_router, register_terminal_helpers  # type: ignore[no-redef]
+        from routes.apps import router as apps_router  # type: ignore[no-redef]
 
     register_chat_helpers(
         build_status=build_status,
@@ -1768,6 +1796,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.include_router(models_router)
     app.include_router(update_router)
     app.include_router(terminal_router)
+    app.include_router(apps_router)
 
     return app
 

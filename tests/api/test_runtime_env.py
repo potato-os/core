@@ -5,8 +5,8 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
-from app.model_state import build_model_projector_status
+from core.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
+from core.model_state import build_model_projector_status
 
 
 async def _healthy_true(_runtime):
