@@ -91,7 +91,7 @@ IMAGE_SIZE="$(wc -c < "${IMAGE_FILE}" | tr -d ' ')"
 # ── Read version from canonical source ─────────────────────────────────
 APP_VERSION="$(python3 -c "
 import sys; sys.path.insert(0, '${REPO_ROOT}')
-from app.__version__ import __version__; print(__version__)
+from core.__version__ import __version__; print(__version__)
 ")"
 
 # ── Build release asset URLs ───────────────────────────────────────────

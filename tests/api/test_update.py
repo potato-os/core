@@ -7,9 +7,9 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.__version__ import __version__
-from app.main import create_app, get_runtime
-from app.update_state import write_execution_state
+from core.__version__ import __version__
+from core.main import create_app, get_runtime
+from core.update_state import write_execution_state
 
 # Derive test versions from the real app version so tests don't break on bumps.
 _major, _minor, _patch = (int(x) for x in __version__.split("-")[0].split("."))
@@ -31,7 +31,7 @@ def test_update_check_returns_200_on_success(runtime, monkeypatch):
     app.dependency_overrides[get_runtime] = lambda: runtime
 
     async def _mock_check(_rt):
-        from app.runtime_state import _atomic_write_json
+        from core.runtime_state import _atomic_write_json
 
         state = {
             "available": True,
@@ -46,7 +46,7 @@ def test_update_check_returns_200_on_success(runtime, monkeypatch):
         _atomic_write_json(_rt.update_state_path, state)
         return state
 
-    monkeypatch.setattr("app.routes.update.check_for_update", _mock_check)
+    monkeypatch.setattr("core.routes.update.check_for_update", _mock_check)
 
     with TestClient(app) as c:
         response = c.post("/internal/update/check")
@@ -75,7 +75,7 @@ def test_update_check_returns_409_during_active_execution(runtime):
 
 
 def test_status_includes_update_key_with_default_shape(client, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
     response = client.get("/status")
     assert response.status_code == 200
     body = response.json()
@@ -106,7 +106,7 @@ def test_status_update_populated_after_check(runtime, monkeypatch):
 
     app = create_app(runtime=runtime, enable_orchestrator=False)
     app.dependency_overrides[get_runtime] = lambda: runtime
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     with TestClient(app) as c:
         response = c.get("/status")
@@ -126,7 +126,7 @@ def test_status_update_deferred_when_download_active(runtime, monkeypatch):
 
     app = create_app(runtime=runtime, enable_orchestrator=False)
     app.dependency_overrides[get_runtime] = lambda: runtime
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     with TestClient(app) as c:
         response = c.get("/status")
@@ -163,8 +163,8 @@ def test_update_start_returns_409_when_no_update_available(runtime, monkeypatch)
 
 
 def _patch_version(monkeypatch, version: str = TEST_CURRENT_VERSION) -> None:
-    monkeypatch.setattr("app.update_state.__version__", version)
-    monkeypatch.setattr("app.routes.update.__version__", version)
+    monkeypatch.setattr("core.update_state.__version__", version)
+    monkeypatch.setattr("core.routes.update.__version__", version)
 
 
 def test_update_start_returns_409_when_no_tarball_url(runtime, monkeypatch):
@@ -284,7 +284,7 @@ def test_update_start_returns_200_and_starts(runtime, monkeypatch):
     async def _mock_run_update(_app, _runtime, _url, _version):
         pass
 
-    monkeypatch.setattr("app.routes.update.run_update", _mock_run_update)
+    monkeypatch.setattr("core.routes.update.run_update", _mock_run_update)
 
     with TestClient(app) as c:
         response = c.post("/internal/update/start")
@@ -305,7 +305,7 @@ def test_status_update_reflects_downloading(runtime, monkeypatch):
 
     app = create_app(runtime=runtime, enable_orchestrator=False)
     app.dependency_overrides[get_runtime] = lambda: runtime
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     with TestClient(app) as c:
         response = c.get("/status")
@@ -327,7 +327,7 @@ def test_status_update_reflects_failed(runtime, monkeypatch):
 
     app = create_app(runtime=runtime, enable_orchestrator=False)
     app.dependency_overrides[get_runtime] = lambda: runtime
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     with TestClient(app) as c:
         response = c.get("/status")

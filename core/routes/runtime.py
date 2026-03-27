@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 try:
-    from app.deps import get_runtime
-    from app.runtime_state import (
+    from core.deps import get_runtime
+    from core.runtime_state import (
         RuntimeConfig,
         build_large_model_compatibility,
         build_llama_memory_loading_status,

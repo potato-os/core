@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.main import CHAT_HTML, WEB_ASSETS_DIR
+from core.main import CHAT_HTML, WEB_ASSETS_DIR
 
 CHAT_CSS = (WEB_ASSETS_DIR / "chat.css").read_text(encoding="utf-8")
 CHAT_JS = (WEB_ASSETS_DIR / "chat.js").read_text(encoding="utf-8")
@@ -420,7 +420,7 @@ def test_gitignore_excludes_large_artifacts_and_model_downloads():
 
 def test_web_favicon_exists_and_html_wires_it():
     favicon_path = WEB_ASSETS_DIR / "favicon.svg"
-    assert favicon_path.exists(), "app/assets/favicon.svg must exist"
+    assert favicon_path.exists(), "core/assets/favicon.svg must exist"
 
     assert '<link rel="icon"' in CHAT_HTML
     assert 'href="/assets/favicon.svg"' in CHAT_HTML

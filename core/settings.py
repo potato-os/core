@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 try:
-    from app.model_state import (
+    from core.model_state import (
         DEFAULT_MODEL_CHAT_SETTINGS,
         ModelSettingsValidationError,
         ensure_models_state,
@@ -16,7 +16,7 @@ try:
         normalize_model_settings,
         save_models_state,
     )
-    from app.runtime_state import (
+    from core.runtime_state import (
         RuntimeConfig,
         normalize_allow_unsupported_large_models,
         normalize_llama_memory_loading_mode,

@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
+from core.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
 
 
 async def _healthy_true(_runtime):
@@ -15,7 +15,7 @@ async def _healthy_true(_runtime):
 def test_status_includes_models_payload(runtime, monkeypatch):
     app = create_app(runtime=runtime, enable_orchestrator=False)
     app.dependency_overrides[get_runtime] = lambda: runtime
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
 
     with TestClient(app) as client:
         response = client.get("/status")
@@ -109,10 +109,10 @@ def test_purge_models_clears_files_and_model_metadata(runtime):
 
 def test_purge_models_sets_pi4_model_path_on_pi4(runtime, monkeypatch):
     """P1: After purge on Pi 4, runtime.model_path must point at the 0.8B default, not 2B."""
-    from app.model_state import MODEL_FILENAME_PI4
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
-    monkeypatch.setattr("app.model_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    from core.model_state import MODEL_FILENAME_PI4
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.model_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
 
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
@@ -208,8 +208,8 @@ def test_purge_models_returns_timeout_when_upload_cancel_does_not_finish(runtime
     async def _restart_should_not_run(_app):
         raise AssertionError("purge should not restart llama when upload cancel times out")
 
-    monkeypatch.setattr("app.main.MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS", 0.01, raising=False)
-    monkeypatch.setattr("app.main.restart_managed_llama_process", _restart_should_not_run)
+    monkeypatch.setattr("core.main.MODEL_UPLOAD_PURGE_WAIT_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr("core.main.restart_managed_llama_process", _restart_should_not_run)
 
     with TestClient(app) as client:
         app.state.model_upload_state.update({"active": True})

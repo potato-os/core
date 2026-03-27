@@ -17,7 +17,7 @@ def test_auto_mode_falls_back_to_fake_when_model_exists_but_llama_unhealthy(clie
     runtime.chat_backend_mode = "auto"
     runtime.allow_fake_fallback = True
     runtime.model_path.write_bytes(b"gguf")
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     response = client.get("/status")
     assert response.status_code == 200
@@ -32,7 +32,7 @@ def test_auto_mode_does_not_fallback_to_fake_when_disabled(client, runtime, monk
     runtime.chat_backend_mode = "auto"
     runtime.allow_fake_fallback = False
     runtime.model_path.write_bytes(b"gguf")
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     response = client.get("/status")
     assert response.status_code == 200

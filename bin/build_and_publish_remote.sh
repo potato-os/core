@@ -118,13 +118,14 @@ log_step "[2/5] Syncing repo to Pi"
 log_detail "Source:  ${REPO_ROOT}"
 log_detail "Target:  ${PI_USER}@${PI_HOST}:${REMOTE_REPO_DIR}"
 
-# Only sync what the build actually needs: bin/, app/, image/, systemd/, nginx/, tests/, configs
+# Only sync what the build actually needs: bin/, core/, apps/, image/, systemd/, nginx/, tests/, configs
 # Everything else (models, projectors, references, images, caches) stays behind
 _rsync --delete \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   --include 'bin/***' \
-  --include 'app/***' \
+  --include 'core/***' \
+  --include 'apps/***' \
   --include 'image/***' \
   --include 'systemd/***' \
   --include 'nginx/***' \

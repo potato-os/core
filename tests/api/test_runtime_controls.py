@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
+from core.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
 
 
 async def _healthy_true(_runtime):
@@ -60,8 +60,8 @@ def test_switch_llama_runtime_by_family_installs_slot_and_reports_status(runtime
     async def _fake_restart(_app):
         return False, "no_running_process"
 
-    monkeypatch.setattr("app.main.install_llama_runtime_bundle", _fake_install)
-    monkeypatch.setattr("app.main.restart_managed_llama_process", _fake_restart)
+    monkeypatch.setattr("core.main.install_llama_runtime_bundle", _fake_install)
+    monkeypatch.setattr("core.main.restart_managed_llama_process", _fake_restart)
 
     with TestClient(app) as client:
         response = client.post("/internal/llama-runtime/switch", json={"family": "ik_llama"})
@@ -98,10 +98,10 @@ def test_switch_llama_runtime_rejects_incompatible_family_on_pi4(runtime, monkey
             encoding="utf-8",
         )
 
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
-    monkeypatch.setattr("app.routes.runtime._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
-    monkeypatch.setattr("app.routes.runtime._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.routes.runtime._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.routes.runtime._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
 
     with TestClient(app) as client:
         response = client.post("/internal/llama-runtime/switch", json={"family": "ik_llama"})
@@ -120,7 +120,7 @@ def test_set_llama_memory_loading_mode_persists_and_restarts(runtime, monkeypatc
     async def _fake_restart(_app):
         return True, "terminated_running_process"
 
-    monkeypatch.setattr("app.main.restart_managed_llama_process", _fake_restart)
+    monkeypatch.setattr("core.main.restart_managed_llama_process", _fake_restart)
 
     with TestClient(app) as client:
         response = client.post(
@@ -145,9 +145,9 @@ def test_set_large_model_override_persists_without_restart(runtime, monkeypatch)
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)
     app.dependency_overrides[get_runtime] = lambda: runtime
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
-    monkeypatch.setattr("app.runtime_state.get_large_model_warn_threshold_bytes", lambda: 1)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.runtime_state.get_large_model_warn_threshold_bytes", lambda: 1)
     with runtime.model_path.open("wb") as handle:
         handle.seek((6 * 1024 * 1024 * 1024) - 1)
         handle.write(b"x")
@@ -196,7 +196,7 @@ def test_power_calibration_sample_fit_and_reset_persist_in_status(runtime, monke
             "error": None,
         }
 
-    monkeypatch.setattr("app.main._build_power_estimate_snapshot", _fake_power_snapshot)
+    monkeypatch.setattr("core.main._build_power_estimate_snapshot", _fake_power_snapshot)
 
     with TestClient(app) as client:
         s1 = client.post("/internal/power-calibration/sample", json={"wall_watts": 6.5})

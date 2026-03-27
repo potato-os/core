@@ -162,16 +162,19 @@ if getent group video >/dev/null 2>&1; then
   run_sudo usermod -a -G video "${POTATO_USER}"
 fi
 
-run_sudo mkdir -p "${TARGET_ROOT}"/{bin,app,models,state,config,llama}
+run_sudo mkdir -p "${TARGET_ROOT}"/{bin,core,apps,models,state,config,llama,data}
 run_sudo mkdir -p "${TARGET_ROOT}/nginx"
 normalize_runtime_dir_permissions
 
-run_sudo rsync -a "${REPO_ROOT}/app/" "${TARGET_ROOT}/app/"
+run_sudo rsync -a "${REPO_ROOT}/core/" "${TARGET_ROOT}/core/"
 run_sudo rsync -a "${REPO_ROOT}/bin/" "${TARGET_ROOT}/bin/"
+if [ -d "${REPO_ROOT}/apps" ]; then
+  run_sudo rsync -a "${REPO_ROOT}/apps/" "${TARGET_ROOT}/apps/"
+fi
 if [ -d "${REPO_ROOT}/nginx" ]; then
   run_sudo rsync -a "${REPO_ROOT}/nginx/" "${TARGET_ROOT}/nginx/"
 fi
-run_sudo install -m 0644 "${REPO_ROOT}/requirements.txt" "${TARGET_ROOT}/app/requirements.txt"
+run_sudo install -m 0644 "${REPO_ROOT}/requirements.txt" "${TARGET_ROOT}/core/requirements.txt"
 
 run_sudo chmod +x "${TARGET_ROOT}"/bin/*.sh
 run_sudo install -m 0644 "${REPO_ROOT}/systemd/potato.service" "${SERVICE_DIR}/potato.service"
@@ -206,7 +209,7 @@ if [ ! -x "${TARGET_ROOT}/venv/bin/python" ]; then
 fi
 
 run_sudo "${TARGET_ROOT}/venv/bin/pip" install --upgrade pip
-run_sudo "${TARGET_ROOT}/venv/bin/pip" install -r "${TARGET_ROOT}/app/requirements.txt"
+run_sudo "${TARGET_ROOT}/venv/bin/pip" install -r "${TARGET_ROOT}/core/requirements.txt"
 
 run_sudo chown -R "${POTATO_USER}:${POTATO_GROUP}" "${TARGET_ROOT}"
 normalize_runtime_dir_permissions

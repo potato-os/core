@@ -28,7 +28,7 @@ Options:
   -h, --help           Show this help.
 
 What this does:
-  1) Builds a Potato payload tarball (app/bin/systemd/nginx/etc + llama runtime bundle).
+  1) Builds a Potato payload tarball (core/bin/systemd/nginx/etc + llama runtime bundle).
   2) Writes potato/install_potato_from_bundle.sh.
   3) If bootfs is provided, injects a hook into firstrun.sh so first boot installs Potato automatically.
 EOF

@@ -16,8 +16,8 @@ from typing import Any, Callable
 import httpx
 
 try:
-    from app.__version__ import __version__
-    from app.runtime_state import RuntimeConfig, _atomic_write_json, read_download_progress
+    from core.__version__ import __version__
+    from core.runtime_state import RuntimeConfig, _atomic_write_json, read_download_progress
 except ModuleNotFoundError:
     from __version__ import __version__  # type: ignore[no-redef]
     from runtime_state import RuntimeConfig, _atomic_write_json, read_download_progress  # type: ignore[no-redef]
@@ -260,7 +260,7 @@ async def check_for_update(runtime: RuntimeConfig) -> dict[str, Any]:
 
 UPDATE_DOWNLOAD_TIMEOUT_SECONDS = 600
 UPDATE_STAGING_DIR_NAME = ".update_staging"
-UPDATE_APPLY_DIRS = ("app", "bin")
+UPDATE_APPLY_DIRS = ("core", "bin", "apps")
 
 EXECUTION_ACTIVE_STATES = frozenset({"downloading", "staging", "applying", "restart_pending"})
 
@@ -377,13 +377,13 @@ def _find_update_root(extracted_dir: Path) -> Path:
     Handles both flat layout (app/ directly in extracted_dir) and
     single-subdir layout (potato-os-0.5.0/app/ inside extracted_dir).
     """
-    if (extracted_dir / "app").is_dir():
+    if (extracted_dir / "core").is_dir():
         return extracted_dir
     children = [c for c in extracted_dir.iterdir() if c.is_dir()]
-    if len(children) == 1 and (children[0] / "app").is_dir():
+    if len(children) == 1 and (children[0] / "core").is_dir():
         return children[0]
     raise FileNotFoundError(
-        f"Cannot find app/ directory in extracted tarball at {extracted_dir}"
+        f"Cannot find core/ directory in extracted tarball at {extracted_dir}"
     )
 
 
@@ -446,7 +446,7 @@ def _backup_live_dirs(runtime: RuntimeConfig, backup_dir: Path) -> None:
         src = runtime.base_dir / dirname
         if src.is_dir():
             shutil.copytree(src, backup_dir / dirname)
-    req = runtime.base_dir / "app" / "requirements.txt"
+    req = runtime.base_dir / "core" / "requirements.txt"
     if req.is_file():
         shutil.copy2(req, backup_dir / "requirements.txt")
 
@@ -463,7 +463,7 @@ def _restore_from_backup(runtime: RuntimeConfig, backup_dir: Path) -> None:
         shutil.copytree(bak, dst)
     req_bak = backup_dir / "requirements.txt"
     if req_bak.is_file():
-        shutil.copy2(req_bak, runtime.base_dir / "app" / "requirements.txt")
+        shutil.copy2(req_bak, runtime.base_dir / "core" / "requirements.txt")
 
 
 async def apply_staged_update(runtime: RuntimeConfig, staged_dir: Path) -> None:
@@ -489,7 +489,7 @@ async def apply_staged_update(runtime: RuntimeConfig, staged_dir: Path) -> None:
         # Copy requirements.txt to app/ (install_dev.sh places it there)
         req_src = root / "requirements.txt"
         if req_src.is_file():
-            shutil.copy2(req_src, runtime.base_dir / "app" / "requirements.txt")
+            shutil.copy2(req_src, runtime.base_dir / "core" / "requirements.txt")
         # Set executable bits on shell scripts
         bin_dir = runtime.base_dir / "bin"
         if bin_dir.is_dir():
@@ -512,7 +512,7 @@ async def install_requirements(runtime: RuntimeConfig) -> None:
     """Run pip install for updated dependencies after apply."""
     import asyncio
 
-    req_path = runtime.base_dir / "app" / "requirements.txt"
+    req_path = runtime.base_dir / "core" / "requirements.txt"
     venv_pip = runtime.base_dir / "venv" / "bin" / "pip"
     if not req_path.exists() or not venv_pip.exists():
         return

@@ -6,7 +6,7 @@ import re
 
 
 def test_version_module_exports_semver_like_string():
-    from app.__version__ import __version__
+    from core.__version__ import __version__
 
     assert isinstance(__version__, str)
     assert len(__version__) > 0
@@ -15,8 +15,8 @@ def test_version_module_exports_semver_like_string():
 
 
 def test_fastapi_app_uses_canonical_version():
-    from app.__version__ import __version__
-    from app.main import create_app
+    from core.__version__ import __version__
+    from core.main import create_app
 
     app = create_app()
     assert app.version == __version__

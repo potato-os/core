@@ -2,13 +2,13 @@
 
 ## Project Structure & Module Organization
 
-Core application code lives in `app/`:
-- `app/main.py`: FastAPI entrypoint, API routes, orchestrator loop, lifespan.
-- `app/model_state.py`: Model registry, settings persistence, projector helpers.
-- `app/runtime_state.py`: Runtime config, dual-runtime slot discovery, system metrics, power calibration.
-- `app/repositories/`: Backend abstraction (real llama.cpp proxy and fake backend).
-- `app/constants/`: Model family detection, projector repo mapping.
-- `app/assets/`: Frontend — `chat.html`, `chat.css`, `chat.js` (single-file UI), vendor libs.
+Core application code lives in `core/`:
+- `core/main.py`: FastAPI entrypoint, API routes, orchestrator loop, lifespan.
+- `core/model_state.py`: Model registry, settings persistence, projector helpers.
+- `core/runtime_state.py`: Runtime config, dual-runtime slot discovery, system metrics, power calibration.
+- `core/repositories/`: Backend abstraction (real llama.cpp proxy and fake backend).
+- `core/constants/`: Model family detection, projector repo mapping.
+- `core/assets/`: Frontend — `chat.html`, `chat.css`, `chat.js` (single-file UI), vendor libs.
 
 Operational scripts are in `bin/`:
 - `run.sh`: Main entrypoint (systemd calls this).
@@ -18,7 +18,7 @@ Operational scripts are in `bin/`:
 - `prepare_imager_bundle.sh`: Packages SD card image payload.
 - `ensure_model.sh`: Bootstrap model download helper.
 - `publish_runtime.sh`: Packages, tags, and publishes a runtime slot to GitHub Releases.
-- `publish_ota_release.sh`: Packages app/ and bin/ into an OTA tarball and publishes to GitHub Releases. See [`docs/ota-releases.md`](docs/ota-releases.md).
+- `publish_ota_release.sh`: Packages core/ and bin/ into an OTA tarball and publishes to GitHub Releases. See [`docs/ota-releases.md`](docs/ota-releases.md).
 - `lib/runtime_release.sh`: Shared helpers for downloading runtimes from GitHub Releases.
 
 Service definitions in `systemd/`. Nginx config in `nginx/`. Image build in `image/`.
@@ -37,7 +37,7 @@ Tests are organized under `tests/`:
 
 ### Local development
 - `uv sync`: Create/sync local dev environment.
-- `POTATO_ENABLE_ORCHESTRATOR=0 uv run uvicorn app.main:app --host 0.0.0.0 --port 1983`: Run API locally.
+- `POTATO_ENABLE_ORCHESTRATOR=0 uv run uvicorn core.main:app --host 0.0.0.0 --port 1983`: Run API locally.
 
 ### Running tests (required before every push)
 - Python (unit + API): `uv run python -m pytest tests/unit tests/api -q -n auto`
@@ -46,7 +46,7 @@ Tests are organized under `tests/`:
 - First-time Playwright setup: `npx playwright install chromium`
 
 ### Pi deployment
-- Fast asset deploy: `sshpass -e rsync -az --delete --rsync-path="sudo rsync" -e "ssh -o StrictHostKeyChecking=accept-new" app/ pi@potato.local:/opt/potato/app/`
+- Fast asset deploy: `sshpass -e rsync -az --delete --rsync-path="sudo rsync" -e "ssh -o StrictHostKeyChecking=accept-new" core/ pi@potato.local:/opt/potato/app/`
 - Full install: `sshpass -e ssh pi@potato.local "cd /tmp/potato-os && sudo ./bin/install_dev.sh"`
 - Restart service: `sshpass -e ssh pi@potato.local "sudo systemctl restart potato"`
 

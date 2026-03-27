@@ -189,7 +189,7 @@ def test_model_download_does_not_inline_projector_download():
     writes that overwhelm SD card I/O on Pi 5."""
     import inspect
 
-    from app.main import start_model_download
+    from core.main import start_model_download
 
     source = inspect.getsource(start_model_download)
     assert "download_default_projector_for_model" not in source, (
@@ -202,7 +202,7 @@ def test_build_status_offloads_filesystem_io_to_thread():
     """build_status must use asyncio.to_thread to keep the event loop free."""
     import inspect
 
-    from app.main import build_status
+    from core.main import build_status
 
     source = inspect.getsource(build_status)
     assert "to_thread" in source, (
@@ -215,7 +215,7 @@ def test_get_status_download_context_is_async():
     """get_status_download_context must be async to use to_thread."""
     import inspect
 
-    from app.main import get_status_download_context
+    from core.main import get_status_download_context
 
     assert inspect.iscoroutinefunction(get_status_download_context), (
         "get_status_download_context must be async — "
@@ -227,7 +227,7 @@ def test_orchestrator_allows_llama_restart_during_download():
     """The orchestrator must not gate llama-server restart on download state."""
     import inspect
 
-    from app.main import orchestrator_loop
+    from core.main import orchestrator_loop
 
     source = inspect.getsource(orchestrator_loop)
     assert "active_model_is_present and not download_active" not in source, (

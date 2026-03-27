@@ -15,6 +15,7 @@ Restart=always
 RestartSec=2
 TimeoutStopSec=10
 KillMode=mixed
+RuntimeDirectory=potato
 StandardOutput=journal
 StandardError=journal
 

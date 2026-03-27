@@ -5,8 +5,8 @@ from typing import Any
 import httpx
 import pytest
 
-from app.repositories import chat_repository
-from app.repositories.chat_repository import BackendProxyError
+from core.repositories import chat_repository
+from core.repositories.chat_repository import BackendProxyError
 
 
 class _FakeUpstream:

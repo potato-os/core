@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
+from core.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
 
 
 async def _healthy_true(_runtime):
@@ -50,10 +50,10 @@ def test_register_model_url_returns_warning_for_large_model_on_unsupported_pi(ru
     async def _fake_size(_url: str) -> int:
         return 6 * 1024 * 1024 * 1024
 
-    monkeypatch.setattr("app.main.fetch_remote_content_length_bytes", _fake_size)
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
-    monkeypatch.setattr("app.runtime_state.get_large_model_warn_threshold_bytes", lambda: 1)
+    monkeypatch.setattr("core.main.fetch_remote_content_length_bytes", _fake_size)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.runtime_state.get_large_model_warn_threshold_bytes", lambda: 1)
 
     with TestClient(app) as client:
         response = client.post(
@@ -89,9 +89,9 @@ def test_upload_returns_warning_for_large_model_on_unsupported_pi(runtime, monke
     app = create_app(runtime=runtime, enable_orchestrator=True)
     app.dependency_overrides[get_runtime] = lambda: runtime
 
-    monkeypatch.setattr("app.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
-    monkeypatch.setattr("app.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
-    monkeypatch.setattr("app.runtime_state.get_large_model_warn_threshold_bytes", lambda: 1)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.5")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.runtime_state.get_large_model_warn_threshold_bytes", lambda: 1)
 
     with TestClient(app) as client:
         response = client.post(
@@ -253,8 +253,8 @@ def test_delete_model_cancels_active_download_for_same_model(runtime, monkeypatc
         app.state.model_download_task = None
         return True, "cancelled"
 
-    monkeypatch.setattr("app.main.is_download_task_active", lambda task: task is task_sentinel)
-    monkeypatch.setattr("app.main._cancel_model_download_locked", _fake_cancel)
+    monkeypatch.setattr("core.main.is_download_task_active", lambda task: task is task_sentinel)
+    monkeypatch.setattr("core.main._cancel_model_download_locked", _fake_cancel)
 
     with TestClient(app) as client:
         reg = client.post(
@@ -298,8 +298,8 @@ def test_delete_model_returns_conflict_when_cancel_active_download_times_out(run
     async def _fake_cancel(_app, _runtime, **_kwargs):
         return False, "cancel_timeout"
 
-    monkeypatch.setattr("app.main.is_download_task_active", lambda task: task is task_sentinel)
-    monkeypatch.setattr("app.main._cancel_model_download_locked", _fake_cancel)
+    monkeypatch.setattr("core.main.is_download_task_active", lambda task: task is task_sentinel)
+    monkeypatch.setattr("core.main._cancel_model_download_locked", _fake_cancel)
 
     with TestClient(app) as client:
         reg = client.post(

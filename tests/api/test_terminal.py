@@ -9,7 +9,7 @@ import warnings
 
 import pytest
 
-from app.main import create_app, get_runtime
+from core.main import create_app, get_runtime
 
 # pty.fork() is Unix-only — skip the entire module on Windows.
 pytestmark = [
@@ -92,7 +92,7 @@ def test_terminal_resize(terminal_client):
 
 
 def test_terminal_session_limit(terminal_client):
-    from app.routes.terminal import MAX_TERMINAL_SESSIONS
+    from core.routes.terminal import MAX_TERMINAL_SESSIONS
 
     # Open MAX sessions
     open_ws = []

@@ -4,11 +4,11 @@ import json
 
 import respx
 
-from app.main import save_models_state
+from core.main import save_models_state
 
 
 def test_chat_returns_503_when_not_ready(client, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_false)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
 
     response = client.post(
         "/v1/chat/completions",
@@ -21,7 +21,7 @@ def test_chat_returns_503_when_not_ready(client, monkeypatch):
 
 
 def test_chat_proxies_non_stream_when_ready(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
 
     with respx.mock(assert_all_called=True) as router:
@@ -47,7 +47,7 @@ def test_chat_proxies_non_stream_when_ready(client, runtime, monkeypatch):
 
 
 def test_chat_defaults_qwen35_to_non_thinking_when_not_explicit(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path = runtime.model_path.parent / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
     runtime.model_path.write_bytes(b"gguf")
     _set_active_model_ready(runtime, "qwen35-a3b", runtime.model_path.name)
@@ -76,7 +76,7 @@ def test_chat_defaults_qwen35_to_non_thinking_when_not_explicit(client, runtime,
 
 
 def test_chat_preserves_explicit_qwen35_thinking_override(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path = runtime.model_path.parent / "Qwen_Qwen3.5-35B-A3B-Q2_K_L.gguf"
     runtime.model_path.write_bytes(b"gguf")
     _set_active_model_ready(runtime, "qwen35-a3b", runtime.model_path.name)
@@ -109,7 +109,7 @@ def test_chat_preserves_explicit_qwen35_thinking_override(client, runtime, monke
 
 
 def test_chat_proxies_stream_when_ready(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
 
     stream_body = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
@@ -136,7 +136,7 @@ def test_chat_proxies_stream_when_ready(client, runtime, monkeypatch):
 
 
 def test_chat_proxies_multimodal_payload_when_ready(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
 
     request_payload = {
@@ -178,7 +178,7 @@ def test_chat_proxies_multimodal_payload_when_ready(client, runtime, monkeypatch
 
 
 def test_chat_proxies_seed_when_present(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
 
     request_payload = {
@@ -208,7 +208,7 @@ def test_chat_proxies_seed_when_present(client, runtime, monkeypatch):
 
 
 def test_chat_does_not_force_seed_when_absent(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
 
     request_payload = {
@@ -237,7 +237,7 @@ def test_chat_does_not_force_seed_when_absent(client, runtime, monkeypatch):
 
 
 def test_chat_applies_persisted_active_model_settings_when_request_omits_them(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
     save_models_state(
         runtime,
@@ -309,7 +309,7 @@ def test_chat_remains_available_when_active_model_is_healthy_but_download_error_
     runtime,
     monkeypatch,
 ):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
     runtime.models_state_path.write_text(
         json.dumps(
@@ -407,7 +407,7 @@ def _stream_response(status_code: int, payload: bytes):
 
 
 def test_chat_sets_cache_prompt_true_by_default(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
 
     request_payload = {
@@ -436,7 +436,7 @@ def test_chat_sets_cache_prompt_true_by_default(client, runtime, monkeypatch):
 
 
 def test_chat_does_not_forward_system_prompt_field(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
 
     request_payload = {
@@ -465,7 +465,7 @@ def test_chat_does_not_forward_system_prompt_field(client, runtime, monkeypatch)
 
 
 def test_chat_forwards_nonempty_system_prompt(client, runtime, monkeypatch):
-    monkeypatch.setattr("app.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
 
     request_payload = {
@@ -495,7 +495,7 @@ def test_chat_forwards_nonempty_system_prompt(client, runtime, monkeypatch):
 
 
 def test_cache_prompt_persists_in_model_settings():
-    from app.model_state import normalize_model_settings
+    from core.model_state import normalize_model_settings
 
     settings = normalize_model_settings(
         {"chat": {"cache_prompt": False}},

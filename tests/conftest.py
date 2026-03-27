@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import RuntimeConfig, create_app, get_runtime
+from core.main import RuntimeConfig, create_app, get_runtime
 
 
 @pytest.fixture
