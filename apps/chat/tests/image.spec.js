@@ -19,6 +19,17 @@ test("large image selection shows loading phases and optimization metadata", asy
     window.__POTATO_PREFILL_FINISH_DURATION_MS__ = 300;
     window.__POTATO_PREFILL_FINISH_HOLD_MS__ = 350;
   });
+
+  // Mock completion route with a delay so prefill UI is reliably visible
+  // under parallel test load (the real fake backend responds too fast).
+  await page.route("**/v1/chat/completions", async (route) => {
+    await new Promise((r) => setTimeout(r, 600));
+    await fulfillStreamingChat(route, {
+      content: "[fake-llama.cpp] Image response",
+      timings: { prompt_ms: 600, predicted_ms: 400, predicted_n: 10, predicted_per_second: 25 },
+    });
+  });
+
   await waitUntilReady(page);
 
   await page.locator("#imageInput").setInputFiles("tests/ui/fixtures/test-cat.jpg");
@@ -53,6 +64,9 @@ test("large image selection shows loading phases and optimization metadata", asy
 });
 
 test("image upload returns typing focus to prompt and keeps it after enter-send", async ({ page }) => {
+  await page.route("**/v1/chat/completions", (route) =>
+    fulfillStreamingChat(route, { content: "[fake-llama.cpp] Image focus test" })
+  );
   await waitUntilReady(page);
 
   await page.locator("#imageInput").setInputFiles("tests/ui/fixtures/test-cat.jpg");
@@ -294,7 +308,7 @@ test("image-send failures show friendly guidance and leave the composer ready fo
       return;
     }
 
-    await route.continue();
+    await fulfillStreamingChat(route, { content: "[fake-llama.cpp] Text-only follow-up" });
   });
 
   await waitUntilReady(page);
@@ -326,6 +340,8 @@ test("cancel image generation uses cancel endpoint and avoids restart endpoint",
   await page.addInitScript(() => {
     window.__POTATO_CANCEL_RECOVERY_DELAY_MS__ = 250;
   });
+  // Hold the response so the request stays in-flight until cancel fires
+  await page.route("**/v1/chat/completions", () => {});
   await waitUntilReady(page);
 
   const cancelCalls = [];

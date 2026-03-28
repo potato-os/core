@@ -15,6 +15,7 @@ const {
 
 
 test("seed mode defaults to random, toggles deterministic, persists, and controls request payload", async ({ page }) => {
+  await page.route("**/v1/chat/completions", (route) => fulfillStreamingChat(route));
   await waitUntilReady(page);
 
   const generationMode = page.locator("#generationMode");
@@ -86,6 +87,7 @@ test("seed mode defaults to random, toggles deterministic, persists, and control
 
 test("product chat requests still stream when saved model settings say stream false", async ({ page }) => {
   const promptField = page.locator("#userPrompt");
+  await page.route("**/v1/chat/completions", (route) => fulfillStreamingChat(route));
   await page.route("**/status", async (route) => {
     await route.fulfill({
       status: 200,
@@ -558,8 +560,7 @@ test("model-first settings save per model, yaml can be applied, and projector do
     });
   });
 
-  await page.goto("/");
-  await expect(page.locator("#composerForm")).toBeVisible({ timeout: 5000 });
+  await waitUntilReady(page);
   await openSettingsModal(page);
 
   await expect(page.locator("#settingsModelWorkspace")).toBeVisible();
@@ -808,7 +809,7 @@ test("model settings block cross-model actions until edits are saved or discarde
     });
   });
 
-  await page.goto("/");
+  await waitUntilReady(page);
   await openSettingsModal(page);
 
   await page.locator('#modelsList .model-row[data-model-id="default"]').click();
@@ -935,7 +936,7 @@ test("settings show installed projector state from canonical backend payload", a
     });
   });
 
-  await page.goto("/");
+  await waitUntilReady(page);
   await openSettingsModal(page);
 
   await expect(page.locator("#projectorStatusText")).toContainText("mmproj-F16.gguf");
@@ -983,7 +984,7 @@ test("add model by URL shows inline validation feedback", async ({ page }) => {
     });
   });
 
-  await page.goto("/");
+  await waitUntilReady(page);
   await openSettingsModal(page);
 
   await page.locator("#modelUrlInput").fill("http://example.com/bad-model.gguf");

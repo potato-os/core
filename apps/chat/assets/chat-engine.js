@@ -20,6 +20,9 @@ import { saveActiveSession } from "./session-manager.js";
     }
 
     export function formatChatFailureMessage(statusCode, body, requestCtx = {}) {
+      if (statusCode === 429) {
+        return "Potato is busy with another request. Try again in a moment.";
+      }
       const apiMessage = extractApiErrorMessage(body);
       const normalized = apiMessage.toLowerCase();
       if (

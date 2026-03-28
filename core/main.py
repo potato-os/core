@@ -1739,6 +1739,7 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.state.llama_readiness_state = _empty_llama_readiness_state()
     app.state.update_task = None
     app.state.update_lock = asyncio.Lock()
+    app.state.inference_lock = asyncio.Lock()
     app.state.terminal_sessions: dict = {}
     import secrets as _secrets
     app.state.terminal_token: str = _secrets.token_urlsafe(32)

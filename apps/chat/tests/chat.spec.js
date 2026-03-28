@@ -19,6 +19,13 @@ test("shows staged prefill estimate before first token and clears after generati
     window.__POTATO_PREFILL_FINISH_DURATION_MS__ = 300;
     window.__POTATO_PREFILL_FINISH_HOLD_MS__ = 350;
   });
+  await page.route("**/v1/chat/completions", async (route) => {
+    await new Promise((r) => setTimeout(r, 600));
+    await fulfillStreamingChat(route, {
+      content: "[fake-llama.cpp] Prefill test response",
+      timings: { prompt_ms: 600, predicted_ms: 400, predicted_n: 10, predicted_per_second: 25 },
+    });
+  });
   await waitUntilReady(page);
 
   await page.locator("#userPrompt").fill("Give me one sentence about Potato OS.");
@@ -131,6 +138,8 @@ test("assistant markdown strips remote resource tags while keeping safe formatti
 });
 
 test("cancel during prefill stops cleanly and shows stopped reason", async ({ page }) => {
+  // Hold the response so the UI stays in prefill state until cancel fires
+  await page.route("**/v1/chat/completions", () => {});
   await waitUntilReady(page);
 
   await page.locator("#userPrompt").fill("Explain distributed systems in detail.");
@@ -462,6 +471,7 @@ test("editing while a reply is generating cancels it and restarts from that turn
 
 
 test("chat request sends stream true and messages array to the backend", async ({ page }) => {
+  await page.route("**/v1/chat/completions", (route) => fulfillStreamingChat(route));
   await waitUntilReady(page);
 
   const requestPromise = page.waitForRequest("**/v1/chat/completions");
@@ -616,6 +626,35 @@ test("stream error before any tokens shows standard error message", async ({ pag
 
   const meta = page.locator(".message-row.assistant .message-meta").last();
   await expect(meta).toBeHidden();
+});
+
+// ── Concurrent completion guard (#197) ─────────────────────────────
+
+test("busy runtime shows friendly message on 429", async ({ page }) => {
+  await page.route("**/status", (route) =>
+    route.fulfill({ json: makeStatusPayload() })
+  );
+  await page.route("**/v1/chat/completions", (route) =>
+    route.fulfill({
+      status: 429,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          message: "A completion is already in progress. Try again shortly.",
+          type: "concurrent_request",
+          code: 429,
+        },
+      }),
+    })
+  );
+
+  await waitUntilReady(page);
+  await page.locator("#userPrompt").fill("Hello");
+  await page.locator("#userPrompt").press("Enter");
+
+  const bubble = page.locator(".message-row.assistant .message-bubble").last();
+  await expect(bubble).toContainText("Potato is busy");
+  await expect(page.locator("#sendBtn")).toHaveText("Send", { timeout: 5000 });
 });
 
 // ── Quick model switcher (#52) ──────────────────────────────────────

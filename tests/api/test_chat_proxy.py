@@ -406,6 +406,108 @@ def _stream_response(status_code: int, payload: bytes):
     )
 
 
+def _pre_locked():
+    """Return an asyncio.Lock whose locked() reports True."""
+    from unittest.mock import MagicMock
+    fake = MagicMock()
+    fake.locked.return_value = True
+    return fake
+
+
+def test_concurrent_completion_returns_429(client, monkeypatch):
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
+    client.app.state.inference_lock = _pre_locked()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "qwen", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert response.status_code == 429
+    body = response.json()
+    assert "error" in body
+    assert "message" in body["error"]
+
+
+def test_429_response_body_format(client, monkeypatch):
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
+    client.app.state.inference_lock = _pre_locked()
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "qwen", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    body = response.json()
+    assert body["error"]["type"] == "concurrent_request"
+    assert body["error"]["code"] == 429
+
+
+def test_lock_released_after_non_streaming_completion(client, runtime, monkeypatch):
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(
+                200,
+                {
+                    "id": "chatcmpl-lock",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                },
+            )
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "qwen", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert response.status_code == 200
+    assert not client.app.state.inference_lock.locked()
+
+
+def test_lock_released_after_streaming_completion(client, runtime, monkeypatch):
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    sse = b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n'
+    with respx.mock(assert_all_called=True) as router:
+        router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_stream_response(200, sse),
+        )
+        with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": "qwen",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        ) as response:
+            assert response.status_code == 200
+            _ = response.read()
+
+    assert not client.app.state.inference_lock.locked()
+
+
+def test_lock_released_on_backend_error(client, runtime, monkeypatch):
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
+    runtime.model_path.write_bytes(b"gguf")
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("http://llama.test:8080/v1/chat/completions").mock(
+            return_value=_json_response(500, {"error": "boom"}),
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "qwen", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert response.status_code == 500
+    assert not client.app.state.inference_lock.locked()
+
+
 def test_chat_sets_cache_prompt_true_by_default(client, runtime, monkeypatch):
     monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
     runtime.model_path.write_bytes(b"gguf")
