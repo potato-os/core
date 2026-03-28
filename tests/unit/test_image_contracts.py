@@ -11,7 +11,7 @@ def _read(directory, name):
     p = directory / name
     return p.read_text(encoding="utf-8") if p.exists() else ""
 
-CHAT_UI = CHAT_HTML + _read(_CHAT_APP_ASSETS, "chat.html") + _read(WEB_ASSETS_DIR, "chat.css") + _read(WEB_ASSETS_DIR, "shell.js") + _read(_CHAT_APP_ASSETS, "chat.js") + _read(_CHAT_APP_ASSETS, "chat-engine.js") + _read(_CHAT_APP_ASSETS, "messages.js") + _read(_CHAT_APP_ASSETS, "session-manager.js") + _read(_CHAT_APP_ASSETS, "image-handler.js") + _read(WEB_ASSETS_DIR, "settings-ui.js") + _read(WEB_ASSETS_DIR, "state.js") + _read(WEB_ASSETS_DIR, "utils.js") + _read(WEB_ASSETS_DIR, "status.js") + _read(WEB_ASSETS_DIR, "runtime-ui.js")
+CHAT_UI = CHAT_HTML + _read(_CHAT_APP_ASSETS, "chat.html") + _read(WEB_ASSETS_DIR, "shell.css") + _read(_CHAT_APP_ASSETS, "chat.css") + _read(WEB_ASSETS_DIR, "shell.js") + _read(_CHAT_APP_ASSETS, "chat.js") + _read(_CHAT_APP_ASSETS, "chat-engine.js") + _read(_CHAT_APP_ASSETS, "messages.js") + _read(_CHAT_APP_ASSETS, "session-manager.js") + _read(_CHAT_APP_ASSETS, "image-handler.js") + _read(WEB_ASSETS_DIR, "settings-ui.js") + _read(WEB_ASSETS_DIR, "state.js") + _read(WEB_ASSETS_DIR, "utils.js") + _read(WEB_ASSETS_DIR, "status.js") + _read(WEB_ASSETS_DIR, "runtime-ui.js")
 
 def test_nginx_config_allows_large_streaming_uploads():
     conf = Path("nginx/potato.conf").read_text(encoding="utf-8")

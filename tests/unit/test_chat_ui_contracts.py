@@ -100,3 +100,21 @@ def test_key_platform_functions_exist():
     assert "function setSidebarOpen(" in _PLATFORM_JS
     assert "function setStatus(" in _PLATFORM_JS
     assert "function showPlatformNotice(" in _PLATFORM_JS
+
+
+def test_platform_css_renamed_to_shell():
+    assert (WEB_ASSETS_DIR / "shell.css").exists(), "core/assets/shell.css must exist"
+    assert not (WEB_ASSETS_DIR / "chat.css").exists(), "core/assets/chat.css should not exist"
+
+
+def test_shell_html_references_shell_css():
+    assert 'href="/assets/shell.css"' in CHAT_HTML
+    assert 'href="/assets/chat.css"' not in CHAT_HTML
+
+
+def test_chat_app_css_has_chat_classes():
+    css = _read(_CHAT_APP_ASSETS, "chat.css")
+    assert ".messages" in css
+    assert ".composer" in css
+    assert ".edit-modal" in css
+    assert ".send-btn" in css

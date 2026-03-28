@@ -8,7 +8,7 @@ Core application code lives in `core/`:
 - `core/runtime_state.py`: Runtime config, dual-runtime slot discovery, system metrics, power calibration.
 - `core/repositories/`: Backend abstraction (real llama.cpp proxy and fake backend).
 - `core/constants/`: Model family detection, projector repo mapping.
-- `core/assets/`: Frontend — `chat.html`, `chat.css`, `chat.js` (single-file UI), vendor libs.
+- `core/assets/`: Frontend — `index.html`, `shell.css`, `shell.js` (platform shell), vendor libs.
 
 Operational scripts are in `bin/`:
 - `run.sh`: Main entrypoint (systemd calls this).
