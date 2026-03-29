@@ -102,6 +102,8 @@ All feature tickets are implemented TDD-first:
    - implementation commit,
    - docs/runbook updates commit.
 
+**Which tests drive TDD:** Unit tests (pytest) and API tests drive the red-green-refactor cycle — they're fast, isolated, and give sub-second feedback. Playwright/UI tests are for end-to-end integration verification only — keep them minimal (critical happy paths, not exhaustive coverage). For pure frontend tickets with no backend changes, build the implementation first and add a small number of Playwright smoke tests after.
+
 ## Local Dev Environment Rule
 
 For all local development work, always use `uv`.

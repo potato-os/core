@@ -18,10 +18,10 @@
     <span class="permitato-mode-label">Mode:</span>
     <span id="permitatoModeValue" class="permitato-mode-badge">--</span>
   </div>
-  <div class="permitato-exceptions">
+  <button id="permitatoExceptionsToggle" class="permitato-exceptions" type="button">
     <span id="permitatoExceptionCount" class="permitato-exception-count">0</span>
     <span class="permitato-exception-label">active exceptions</span>
-  </div>
+  </button>
   <div class="permitato-mode-toggle">
     <button class="permitato-mode-btn" data-mode="normal">Normal</button>
     <button class="permitato-mode-btn" data-mode="work">Work</button>
@@ -32,6 +32,14 @@
     <span id="permitatoPiholeLabel">Checking...</span>
   </div>
 </div>
+
+<section id="permitatoExceptionsPanel" class="permitato-exceptions-panel" hidden>
+  <div id="permitatoExceptionsDegraded" class="permitato-exceptions-degraded" hidden>
+    Pi-hole is unavailable — revoke may not take effect.
+  </div>
+  <ul id="permitatoExceptionsList" class="permitato-exceptions-list"></ul>
+  <div id="permitatoExceptionsEmpty" class="permitato-exceptions-empty">No active exceptions</div>
+</section>
 
 <section id="permitatoMessages" class="permitato-messages"></section>
 

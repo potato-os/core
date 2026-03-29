@@ -241,6 +241,25 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 8px;
+  margin: -2px 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.permitato-exceptions:hover {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.permitato-exceptions[aria-expanded="true"] {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .permitato-exception-count {
@@ -249,6 +268,110 @@
 
 .permitato-exception-label {
   color: var(--text-muted);
+}
+
+/* Exceptions panel */
+.permitato-exceptions-panel {
+  margin: 0 16px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.permitato-exceptions-panel[hidden] {
+  display: none;
+}
+
+.permitato-exceptions-degraded {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: #f59e0b;
+}
+
+.permitato-exceptions-degraded[hidden] {
+  display: none;
+}
+
+.permitato-exceptions-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.permitato-exceptions-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.exc-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.exc-domain {
+  font-weight: 500;
+}
+
+.exc-reason {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.exc-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.exc-ttl {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 60px;
+  text-align: right;
+}
+
+.exc-revoke-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.exc-revoke-btn:hover {
+  border-color: #ef4444;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.permitato-exceptions-empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 8px;
 }
 
 .permitato-pihole-status {

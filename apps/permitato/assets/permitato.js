@@ -7,6 +7,10 @@ let _requestInFlight = false;
 let _onboardingVisible = false;
 let _pendingClientSelection = false;
 let _lastClientFetchTs = 0;
+let _panelOpen = false;
+let _ttlTimer = null;
+let _latestExceptions = [];
+let _latestPiholeAvailable = true;
 
 const PERMITATO_API = "/app/permitato/api";
 
@@ -35,12 +39,16 @@ export function init(shellApi) {
   const reconfigBtn = document.getElementById("permitatoReconfigureBtn");
   if (reconfigBtn) reconfigBtn.addEventListener("click", () => _showOnboarding());
 
+  const excToggle = document.getElementById("permitatoExceptionsToggle");
+  if (excToggle) excToggle.addEventListener("click", _toggleExceptionsPanel);
+
   _pollStatus();
   _statusTimer = setInterval(_pollStatus, 5000);
   _loadSession();
 }
 
 export function destroy() {
+  _stopTtlTimer();
   if (_statusTimer) {
     clearInterval(_statusTimer);
     _statusTimer = null;
@@ -110,6 +118,11 @@ function _updateStatusBar(data) {
 
   const count = document.getElementById("permitatoExceptionCount");
   if (count) count.textContent = String(data.active_exceptions || 0);
+
+  // Store exception data for the panel
+  _latestExceptions = data.exceptions || [];
+  _latestPiholeAvailable = data.pihole_available !== false;
+  if (_panelOpen) _renderExceptions();
 
   const dot = document.getElementById("permitatoPiholeDot");
   const label = document.getElementById("permitatoPiholeLabel");
@@ -224,6 +237,112 @@ function _appendMessage(role, text) {
   container.appendChild(el);
   container.scrollTop = container.scrollHeight;
   return el;
+}
+
+// --- Exceptions panel ---
+
+function _toggleExceptionsPanel() {
+  _panelOpen = !_panelOpen;
+  const panel = document.getElementById("permitatoExceptionsPanel");
+  const toggle = document.getElementById("permitatoExceptionsToggle");
+  if (panel) panel.hidden = !_panelOpen;
+  if (toggle) toggle.setAttribute("aria-expanded", String(_panelOpen));
+  if (_panelOpen) {
+    _renderExceptions();
+    _startTtlTimer();
+  } else {
+    _stopTtlTimer();
+  }
+}
+
+function _renderExceptions() {
+  const list = document.getElementById("permitatoExceptionsList");
+  const empty = document.getElementById("permitatoExceptionsEmpty");
+  const degraded = document.getElementById("permitatoExceptionsDegraded");
+  if (!list) return;
+
+  if (degraded) degraded.hidden = _latestPiholeAvailable;
+
+  if (_latestExceptions.length === 0) {
+    list.innerHTML = "";
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  list.innerHTML = "";
+
+  for (const exc of _latestExceptions) {
+    const li = document.createElement("li");
+
+    const info = document.createElement("div");
+    info.className = "exc-info";
+    const domain = document.createElement("span");
+    domain.className = "exc-domain";
+    domain.textContent = exc.domain;
+    info.appendChild(domain);
+    if (exc.reason) {
+      const reason = document.createElement("span");
+      reason.className = "exc-reason";
+      reason.textContent = exc.reason;
+      info.appendChild(reason);
+    }
+    li.appendChild(info);
+
+    const right = document.createElement("div");
+    right.className = "exc-right";
+
+    const ttl = document.createElement("span");
+    ttl.className = "exc-ttl";
+    ttl.setAttribute("data-expires-at", String(exc.expires_at));
+    ttl.textContent = _formatTtl(exc.expires_at);
+    right.appendChild(ttl);
+
+    const btn = document.createElement("button");
+    btn.className = "exc-revoke-btn";
+    btn.textContent = "Revoke";
+    btn.addEventListener("click", () => _revokeException(exc.id));
+    right.appendChild(btn);
+
+    li.appendChild(right);
+    list.appendChild(li);
+  }
+}
+
+function _formatTtl(expiresAt) {
+  const remaining = Math.max(0, Math.floor(expiresAt - Date.now() / 1000));
+  if (remaining <= 0) return "expired";
+  const h = Math.floor(remaining / 3600);
+  const m = Math.floor((remaining % 3600) / 60);
+  const s = remaining % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function _startTtlTimer() {
+  _stopTtlTimer();
+  _ttlTimer = setInterval(_tickTtl, 1000);
+}
+
+function _stopTtlTimer() {
+  if (_ttlTimer) {
+    clearInterval(_ttlTimer);
+    _ttlTimer = null;
+  }
+}
+
+function _tickTtl() {
+  document.querySelectorAll(".exc-ttl[data-expires-at]").forEach(el => {
+    el.textContent = _formatTtl(Number(el.getAttribute("data-expires-at")));
+  });
+}
+
+async function _revokeException(id) {
+  try {
+    const resp = await fetch(`${PERMITATO_API}/exceptions/${id}`, { method: "DELETE" });
+    if (resp.ok) _pollStatus();
+  } catch {
+    // silent — next poll will update state
+  }
 }
 
 // --- Onboarding ---
