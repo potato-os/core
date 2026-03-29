@@ -160,7 +160,8 @@ import { registerPlatformShell } from "./platform-controls.js";
       appState.latestStatus = statusPayload;
       const downloadText = formatSidebarStatusDetail(statusPayload);
       const text = `State: ${statusPayload.state} | ${downloadText}`;
-      document.getElementById("statusText").textContent = text;
+      const statusEl = document.getElementById("statusText");
+      if (statusEl) statusEl.textContent = text;
       renderStatusActions(statusPayload);
       setSidebarNote(statusPayload);
       const modelNameField = document.getElementById("modelName");
@@ -207,7 +208,8 @@ import { registerPlatformShell } from "./platform-controls.js";
         appState.statusPollAppliedSeq = seq;
         const statusErrText = err?.name === "AbortError" ? "request timeout" : String(err);
         if (appState.latestStatus && typeof appState.latestStatus === "object" && appState.latestStatus.state && appState.latestStatus.state !== "DOWN") {
-          document.getElementById("statusText").textContent = `Status warning: ${statusErrText}`;
+          const warnEl = document.getElementById("statusText");
+          if (warnEl) warnEl.textContent = `Status warning: ${statusErrText}`;
           renderStatusActions({});
           return appState.latestStatus;
         }
@@ -279,7 +281,8 @@ import { registerPlatformShell } from "./platform-controls.js";
             progress: { phase: null, percent: 0, error: null },
           },
         };
-        document.getElementById("statusText").textContent = `Status error: ${statusErrText}`;
+        const errEl = document.getElementById("statusText");
+        if (errEl) errEl.textContent = `Status error: ${statusErrText}`;
         renderStatusActions({});
         const modelNameField = document.getElementById("modelName");
         if (modelNameField) {
@@ -392,15 +395,81 @@ import { registerPlatformShell } from "./platform-controls.js";
       }, 2000);
     }
 
+    // --- Dynamic app switching ---
+    const APP_REGISTRY = {
+      chat: { module: "/app/chat/assets/app.js", title: "Potato Chat" },
+      permitato: { module: "/app/permitato/assets/app.js", title: "Permitato" },
+    };
+    let _activeAppId = null;
+    let _activeAppModule = null;
+    const _appWrappers = {};   // appId → persistent wrapper div (stays in DOM)
+    const _appModules = {};    // appId → loaded module
+    const shellApi = { pollStatus, setSidebarOpen, isMobileSidebarViewport, registerEscapeHandler, bindModelSwitcher };
+
+    async function switchApp(appId) {
+      const container = document.getElementById("appContainer");
+      if (!container) return;
+      const entry = APP_REGISTRY[appId];
+      if (!entry) return;
+
+      // Hide all app wrappers
+      for (const [id, wrapper] of Object.entries(_appWrappers)) {
+        wrapper.style.display = "none";
+      }
+
+      // Update switcher button states
+      document.querySelectorAll(".app-switcher-btn").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.app === appId);
+      });
+
+      // Update header title
+      const titleEl = document.querySelector(".chat-shell h1");
+      if (titleEl) titleEl.textContent = entry.title;
+
+      _activeAppId = appId;
+
+      // Show existing wrapper if app was already initialized
+      if (_appWrappers[appId]) {
+        _appWrappers[appId].style.display = "contents";
+        _activeAppModule = _appModules[appId];
+        return;
+      }
+
+      // First-time init: create persistent wrapper, init app into it
+      const wrapper = document.createElement("div");
+      wrapper.style.display = "contents";
+      container.appendChild(wrapper);
+      _appWrappers[appId] = wrapper;
+
+      try {
+        _activeAppModule = await import(entry.module);
+        _appModules[appId] = _activeAppModule;
+        await _activeAppModule.init(wrapper, shellApi);
+      } catch (err) {
+        console.error(`Failed to load app ${appId}:`, err);
+        wrapper.innerHTML = `<p style="padding:2rem;color:var(--text-muted)">Failed to load ${appId}</p>`;
+      }
+    }
+
+    // Bind app switcher buttons and hide unavailable apps
+    document.querySelectorAll(".app-switcher-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const appId = btn.dataset.app;
+        if (appId && appId !== _activeAppId) switchApp(appId);
+      });
+      // Hide non-default apps whose assets aren't installed
+      const appId = btn.dataset.app;
+      if (appId && appId !== "chat" && APP_REGISTRY[appId]) {
+        fetch(APP_REGISTRY[appId].module, { method: "HEAD" }).then(r => {
+          if (!r.ok) btn.style.display = "none";
+        }).catch(() => { btn.style.display = "none"; });
+      }
+    });
+
+    // Load default app (chat), then start polling
     const appContainer = document.getElementById("appContainer");
     if (appContainer) {
-      import("/app/chat/assets/app.js").then(async (appModule) => {
-        await appModule.init(appContainer, { pollStatus, setSidebarOpen, isMobileSidebarViewport, registerEscapeHandler, bindModelSwitcher });
-        startPollingLoop();
-      }).catch((err) => {
-        console.error("Failed to load app:", err);
-        startPollingLoop();
-      });
+      switchApp("chat").then(() => startPollingLoop()).catch(() => startPollingLoop());
     } else {
       startPollingLoop();
     }

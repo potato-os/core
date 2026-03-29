@@ -1675,6 +1675,56 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 app_supervisor_loop(app, app.state.runtime),
                 name="potato-app-supervisor",
             )
+
+        # Permitato: init state + background expiry task
+        app.state.permit_state = None
+        app.state.permit_expiry_task = None
+        try:
+            # Ensure apps/ is importable (on Pi, cwd is core/ not repo root)
+            _apps_parent = str(Path(__file__).resolve().parent.parent)
+            if _apps_parent not in sys.path:
+                sys.path.insert(0, _apps_parent)
+            from apps.permitato.state import initialize_permitato, shutdown_permitato
+            pw_path = app.state.runtime.base_dir / "config" / "permitato_pihole_password"
+            if pw_path.exists():
+                pihole_pw = pw_path.read_text(encoding="utf-8").strip()
+                data_dir = app.state.runtime.base_dir / "data" / "permitato"
+                app.state.permit_state = await initialize_permitato(
+                    data_dir=data_dir,
+                    pihole_password=pihole_pw,
+                )
+
+                async def _exception_expiry_loop():
+                    while True:
+                        await asyncio.sleep(30)
+                        state = app.state.permit_state
+                        if state and state.exception_store:
+                            # Revoke Pi-hole allow rules BEFORE removing from store
+                            for exc in state.exception_store.get_expired():
+                                if state.adapter and state.pihole_available:
+                                    try:
+                                        await state.adapter.delete_domain_rule(
+                                            exc.regex_pattern, "allow", "regex",
+                                        )
+                                    except Exception:
+                                        pass
+                                from apps.permitato.audit import write_audit_entry
+                                write_audit_entry(state.data_dir, {
+                                    "event": "exception_expired",
+                                    "domain": exc.domain,
+                                    "exception_id": exc.id,
+                                })
+                            revoked = state.exception_store.cleanup_expired()
+                            if revoked:
+                                state.exception_store.persist()
+
+                app.state.permit_expiry_task = asyncio.create_task(
+                    _exception_expiry_loop(),
+                    name="permitato-expiry",
+                )
+        except (ImportError, Exception) as exc:
+            logger.debug("Permitato init skipped: %s", exc)
+
         try:
             yield
         finally:
@@ -1730,6 +1780,21 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
                 try:
                     await system_task
                 except asyncio.CancelledError:
+                    pass
+
+            # Permitato shutdown
+            expiry_task = app.state.permit_expiry_task
+            if expiry_task is not None:
+                expiry_task.cancel()
+                try:
+                    await expiry_task
+                except asyncio.CancelledError:
+                    pass
+            if app.state.permit_state is not None:
+                try:
+                    from apps.permitato.state import shutdown_permitato
+                    await shutdown_permitato(app.state.permit_state)
+                except (ImportError, Exception):
                     pass
 
     try:
@@ -1815,11 +1880,15 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
     app.include_router(terminal_router)
     app.include_router(apps_router)
 
-    # Mount static assets for UI-enabled apps
+    # Mount static assets and app-provided routes for discovered apps
     try:
         from core.app_manifest import discover_apps
     except ModuleNotFoundError:
         from app_manifest import discover_apps  # type: ignore[no-redef]
+    try:
+        from core.app_routes import load_app_router
+    except ModuleNotFoundError:
+        from app_routes import load_app_router  # type: ignore[no-redef]
     # Check both runtime apps dir and repo-local apps dir (for dev)
     _repo_apps = Path(__file__).resolve().parent.parent / "apps"
     _runtime_apps = app.state.runtime.base_dir / "apps"
@@ -1830,15 +1899,22 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         for manifest in discover_apps(apps_dir):
             if manifest.id in _mounted_app_ids:
                 continue
+            app_dir = apps_dir / manifest.id
+            # Load app-provided API routes
+            result = load_app_router(manifest, app_dir)
+            if result is not None:
+                router, prefix = result
+                app.include_router(router, prefix=prefix)
+            # Mount static assets
             if manifest.has_ui and manifest.ui_path:
-                app_assets_dir = apps_dir / manifest.id / manifest.ui_path
+                app_assets_dir = app_dir / manifest.ui_path
                 if app_assets_dir.is_dir():
                     app.mount(
                         f"/app/{manifest.id}/assets",
                         StaticFiles(directory=str(app_assets_dir)),
                         name=f"app-{manifest.id}",
                     )
-                    _mounted_app_ids.add(manifest.id)
+            _mounted_app_ids.add(manifest.id)
 
     return app
 

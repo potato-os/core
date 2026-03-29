@@ -63,7 +63,7 @@
     .app-shell {
       min-height: 100%;
       display: grid;
-      grid-template-columns: 340px minmax(0, 1fr);
+      grid-template-columns: 340px auto minmax(0, 1fr);
     }
 
     .sidebar-backdrop {
@@ -1827,7 +1827,7 @@
     }
 
     .app-shell {
-      grid-template-columns: 396px minmax(0, 1fr);
+      grid-template-columns: 396px auto minmax(0, 1fr);
     }
 
     .sidebar {
@@ -2035,5 +2035,54 @@ body.changelog-modal-open #changelogModal { display: grid; }
   .changelog-modal-shell {
     width: calc(100vw - 16px);
     max-height: calc(100vh - 16px);
+  }
+}
+
+/* --- App Switcher Sidebar --- */
+.app-switcher {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  width: 48px;
+  flex-shrink: 0;
+}
+.app-switcher-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.app-switcher-btn:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+.app-switcher-btn.active {
+  background: var(--focus);
+  color: var(--bg);
+}
+.app-switcher-icon {
+  width: 20px;
+  height: 20px;
+}
+
+@media (max-width: 900px) {
+  .app-switcher {
+    flex-direction: row;
+    width: auto;
+    height: 44px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 4px 8px;
   }
 }

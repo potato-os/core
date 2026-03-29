@@ -1,0 +1,13 @@
+{
+  "id": "permitato",
+  "name": "Permitato",
+  "version": "0.1.0",
+  "entry": "main.py",
+  "critical": false,
+  "has_ui": true,
+  "ui_path": "assets/",
+  "socket": "permitato.sock",
+  "inferno": true,
+  "routes": "routes.py",
+  "description": "Conversational AI attention guard on Pi-hole"
+}

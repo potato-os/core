@@ -211,6 +211,81 @@ fi
 run_sudo "${TARGET_ROOT}/venv/bin/pip" install --upgrade pip
 run_sudo "${TARGET_ROOT}/venv/bin/pip" install -r "${TARGET_ROOT}/core/requirements.txt"
 
+# --- Pi-hole v6 installation (Permitato infrastructure) ---
+# Pi-hole provides DNS-level blocking used by the Permitato app.
+# Install is guarded; configuration is always applied (idempotent upgrade path).
+
+# Detect active network interface for Pi-hole DNS binding
+_pihole_iface="$(ip route show default 2>/dev/null | awk '{print $5; exit}')"
+_pihole_iface="${_pihole_iface:-eth0}"
+
+if command -v pihole >/dev/null 2>&1; then
+  printf 'Pi-hole already installed — skipping install, applying configuration.\n'
+else
+  printf 'Installing Pi-hole v6 (unattended, interface=%s)...\n' "${_pihole_iface}"
+  run_sudo mkdir -p /etc/pihole
+
+  # Pre-seed setup variables for unattended install
+  pihole_vars_tmp="$(mktemp)"
+  cat > "${pihole_vars_tmp}" <<PIHOLE_VARS
+PIHOLE_INTERFACE=${_pihole_iface}
+PIHOLE_DNS_1=1.1.1.1
+PIHOLE_DNS_2=8.8.8.8
+QUERY_LOGGING=true
+INSTALL_WEB_SERVER=true
+INSTALL_WEB_INTERFACE=true
+BLOCKING_ENABLED=true
+DNSMASQ_LISTENING=local
+WEBPASSWORD=
+PIHOLE_VARS
+  run_sudo install -m 0644 "${pihole_vars_tmp}" /etc/pihole/setupVars.conf
+  rm -f "${pihole_vars_tmp}"
+
+  # Download installer to a temp file so stdin is free for run_sudo's PI_PASSWORD pipe
+  pihole_installer_tmp="$(mktemp)"
+  curl -sSL https://install.pi-hole.net -o "${pihole_installer_tmp}"
+  run_sudo bash "${pihole_installer_tmp}" --unattended
+  rm -f "${pihole_installer_tmp}"
+fi
+
+# --- Permitato configuration (always applied, idempotent) ---
+
+# Set web server to port 8081 (v6 defaults to 8080 which conflicts with llama-server).
+# Uses pihole-FTL --config to target only the webserver port, not the DNS port.
+if command -v pihole-FTL >/dev/null 2>&1; then
+  run_sudo pihole-FTL --config webserver.port 8081 || true
+fi
+
+# Generate app password if not already stored
+if [ ! -f "${TARGET_ROOT}/config/permitato_pihole_password" ]; then
+  pihole_pw="$(openssl rand -hex 16)"
+  run_sudo pihole setpassword "${pihole_pw}" || true
+  # Write password to a temp file then install it — avoids piping through run_sudo
+  # which consumes stdin for the PI_PASSWORD pipe in remote deploys.
+  pihole_pw_tmp="$(mktemp)"
+  printf '%s\n' "${pihole_pw}" > "${pihole_pw_tmp}"
+  run_sudo install -m 0640 -o "${POTATO_USER}" -g "${POTATO_GROUP}" \
+    "${pihole_pw_tmp}" "${TARGET_ROOT}/config/permitato_pihole_password"
+  rm -f "${pihole_pw_tmp}"
+fi
+
+# Sudoers: let potato user manage pihole-FTL (idempotent — overwrites on every run)
+pihole_sudoers_tmp="$(mktemp)"
+cat > "${pihole_sudoers_tmp}" <<'SUDOERS'
+potato ALL=(root) NOPASSWD: /bin/systemctl restart pihole-FTL
+potato ALL=(root) NOPASSWD: /usr/bin/systemctl restart pihole-FTL
+potato ALL=(root) NOPASSWD: /bin/systemctl stop pihole-FTL
+potato ALL=(root) NOPASSWD: /usr/bin/systemctl stop pihole-FTL
+potato ALL=(root) NOPASSWD: /bin/systemctl start pihole-FTL
+potato ALL=(root) NOPASSWD: /usr/bin/systemctl start pihole-FTL
+SUDOERS
+run_sudo install -m 0440 "${pihole_sudoers_tmp}" /etc/sudoers.d/potato-pihole
+rm -f "${pihole_sudoers_tmp}"
+
+run_sudo systemctl restart pihole-FTL || true
+printf 'Pi-hole configured — web UI at http://localhost:8081/admin/\n'
+# --- end Pi-hole ---
+
 run_sudo chown -R "${POTATO_USER}:${POTATO_GROUP}" "${TARGET_ROOT}"
 normalize_runtime_dir_permissions
 

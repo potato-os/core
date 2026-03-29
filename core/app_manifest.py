@@ -24,6 +24,7 @@ class AppManifest:
     socket: str = ""
     inferno: bool = False
     description: str = ""
+    routes: str = ""
 
     @classmethod
     def from_file(cls, path: Path) -> AppManifest:
@@ -47,6 +48,7 @@ class AppManifest:
             socket=str(data.get("socket", "")),
             inferno=bool(data.get("inferno", False)),
             description=str(data.get("description", "")),
+            routes=str(data.get("routes", "")),
         )
 
     def validate(self) -> list[str]:

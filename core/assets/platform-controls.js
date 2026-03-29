@@ -34,6 +34,7 @@ import * as modelApi from "./model-api.js";
 // Composer activity is owned by the active app — no-op if no app loaded
 let _setComposerActivity = () => {};
 export function registerComposerActivity(fn) { _setComposerActivity = fn; }
+export function resetComposerActivity() { _setComposerActivity = () => {}; }
 function setComposerActivity(msg) { _setComposerActivity(msg); }
 
 let _shell = {};

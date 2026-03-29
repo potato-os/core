@@ -1,0 +1,29 @@
+<div id="permitatoStatusBar" class="permitato-status-bar">
+  <div class="permitato-mode">
+    <span class="permitato-mode-label">Mode:</span>
+    <span id="permitatoModeValue" class="permitato-mode-badge">--</span>
+  </div>
+  <div class="permitato-exceptions">
+    <span id="permitatoExceptionCount" class="permitato-exception-count">0</span>
+    <span class="permitato-exception-label">active exceptions</span>
+  </div>
+  <div class="permitato-mode-toggle">
+    <button class="permitato-mode-btn" data-mode="normal">Normal</button>
+    <button class="permitato-mode-btn" data-mode="work">Work</button>
+    <button class="permitato-mode-btn" data-mode="sfw">SFW</button>
+  </div>
+  <div id="permitatoPiholeStatus" class="permitato-pihole-status">
+    <span id="permitatoPiholeDot" class="permitato-pihole-dot"></span>
+    <span id="permitatoPiholeLabel">Checking...</span>
+  </div>
+</div>
+
+<section id="permitatoMessages" class="permitato-messages"></section>
+
+<form id="permitatoComposer" class="permitato-composer">
+  <textarea id="permitatoPrompt" class="permitato-input" rows="2" placeholder="Talk to your potato about what you need..."></textarea>
+  <div class="permitato-composer-bottom">
+    <div id="permitatoComposerHint" class="permitato-composer-hint"></div>
+    <button id="permitatoSendBtn" class="send-btn" type="submit">Send</button>
+  </div>
+</form>

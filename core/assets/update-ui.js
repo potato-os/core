@@ -10,6 +10,7 @@ let _onRestartPending = null;
 export function registerUpdateCallbacks({ onRestartPending }) {
   _onRestartPending = onRestartPending || null;
 }
+export function resetUpdateCallbacks() { _onRestartPending = null; }
 
 export function renderUpdateCard(updatePayload) {
   const card = document.getElementById("updateCard");
