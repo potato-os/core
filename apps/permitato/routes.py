@@ -45,6 +45,7 @@ async def permitato_status(request: Request):
         "active_exceptions": state.exception_store.active_count() if state.exception_store else 0,
         "exceptions": state.exception_store.list_active() if state.exception_store else [],
         "pihole_available": state.pihole_available,
+        "degraded_since": state.degraded_since,
         "client_id": state.client_id,
     }
 

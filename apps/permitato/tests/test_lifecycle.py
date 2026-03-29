@@ -57,11 +57,14 @@ async def test_on_shutdown_cleans_up(monkeypatch):
         def __await__(self):
             return asyncio.sleep(0).__await__()
 
-    task = _FakeTask()
-    app.state.permit_expiry_task = task
+    expiry_task = _FakeTask()
+    reconnect_task = _FakeTask()
+    app.state.permit_expiry_task = expiry_task
+    app.state.permit_reconnect_task = reconnect_task
     app.state.permit_state = MagicMock()
 
     await lifecycle.on_shutdown(app)
 
-    assert task.cancel_called
+    assert expiry_task.cancel_called
+    assert reconnect_task.cancel_called
     mock_shutdown.assert_awaited_once_with(app.state.permit_state)

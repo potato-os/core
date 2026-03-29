@@ -6,7 +6,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from apps.permitato.state import initialize_permitato, shutdown_permitato
+from apps.permitato.state import initialize_permitato, shutdown_permitato, reconnect_pihole
 
 logger = logging.getLogger(__name__)
 
@@ -32,17 +32,22 @@ async def on_startup(app, app_dir: Path, data_dir: Path) -> None:
         _exception_expiry_loop(app),
         name="permitato-expiry",
     )
+    app.state.permit_reconnect_task = asyncio.create_task(
+        _pihole_reconnection_loop(app),
+        name="permitato-reconnect",
+    )
 
 
 async def on_shutdown(app) -> None:
-    """Shutdown Permitato: cancel expiry, disconnect adapter."""
-    expiry_task = getattr(app.state, "permit_expiry_task", None)
-    if expiry_task is not None:
-        expiry_task.cancel()
-        try:
-            await expiry_task
-        except asyncio.CancelledError:
-            pass
+    """Shutdown Permitato: cancel background tasks, disconnect adapter."""
+    for attr in ("permit_expiry_task", "permit_reconnect_task"):
+        task = getattr(app.state, attr, None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     permit_state = getattr(app.state, "permit_state", None)
     if permit_state is not None:
@@ -73,3 +78,17 @@ async def _exception_expiry_loop(app) -> None:
             revoked = state.exception_store.cleanup_expired()
             if revoked:
                 state.exception_store.persist()
+
+
+async def _pihole_reconnection_loop(app) -> None:
+    """Background task: attempt Pi-hole reconnection every 60s when degraded."""
+    from apps.permitato.audit import write_audit_entry
+
+    while True:
+        await asyncio.sleep(60)
+        state = getattr(app.state, "permit_state", None)
+        if state and not state.pihole_available:
+            was_degraded = not state.pihole_available
+            await reconnect_pihole(state)
+            if was_degraded and state.pihole_available:
+                write_audit_entry(state.data_dir, {"event": "pihole_recovered"})

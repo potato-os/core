@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,6 +14,14 @@ from apps.permitato.modes import MODES, get_mode, WORK_DENY_DOMAINS, SFW_DENY_DO
 from apps.permitato.pihole_adapter import PiholeAdapter, PiholeUnavailableError
 
 logger = logging.getLogger(__name__)
+
+
+def atomic_write(path: Path, data: str) -> None:
+    """Write data to path atomically via tmp + os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    os.replace(str(tmp), str(path))
 
 
 @dataclass
@@ -23,16 +33,16 @@ class PermitState:
     group_map: dict = field(default_factory=dict)
     exception_group_id: int = 0
     pihole_available: bool = False
+    degraded_since: float | None = None
     data_dir: Path = field(default_factory=lambda: Path("/opt/potato/data/permitato"))
 
     def persist(self) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
         path = self.data_dir / "state.json"
-        path.write_text(json.dumps({
+        atomic_write(path, json.dumps({
             "version": 1,
             "mode": self.mode,
             "client_id": self.client_id,
-        }, indent=2), encoding="utf-8")
+        }, indent=2))
 
     def load(self) -> None:
         path = self.data_dir / "state.json"
@@ -85,6 +95,7 @@ async def initialize_permitato(
 
     except PiholeUnavailableError:
         state.pihole_available = False
+        state.degraded_since = time.time()
         logger.warning("Pi-hole unavailable at %s — running in degraded mode", pihole_base_url)
 
     return state
@@ -170,3 +181,78 @@ async def apply_mode_to_client(state: PermitState) -> None:
             await state.adapter.add_client(state.client_id, groups)
         except Exception:
             logger.warning("Failed to set client groups for %s", state.client_id, exc_info=True)
+
+
+async def reconnect_pihole(state: PermitState) -> None:
+    """Attempt to reconnect to Pi-hole if currently degraded."""
+    if state.pihole_available or not state.adapter:
+        return
+
+    try:
+        await state.adapter.connect()
+    except PiholeUnavailableError:
+        return
+
+    # Connected — but don't mark healthy until full recovery completes
+    try:
+        state.group_map = await _ensure_groups(state.adapter)
+        state.exception_group_id = state.group_map.get("permitato_exceptions", 0)
+        await _seed_domain_lists(state.adapter, state.group_map)
+        await compensate_exceptions(state)
+    except Exception:
+        logger.warning("Pi-hole connected but recovery failed — staying degraded", exc_info=True)
+        return
+
+    state.pihole_available = True
+    state.degraded_since = None
+    logger.info("Pi-hole connection recovered")
+
+    # Reapply mode to client now that we're healthy
+    await apply_mode_to_client(state)
+
+
+async def compensate_exceptions(state: PermitState) -> None:
+    """Reconcile local exception store with Pi-hole allow rules."""
+    if not state.adapter or not state.exception_store:
+        return
+
+    exc_gid = state.exception_group_id
+    if not exc_gid:
+        return
+
+    # What Pi-hole currently has — filtered to Permitato-owned rules only
+    all_rules = await state.adapter.get_domain_rules("allow", "regex")
+    pihole_rules = [
+        r for r in all_rules
+        if exc_gid in r.get("groups", [])
+        and r.get("comment", "").startswith("Permitato:")
+    ]
+    pihole_domains = {r["domain"] for r in pihole_rules}
+
+    # What we expect to be there
+    local_exceptions = state.exception_store.list_active()
+    local_patterns = {exc["regex_pattern"] for exc in local_exceptions}
+
+    # Re-add missing rules
+    for exc in local_exceptions:
+        if exc["regex_pattern"] not in pihole_domains:
+            try:
+                await state.adapter.add_domain_rule(
+                    domain=exc["regex_pattern"],
+                    rule_type="allow",
+                    kind="regex",
+                    groups=[exc_gid],
+                    comment=f"Permitato: {exc.get('reason', '')}",
+                )
+                logger.info("Compensation: re-added missing allow rule for %s", exc["domain"])
+            except Exception:
+                logger.warning("Compensation: failed to re-add rule for %s", exc["domain"])
+
+    # Remove orphaned Permitato rules
+    for rule in pihole_rules:
+        if rule["domain"] not in local_patterns:
+            try:
+                await state.adapter.delete_domain_rule(rule["domain"], "allow", "regex")
+                logger.info("Compensation: removed orphaned allow rule %s", rule["domain"])
+            except Exception:
+                logger.warning("Compensation: failed to remove orphaned rule %s", rule["domain"])

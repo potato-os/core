@@ -112,6 +112,10 @@ class PiholeAdapter:
         )
         return resp.json()
 
+    async def get_domain_rules(self, rule_type: str, kind: str) -> list[dict]:
+        resp = await self._request("GET", f"/domains/{rule_type}/{kind}")
+        return resp.json().get("domains", [])
+
     async def delete_domain_rule(self, domain: str, rule_type: str, kind: str) -> None:
         await self._request("DELETE", f"/domains/{rule_type}/{kind}/{quote(domain, safe='')}")
 

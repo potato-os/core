@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -29,3 +30,19 @@ def read_audit_log(data_dir: Path, limit: int = 100) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return entries
+
+
+def rotate_audit_log(data_dir: Path, max_lines: int = 5000) -> int:
+    """Rotate audit log, keeping the last max_lines entries. Returns lines removed."""
+    log_path = data_dir / "audit.jsonl"
+    if not log_path.exists():
+        return 0
+    lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+    if len(lines) <= max_lines:
+        return 0
+    removed = len(lines) - max_lines
+    kept = "\n".join(lines[-max_lines:]) + "\n"
+    tmp = log_path.with_suffix(".jsonl.tmp")
+    tmp.write_text(kept, encoding="utf-8")
+    os.replace(str(tmp), str(log_path))
+    return removed

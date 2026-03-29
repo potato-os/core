@@ -17,6 +17,9 @@ _DOMAIN_RE = re.compile(r"^[\w][\w.-]*\.[\w]{2,}$")
 
 def build_domain_regex(domain: str) -> str:
     """Build a Pi-hole regex that matches domain and all subdomains."""
+    # Reject control characters and non-space whitespace before cleanup
+    if any(c in domain for c in "\n\r\t"):
+        raise ValueError(f"Invalid domain: {domain!r}")
     domain = domain.strip().lower()
     if not domain or "." not in domain or not _DOMAIN_RE.match(domain):
         raise ValueError(f"Invalid domain: {domain!r}")
@@ -96,13 +99,14 @@ class ExceptionStore:
         return [exc.to_dict() for exc in self._exceptions.values()]
 
     def persist(self) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        from apps.permitato.state import atomic_write
+
         path = self.data_dir / "exceptions.json"
         data = {
             "version": 1,
             "exceptions": {eid: exc.to_dict() for eid, exc in self._exceptions.items()},
         }
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        atomic_write(path, json.dumps(data, indent=2))
 
     def load(self) -> None:
         path = self.data_dir / "exceptions.json"
