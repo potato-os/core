@@ -9,6 +9,14 @@ Core application code lives in `core/`:
 - `core/repositories/`: Backend abstraction (real llama.cpp proxy and fake backend).
 - `core/constants/`: Model family detection, projector repo mapping.
 - `core/assets/`: Frontend — `index.html`, `shell.css`, `shell.js` (platform shell), vendor libs.
+- `core/rig_envelope.py`: RIG step envelope validation (MS/TS contract checks).
+
+Process-isolated apps live in `apps/`:
+- `apps/<id>/app.json`: App manifest (identity, process config, lifecycle).
+- `apps/<id>/rig.md`: RIG workflow contract (steps, flow graph, schemas).
+- `apps/<id>/main.py`: App entry point (runs as subprocess).
+- `apps/skeleton/`: Template app — copy this to create a new app.
+- `apps/chat/`: Chat interface — the first built-in Potato app.
 
 Operational scripts are in `bin/`:
 - `run.sh`: Main entrypoint (systemd calls this).
