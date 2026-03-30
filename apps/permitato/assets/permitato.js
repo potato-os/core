@@ -9,6 +9,7 @@ let _pendingClientSelection = false;
 let _lastClientFetchTs = 0;
 let _panelOpen = false;
 let _schedulePanelOpen = false;
+let _statsPanelOpen = false;
 let _ttlTimer = null;
 let _latestExceptions = [];
 let _latestPiholeAvailable = true;
@@ -46,6 +47,9 @@ export function init(shellApi) {
   const schedToggle = document.getElementById("permitatoScheduleToggle");
   if (schedToggle) schedToggle.addEventListener("click", _toggleSchedulePanel);
 
+  const statsToggle = document.getElementById("permitatoStatsToggle");
+  if (statsToggle) statsToggle.addEventListener("click", _toggleStatsPanel);
+
   const addRuleBtn = document.getElementById("permitatoAddRuleBtn");
   if (addRuleBtn) addRuleBtn.addEventListener("click", _showAddRuleForm);
 
@@ -76,6 +80,7 @@ async function _pollStatus() {
     if (!resp.ok) return;
     const data = await resp.json();
     _updateStatusBar(data);
+    if (_statsPanelOpen) _fetchStats();
   } catch {
     _updateStatusBar({ pihole_available: false, mode: "unknown", active_exceptions: 0 });
   }
@@ -708,4 +713,118 @@ async function _loadSession() {
   } catch {
     // silent
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Stats panel
+// ---------------------------------------------------------------------------
+
+function _toggleStatsPanel() {
+  _statsPanelOpen = !_statsPanelOpen;
+  const panel = document.getElementById("permitatoStatsPanel");
+  const toggle = document.getElementById("permitatoStatsToggle");
+  if (panel) panel.hidden = !_statsPanelOpen;
+  if (toggle) toggle.setAttribute("aria-expanded", String(_statsPanelOpen));
+  if (_statsPanelOpen) _fetchStats();
+}
+
+async function _fetchStats() {
+  try {
+    const resp = await fetch(`${PERMITATO_API}/stats`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    _renderStats(data);
+  } catch {
+    // silent
+  }
+}
+
+function _renderStats(data) {
+  const empty = document.getElementById("permitatoStatsEmpty");
+  const grid = document.getElementById("permitatoStatsGrid");
+  const domainsEl = document.getElementById("permitatoTopDomains");
+  const footer = document.getElementById("permitatoStatsFooter");
+
+  const hasData = data.data_span_days > 0 ||
+    data.requests_today.granted > 0 ||
+    data.requests_today.denied > 0 ||
+    data.top_domains.length > 0 ||
+    data.deny_rate.total > 0;
+
+  if (!hasData) {
+    if (empty) empty.hidden = false;
+    if (grid) grid.hidden = true;
+    if (domainsEl) domainsEl.hidden = true;
+    if (footer) footer.hidden = true;
+    return;
+  }
+
+  if (empty) empty.hidden = true;
+  if (grid) grid.hidden = false;
+
+  // Streak
+  const streakVal = document.getElementById("permitatoStreakValue");
+  if (streakVal) {
+    streakVal.textContent = String(data.focus_streak_days);
+    streakVal.classList.toggle("streak-active", data.focus_streak_days > 0);
+  }
+
+  // Today
+  const todayVal = document.getElementById("permitatoTodayValue");
+  const todayLabel = document.getElementById("permitatoTodayLabel");
+  const total = data.requests_today.granted + data.requests_today.denied;
+  if (todayVal) todayVal.textContent = String(total);
+  if (todayLabel) {
+    if (total === 0) todayLabel.textContent = "requests today";
+    else todayLabel.textContent = `today (${data.requests_today.denied} denied)`;
+  }
+
+  // Deny rate
+  const denyVal = document.getElementById("permitatoDenyRateValue");
+  if (denyVal) {
+    denyVal.textContent = data.deny_rate.rate !== null
+      ? Math.round(data.deny_rate.rate * 100) + "%"
+      : "--";
+  }
+
+  // Mode duration
+  const modeVal = document.getElementById("permitatoModeDurationValue");
+  if (modeVal) {
+    modeVal.textContent = data.mode_duration_seconds !== null
+      ? _formatDuration(data.mode_duration_seconds)
+      : "--";
+  }
+
+  // Top domains
+  if (domainsEl) {
+    const list = document.getElementById("permitatoTopDomainsList");
+    if (data.top_domains.length > 0) {
+      domainsEl.hidden = false;
+      if (list) {
+        list.textContent = data.top_domains
+          .map(d => `${d.domain} (${d.count})`)
+          .join(", ");
+      }
+    } else {
+      domainsEl.hidden = true;
+    }
+  }
+
+  // Footer
+  if (footer) {
+    const span = document.getElementById("permitatoDataSpan");
+    if (span) span.textContent = String(data.data_span_days);
+    footer.hidden = data.data_span_days < 1;
+  }
+}
+
+function _formatDuration(seconds) {
+  if (seconds < 60) return "<1m";
+  const m = Math.floor(seconds / 60);
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  if (h === 0) return `${m}m`;
+  if (rm === 0) return `${h}h`;
+  return `${h}h ${rm}m`;
 }

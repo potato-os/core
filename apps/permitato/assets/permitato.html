@@ -31,6 +31,7 @@
   <button id="permitatoScheduleToggle" class="permitato-schedule-toggle" type="button">
     <span id="permitatoScheduleLabel">Schedule</span>
   </button>
+  <button id="permitatoStatsToggle" class="permitato-stats-toggle" type="button">Stats</button>
   <div id="permitatoPiholeStatus" class="permitato-pihole-status">
     <span id="permitatoPiholeDot" class="permitato-pihole-dot"></span>
     <span id="permitatoPiholeLabel">Checking...</span>
@@ -87,6 +88,35 @@
       <button id="permitatoSaveRuleBtn" class="permitato-save-rule-btn">Save</button>
       <button id="permitatoCancelRuleBtn" class="permitato-cancel-rule-btn">Cancel</button>
     </div>
+  </div>
+</section>
+
+<section id="permitatoStatsPanel" class="permitato-stats-panel" hidden>
+  <div class="permitato-stats-grid" id="permitatoStatsGrid">
+    <div class="permitato-stat">
+      <span class="stat-value" id="permitatoStreakValue">--</span>
+      <span class="stat-label">day focus streak</span>
+    </div>
+    <div class="permitato-stat">
+      <span class="stat-value" id="permitatoTodayValue">--</span>
+      <span class="stat-label" id="permitatoTodayLabel">requests today</span>
+    </div>
+    <div class="permitato-stat">
+      <span class="stat-value" id="permitatoDenyRateValue">--</span>
+      <span class="stat-label">requests denied</span>
+    </div>
+    <div class="permitato-stat">
+      <span class="stat-value" id="permitatoModeDurationValue">--</span>
+      <span class="stat-label" id="permitatoModeDurationLabel">in current mode</span>
+    </div>
+  </div>
+  <div id="permitatoTopDomains" class="permitato-top-domains" hidden>
+    <span class="top-domains-label">Top distractions: </span>
+    <span id="permitatoTopDomainsList" class="top-domains-list"></span>
+  </div>
+  <div id="permitatoStatsEmpty" class="permitato-stats-empty" hidden>No activity recorded yet</div>
+  <div id="permitatoStatsFooter" class="permitato-stats-footer" hidden>
+    Based on last <span id="permitatoDataSpan">0</span> days
   </div>
 </section>
 

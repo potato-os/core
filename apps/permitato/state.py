@@ -11,6 +11,7 @@ from pathlib import Path
 
 from datetime import datetime
 
+from apps.permitato.audit import write_audit_entry
 from apps.permitato.exceptions import ExceptionStore
 from apps.permitato.modes import MODES, get_mode, WORK_DENY_DOMAINS, SFW_DENY_DOMAINS
 from apps.permitato.pihole_adapter import PiholeAdapter, PiholeUnavailableError
@@ -333,7 +334,13 @@ async def apply_startup_schedule(state: PermitState, now: datetime | None = None
 
     effective = state.effective_mode(now)
     if effective != state.mode:
-        logger.info("Startup schedule: switching %s → %s", state.mode, effective)
+        old_mode = state.mode
+        logger.info("Startup schedule: switching %s → %s", old_mode, effective)
         state.mode = effective
         state.persist()
+        write_audit_entry(state.data_dir, {
+            "event": "scheduled_mode_switch",
+            "from_mode": old_mode,
+            "to_mode": effective,
+        })
         await apply_mode_to_client(state)

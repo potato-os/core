@@ -617,6 +617,14 @@ async def test_startup_schedule_applies_to_pihole(tmp_path):
     assert state.mode == "work"
     adapter.update_client.assert_called_once()
 
+    # Startup mode correction must write an audit entry so stats can anchor to it
+    from apps.permitato.audit import read_audit_log
+    entries = read_audit_log(tmp_path)
+    assert len(entries) == 1
+    assert entries[0]["event"] == "scheduled_mode_switch"
+    assert entries[0]["from_mode"] == "normal"
+    assert entries[0]["to_mode"] == "work"
+
 
 # ---------------------------------------------------------------------------
 # P1: Override clear must persist even when effective mode stays same

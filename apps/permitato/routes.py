@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from apps.permitato.audit import build_recent_context, read_audit_log, write_audit_entry
 from apps.permitato.exceptions import ExceptionStore, build_domain_regex
 from apps.permitato.intent import parse_llm_response, strip_action_markers
+from apps.permitato.stats import compute_stats
 from apps.permitato.modes import get_mode, MODES
 from apps.permitato.pihole_adapter import PiholeUnavailableError
 from apps.permitato.net_resolve import resolve_requester_ipv4
@@ -81,6 +82,20 @@ async def permitato_status(request: Request):
         "override_active": state.override_mode is not None,
         "override_mode": state.override_mode,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /stats
+# ---------------------------------------------------------------------------
+
+
+@router.get("/stats")
+async def permitato_stats(request: Request):
+    state = _get_state(request)
+    if state is None:
+        return JSONResponse(status_code=503, content={"error": "Permitato not initialized"})
+    entries = read_audit_log(state.data_dir, limit=5000)
+    return compute_stats(entries, current_mode=state.mode)
 
 
 # ---------------------------------------------------------------------------
