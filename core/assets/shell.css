@@ -63,7 +63,7 @@
     .app-shell {
       min-height: 100%;
       display: grid;
-      grid-template-columns: 340px auto minmax(0, 1fr);
+      grid-template-columns: auto 340px minmax(0, 1fr);
     }
 
     .sidebar-backdrop {
@@ -1827,7 +1827,7 @@
     }
 
     .app-shell {
-      grid-template-columns: 396px auto minmax(0, 1fr);
+      grid-template-columns: auto 396px minmax(0, 1fr);
     }
 
     .sidebar {
@@ -2038,13 +2038,21 @@ body.changelog-modal-open #changelogModal { display: grid; }
   }
 }
 
-/* --- App Switcher Sidebar --- */
+/* --- App Icon Rail --- */
+/* Explicit grid-column assignments keep the layout stable when the
+   rail is hidden (display:none) for single-app installs.  Without
+   these, Grid reflows the two remaining children into tracks 1-2,
+   putting the sidebar into the flexible auto track. */
+.app-switcher { grid-column: 1; }
+.sidebar { grid-column: 2; }
+.chat-shell { grid-column: 3; }
+
 .app-switcher {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 8px 4px;
+  padding: 12px 0 8px;
   background: var(--panel);
   border-right: 1px solid var(--border);
   width: 48px;
@@ -2062,14 +2070,25 @@ body.changelog-modal-open #changelogModal { display: grid; }
   color: var(--text-muted);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
+  position: relative;
 }
 .app-switcher-btn:hover {
   background: var(--bg);
   color: var(--text);
 }
 .app-switcher-btn.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--focus) 12%, transparent);
+}
+.app-switcher-btn.active::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
   background: var(--focus);
-  color: var(--bg);
 }
 .app-switcher-icon {
   width: 20px;
@@ -2084,5 +2103,14 @@ body.changelog-modal-open #changelogModal { display: grid; }
     border-right: none;
     border-bottom: 1px solid var(--border);
     padding: 4px 8px;
+  }
+  .app-switcher-btn.active::before {
+    left: 0;
+    top: auto;
+    bottom: -4px;
+    right: 0;
+    width: auto;
+    height: 3px;
+    border-radius: 2px 2px 0 0;
   }
 }
