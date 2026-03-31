@@ -90,3 +90,74 @@ def test_marker_takes_priority_over_fallback():
     )
     assert intent.action == "switch_mode"
     assert intent.params["mode"] == "sfw"
+
+
+# ---------------------------------------------------------------------------
+# Multi-marker: last marker wins
+# ---------------------------------------------------------------------------
+
+
+def test_extract_last_marker_when_multiple_present():
+    from apps.permitato.intent import parse_llm_response
+
+    intent = parse_llm_response(
+        "Let me switch. [ACTION:switch_mode:work] Actually, sfw is better. [ACTION:switch_mode:sfw]"
+    )
+    assert intent.action == "switch_mode"
+    assert intent.params["mode"] == "sfw"
+
+
+def test_extract_last_marker_different_actions():
+    from apps.permitato.intent import parse_llm_response
+
+    intent = parse_llm_response(
+        "I shouldn't unblock that. [ACTION:deny_unblock:youtube.com:distraction] "
+        "On second thought, you need it for work. [ACTION:request_unblock:youtube.com:work demo]"
+    )
+    assert intent.action == "request_unblock"
+    assert intent.params["domain"] == "youtube.com"
+    assert intent.params["reason"] == "work demo"
+
+
+# ---------------------------------------------------------------------------
+# clean_for_stream: strip complete + partial markers for SSE output
+# ---------------------------------------------------------------------------
+
+
+def test_clean_for_stream_strips_complete_marker():
+    from apps.permitato.intent import clean_for_stream
+
+    assert clean_for_stream("Sure! [ACTION:switch_mode:work] Done.") == "Sure!  Done."
+
+
+def test_clean_for_stream_trims_partial_marker_at_end():
+    from apps.permitato.intent import clean_for_stream
+
+    assert clean_for_stream("Sure! [ACTION:request_unbl") == "Sure! "
+
+
+def test_clean_for_stream_trims_trailing_lone_bracket():
+    from apps.permitato.intent import clean_for_stream
+
+    # Trailing [ is trimmed — it could be the start of a marker during streaming.
+    # If the next chunk proves otherwise, the bracket reappears in the delta.
+    assert clean_for_stream("See [this] and also [") == "See [this] and also "
+
+
+def test_clean_for_stream_preserves_mid_text_bracket():
+    from apps.permitato.intent import clean_for_stream
+
+    assert clean_for_stream("See [this] and also [ more") == "See [this] and also [ more"
+
+
+def test_clean_for_stream_trims_bracket_a():
+    from apps.permitato.intent import clean_for_stream
+
+    assert clean_for_stream("Hello [A") == "Hello "
+
+
+def test_clean_for_stream_strips_multiple_markers():
+    from apps.permitato.intent import clean_for_stream
+
+    text = "First [ACTION:deny_unblock:x.com:no] then [ACTION:request_unblock:x.com:yes] done."
+    assert clean_for_stream(text) == "First  then  done."

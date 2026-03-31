@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 
+logger = logging.getLogger(__name__)
+
 _ACTION_RE = re.compile(r"\[ACTION:(\w+)(?::([^\]]*))?\]")
+_PARTIAL_MARKER_RE = re.compile(r"\[(?:A(?:C(?:T(?:I(?:O(?:N(?::(?:[^\]]*)?)?)?)?)?)?)?)?$")
 
 _VALID_MODES = {"normal", "work", "sfw"}
 
@@ -29,10 +33,13 @@ class ParsedIntent:
 
 
 def extract_action_markers(text: str) -> ParsedIntent | None:
-    """Extract the first [ACTION:...] marker from text."""
-    match = _ACTION_RE.search(text)
-    if not match:
+    """Extract the last [ACTION:...] marker from text."""
+    matches = list(_ACTION_RE.finditer(text))
+    if not matches:
         return None
+    if len(matches) > 1:
+        logger.debug("Multiple markers found (%d), using last", len(matches))
+    match = matches[-1]
 
     action = match.group(1)
     raw_params = match.group(2) or ""
@@ -87,3 +94,16 @@ def parse_llm_response(text: str) -> ParsedIntent:
 def strip_action_markers(text: str) -> str:
     """Remove [ACTION:...] markers from text before displaying to user."""
     return _ACTION_RE.sub("", text)
+
+
+def clean_for_stream(text: str) -> str:
+    """Strip complete markers and trim trailing partial marker prefix.
+
+    Used during SSE streaming to prevent markers from leaking to the client.
+    A trailing ``[``, ``[A``, ``[ACT``, ``[ACTION:...`` without a closing
+    ``]`` is trimmed.  A mid-text ``[`` followed by non-marker content is
+    preserved.
+    """
+    cleaned = _ACTION_RE.sub("", text)
+    cleaned = _PARTIAL_MARKER_RE.sub("", cleaned)
+    return cleaned

@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from apps.permitato.audit import build_recent_context, read_audit_log, write_audit_entry
 from apps.permitato.custom_lists import CustomListStore
 from apps.permitato.exceptions import ExceptionStore, build_domain_regex
-from apps.permitato.intent import parse_llm_response, strip_action_markers
+from apps.permitato.intent import clean_for_stream, parse_llm_response, strip_action_markers
 from apps.permitato.stats import compute_stats
 from apps.permitato.modes import get_mode, MODES
 from apps.permitato.pihole_adapter import PiholeUnavailableError
@@ -646,6 +646,7 @@ async def permitato_chat(request: Request):
                         error_envelope = {"error": {"message": f"LLM returned {resp.status_code}", "code": resp.status_code}}
                     yield f"data: {json.dumps(error_envelope)}\n\ndata: [DONE]\n\n"
                     return
+                clean_sent = 0
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
                         yield line + "\n"
@@ -653,10 +654,11 @@ async def permitato_chat(request: Request):
 
                     data_str = line[6:]
                     if data_str.strip() == "[DONE]":
-                        # Parse intent from accumulated text before sending DONE
                         intent = parse_llm_response(accumulated_text)
+                        logger.info("Chat intent: action=%s params=%s text=%.120s", intent.action, intent.params, accumulated_text)
                         if intent.action != "none":
                             action_result = await _execute_action(state, intent, user_message)
+                            logger.info("Chat action result: %s", action_result)
                             yield f"data: {json.dumps({'permitato_action': action_result})}\n\n"
                         yield line + "\n"
                         continue
@@ -667,6 +669,13 @@ async def permitato_chat(request: Request):
                         content = delta.get("content", "")
                         if content:
                             accumulated_text += content
+                            clean = clean_for_stream(accumulated_text)
+                            new_chars = clean[clean_sent:]
+                            clean_sent = len(clean)
+                            if new_chars:
+                                chunk["choices"][0]["delta"]["content"] = new_chars
+                                yield f"data: {json.dumps(chunk)}\n\n"
+                            continue
                     except (json.JSONDecodeError, IndexError, KeyError):
                         pass
 
