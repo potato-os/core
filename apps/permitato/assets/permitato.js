@@ -141,6 +141,12 @@ function _updateStatusBar(data) {
     banner.hidden = true;
   }
 
+  // Bypass: show banner when DNS is bypassed
+  const bypassBanner = document.getElementById("permitatoBypassBanner");
+  if (bypassBanner) {
+    bypassBanner.hidden = !data.blocking_bypassed;
+  }
+
   const badge = document.getElementById("permitatoModeValue");
   if (badge) {
     const mode = data.mode_display || data.mode || "--";
@@ -178,7 +184,10 @@ function _updateStatusBar(data) {
   const dot = document.getElementById("permitatoPiholeDot");
   const label = document.getElementById("permitatoPiholeLabel");
   if (dot && label) {
-    if (data.pihole_available) {
+    if (data.pihole_available && data.blocking_bypassed) {
+      dot.className = "permitato-pihole-dot bypassed";
+      label.textContent = "DNS bypassed";
+    } else if (data.pihole_available) {
       dot.className = "permitato-pihole-dot connected";
       label.textContent = "Pi-hole connected";
     } else {

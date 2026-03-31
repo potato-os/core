@@ -19,7 +19,7 @@ from apps.permitato.modes import get_mode, MODES
 from apps.permitato.pihole_adapter import PiholeUnavailableError
 from apps.permitato.net_resolve import resolve_requester_ipv4
 from apps.permitato.lifecycle import _apply_schedule_tick
-from apps.permitato.state import PermitState, apply_mode_to_client, flush_dns_cache_safe, validate_client
+from apps.permitato.state import PermitState, apply_mode_to_client, flush_dns_cache_safe, update_bypass_status, validate_client
 from apps.permitato.system_prompt import build_system_prompt
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,7 @@ async def permitato_status(request: Request):
         "degraded_since": state.degraded_since,
         "client_id": state.client_id,
         "client_valid": state.client_valid,
+        "blocking_bypassed": state.blocking_bypassed,
         "schedule_active": scheduled_mode is not None,
         "scheduled_mode": scheduled_mode,
         "override_active": state.override_mode is not None,
@@ -167,9 +168,11 @@ async def set_client(request: Request):
         return JSONResponse(status_code=400, content={"error": "client_id is required"})
 
     state.client_id = client_id
+    state.blocking_bypassed = False
     state.persist()
     await apply_mode_to_client(state)
     await flush_dns_cache_safe(state)
+    await update_bypass_status(state)
     await validate_client(state, force_refresh=True)
 
     warning = None

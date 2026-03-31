@@ -140,6 +140,15 @@ class PiholeAdapter:
                 f"DNS cache flush failed: {exc.response.status_code}"
             ) from exc
 
+    # -- Network devices ------------------------------------------------------
+
+    async def get_network_devices(self) -> list[dict]:
+        """Fetch network device info including lastQuery and lastSeen timestamps."""
+        resp = await self._request("GET", "/network/devices")
+        return resp.json().get("devices", [])
+
+    # -- Health ----------------------------------------------------------------
+
     async def is_healthy(self) -> bool:
         try:
             resp = await self._request("GET", "/dns/blocking")

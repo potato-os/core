@@ -20,6 +20,8 @@ from apps.permitato.schedule import ScheduleStore
 
 logger = logging.getLogger(__name__)
 
+BYPASS_THRESHOLD_SECONDS = 300  # 5 minutes
+
 
 def atomic_write(path: Path, data: str) -> None:
     """Write data to path atomically via tmp + os.replace."""
@@ -44,6 +46,8 @@ class PermitState:
     pihole_available: bool = False
     degraded_since: float | None = None
     client_valid: bool | None = None
+    blocking_bypassed: bool = False
+    blocking_last_checked: float | None = None
     _client_cache_ts: float = 0
     _cached_clients: list = field(default_factory=list)
     data_dir: Path = field(default_factory=lambda: Path("/opt/potato/data/permitato"))
@@ -278,6 +282,78 @@ async def flush_dns_cache_safe(state: PermitState) -> None:
         await state.adapter.flush_dns_cache()
     except Exception:
         logger.warning("DNS cache flush failed", exc_info=True)
+
+
+def check_dns_bypass(
+    devices: list[dict],
+    client_id: str,
+    now: float | None = None,
+) -> bool | None:
+    """Check if the client's DNS is bypassing Pi-hole.
+
+    client_id may be an IP address or a MAC address.
+    Returns True (bypass detected), False (no bypass), or None (client not found).
+    """
+    if not client_id or not devices:
+        return None
+
+    if now is None:
+        now = time.time()
+
+    for device in devices:
+        # Match by IP
+        for ip_entry in device.get("ips", []):
+            if ip_entry.get("ip") == client_id:
+                return _evaluate_bypass(device, ip_entry.get("lastSeen", 0), now)
+
+        # Match by MAC (hwaddr)
+        if device.get("hwaddr", "").lower() == client_id.lower():
+            # Use freshest lastSeen across all IPs
+            best_seen = max(
+                (ip.get("lastSeen", 0) for ip in device.get("ips", [])),
+                default=0,
+            )
+            return _evaluate_bypass(device, best_seen, now)
+
+    return None
+
+
+def _evaluate_bypass(device: dict, last_seen: float, now: float) -> bool:
+    last_query = device.get("lastQuery", 0)
+    seen_fresh = (now - last_seen) < BYPASS_THRESHOLD_SECONDS
+    query_stale = (now - last_query) >= BYPASS_THRESHOLD_SECONDS
+    return seen_fresh and query_stale
+
+
+async def update_bypass_status(state: PermitState) -> None:
+    """Query Pi-hole network devices and update bypass detection fields."""
+    if not state.pihole_available or not state.adapter or not state.client_id:
+        return
+
+    try:
+        devices = await state.adapter.get_network_devices()
+    except PiholeUnavailableError:
+        logger.warning("Could not fetch network devices for bypass check")
+        return
+    except Exception:
+        logger.warning("Unexpected error during bypass check", exc_info=True)
+        return
+
+    result = check_dns_bypass(devices, state.client_id)
+    state.blocking_last_checked = time.time()
+
+    if result is True:
+        if not state.blocking_bypassed:
+            logger.warning(
+                "DNS bypass detected: client %s is on network but not querying Pi-hole",
+                state.client_id,
+            )
+        state.blocking_bypassed = True
+    else:
+        # False (no bypass) or None (client not found) — clear the flag
+        if state.blocking_bypassed:
+            logger.info("DNS bypass resolved for client %s", state.client_id)
+        state.blocking_bypassed = False
 
 
 async def reconnect_pihole(state: PermitState) -> None:

@@ -11,7 +11,7 @@ from datetime import datetime
 from apps.permitato.state import (
     PermitState, apply_mode_to_client, apply_startup_schedule,
     flush_dns_cache_safe, initialize_permitato, shutdown_permitato,
-    reconnect_pihole,
+    reconnect_pihole, update_bypass_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,11 +54,15 @@ async def on_startup(app, app_dir: Path, data_dir: Path) -> None:
         _schedule_check_loop(app),
         name="permitato-schedule",
     )
+    app.state.permit_bypass_task = asyncio.create_task(
+        _bypass_check_loop(app),
+        name="permitato-bypass-check",
+    )
 
 
 async def on_shutdown(app) -> None:
     """Shutdown Permitato: cancel background tasks, disconnect adapter."""
-    for attr in ("permit_expiry_task", "permit_reconnect_task", "permit_schedule_task"):
+    for attr in ("permit_expiry_task", "permit_reconnect_task", "permit_schedule_task", "permit_bypass_task"):
         task = getattr(app.state, attr, None)
         if task is not None:
             task.cancel()
@@ -160,3 +164,12 @@ async def _apply_schedule_tick(
             "from_mode": old_mode,
             "to_mode": effective,
         })
+
+
+async def _bypass_check_loop(app) -> None:
+    """Background task: check for DNS bypass every 60s."""
+    while True:
+        await asyncio.sleep(60)
+        state = getattr(app.state, "permit_state", None)
+        if state:
+            await update_bypass_status(state)

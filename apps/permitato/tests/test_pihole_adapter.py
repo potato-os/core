@@ -251,3 +251,41 @@ async def test_flush_dns_cache_raises_on_network_error():
         with pytest.raises(PiholeUnavailableError):
             await adapter.flush_dns_cache()
     await adapter.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Network devices
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_network_devices_returns_device_list():
+    adapter = _adapter()
+    adapter._sid = "sid1"
+    fake_devices = [
+        {"id": 1, "hwaddr": "aa:bb:cc:dd:ee:ff", "lastQuery": 1700000000, "ips": [{"ip": "192.168.1.10", "lastSeen": 1700000100}]},
+        {"id": 2, "hwaddr": "11:22:33:44:55:66", "lastQuery": 1700000050, "ips": [{"ip": "192.168.1.20", "lastSeen": 1700000090}]},
+    ]
+    with respx.mock() as router:
+        router.get("http://pihole.test:8081/api/network/devices").mock(
+            return_value=Response(200, json={"devices": fake_devices})
+        )
+        result = await adapter.get_network_devices()
+
+    assert len(result) == 2
+    assert result[0]["hwaddr"] == "aa:bb:cc:dd:ee:ff"
+    await adapter.disconnect()
+
+
+@pytest.mark.anyio
+async def test_get_network_devices_returns_empty_on_no_devices():
+    adapter = _adapter()
+    adapter._sid = "sid1"
+    with respx.mock() as router:
+        router.get("http://pihole.test:8081/api/network/devices").mock(
+            return_value=Response(200, json={"devices": []})
+        )
+        result = await adapter.get_network_devices()
+
+    assert result == []
+    await adapter.disconnect()

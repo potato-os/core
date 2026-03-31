@@ -133,6 +133,24 @@
   display: none;
 }
 
+/* Bypass banner */
+.permitato-bypass-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  margin: 8px 16px 0;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.permitato-bypass-banner[hidden] {
+  display: none;
+}
+
 .permitato-reconfigure-btn {
   padding: 3px 10px;
   border: 1px solid rgba(245, 158, 11, 0.4);
@@ -694,6 +712,10 @@
 
 .permitato-pihole-dot.disconnected {
   background: #ef4444;
+}
+
+.permitato-pihole-dot.bypassed {
+  background: #f59e0b;
 }
 
 #permitatoPiholeLabel {

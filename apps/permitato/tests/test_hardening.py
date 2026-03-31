@@ -832,3 +832,35 @@ async def test_set_client_flushes_dns_cache(tmp_path):
 
     assert resp.status_code == 200
     adapter.flush_dns_cache.assert_awaited()
+
+
+@pytest.mark.anyio
+async def test_set_client_resets_bypass_and_rechecks(tmp_path):
+    from apps.permitato.state import PermitState
+
+    adapter = AsyncMock()
+    adapter.get_network_devices = AsyncMock(return_value=[])
+    state = PermitState(
+        data_dir=tmp_path,
+        adapter=adapter,
+        pihole_available=True,
+        mode="work",
+        client_id="192.168.1.10",
+        blocking_bypassed=True,  # stale flag from previous client
+        group_map={"permitato_work": 1, "permitato_sfw": 2},
+    )
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from apps.permitato.routes import router
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.permit_state = state
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post("/client", json={"client_id": "192.168.1.50"})
+
+    assert resp.status_code == 200
+    assert state.blocking_bypassed is False
+    adapter.get_network_devices.assert_awaited()

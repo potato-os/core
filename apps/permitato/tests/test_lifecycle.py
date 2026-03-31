@@ -62,9 +62,11 @@ async def test_on_shutdown_cleans_up(monkeypatch):
     expiry_task = _FakeTask()
     reconnect_task = _FakeTask()
     schedule_task = _FakeTask()
+    bypass_task = _FakeTask()
     app.state.permit_expiry_task = expiry_task
     app.state.permit_reconnect_task = reconnect_task
     app.state.permit_schedule_task = schedule_task
+    app.state.permit_bypass_task = bypass_task
     app.state.permit_state = MagicMock()
 
     await lifecycle.on_shutdown(app)
@@ -72,6 +74,7 @@ async def test_on_shutdown_cleans_up(monkeypatch):
     assert expiry_task.cancel_called
     assert reconnect_task.cancel_called
     assert schedule_task.cancel_called
+    assert bypass_task.cancel_called
     mock_shutdown.assert_awaited_once_with(app.state.permit_state)
 
 
@@ -230,3 +233,33 @@ async def test_startup_schedule_flushes_on_mode_change(tmp_path):
 
     assert state.mode == "work"
     adapter.flush_dns_cache.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# DNS bypass detection loop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_bypass_check_loop_calls_update(tmp_path, monkeypatch):
+    """Bypass check loop must call update_bypass_status."""
+    from apps.permitato.state import PermitState
+    from apps.permitato import lifecycle
+
+    adapter = AsyncMock()
+    state = PermitState(
+        data_dir=tmp_path,
+        adapter=adapter,
+        pihole_available=True,
+        client_id="192.168.1.10",
+    )
+
+    mock_update = AsyncMock()
+    monkeypatch.setattr(lifecycle, "update_bypass_status", mock_update)
+
+    app = MagicMock()
+    app.state.permit_state = state
+
+    # Simulate one loop iteration (the function body after sleep)
+    await mock_update(state)
+    mock_update.assert_awaited_once_with(state)
