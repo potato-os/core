@@ -126,7 +126,7 @@ async def _apply_schedule_tick(
     """Single schedule evaluation tick — used by the loop and testable directly."""
     from apps.permitato.audit import write_audit_entry
 
-    if not state.schedule_store:
+    if not state.schedule_store or not state.schedule_store.list_rules():
         return
 
     scheduled_mode = state.schedule_store.evaluate(now)

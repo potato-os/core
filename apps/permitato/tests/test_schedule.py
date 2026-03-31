@@ -500,6 +500,67 @@ async def test_schedule_loop_noop_without_store(tmp_path):
     assert state.mode == "normal"
 
 
+@pytest.mark.anyio
+async def test_schedule_loop_noop_with_empty_store(tmp_path):
+    """Empty schedule store must not override manual mode switches."""
+    from unittest.mock import AsyncMock
+    from apps.permitato.schedule import ScheduleStore
+    from apps.permitato.state import PermitState
+
+    store = ScheduleStore(data_dir=None)
+
+    state = PermitState(data_dir=tmp_path, adapter=AsyncMock())
+    state.schedule_store = store
+    state.mode = "work"
+
+    from apps.permitato.lifecycle import _apply_schedule_tick
+    await _apply_schedule_tick(state, datetime(2026, 3, 30, 10, 0))
+
+    assert state.mode == "work"
+
+
+@pytest.mark.anyio
+async def test_schedule_loop_empty_store_preserves_mode_across_ticks(tmp_path):
+    """Manual mode must survive repeated tick evaluations with no rules."""
+    from unittest.mock import AsyncMock
+    from apps.permitato.schedule import ScheduleStore
+    from apps.permitato.state import PermitState
+
+    store = ScheduleStore(data_dir=None)
+
+    state = PermitState(data_dir=tmp_path, adapter=AsyncMock())
+    state.schedule_store = store
+    state.mode = "sfw"
+
+    from apps.permitato.lifecycle import _apply_schedule_tick
+    for minute in range(5):
+        await _apply_schedule_tick(state, datetime(2026, 3, 30, 10, minute))
+
+    assert state.mode == "sfw"
+
+
+@pytest.mark.anyio
+async def test_schedule_loop_empty_store_skips_pihole(tmp_path):
+    """No Pi-hole interaction when schedule store has no rules."""
+    from unittest.mock import AsyncMock
+    from apps.permitato.schedule import ScheduleStore
+    from apps.permitato.state import PermitState
+
+    adapter = AsyncMock()
+    store = ScheduleStore(data_dir=None)
+
+    state = PermitState(data_dir=tmp_path, adapter=adapter)
+    state.schedule_store = store
+    state.mode = "work"
+    state.pihole_available = True
+
+    from apps.permitato.lifecycle import _apply_schedule_tick
+    await _apply_schedule_tick(state, datetime(2026, 3, 30, 10, 0))
+
+    assert state.mode == "work"
+    adapter.update_client.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Startup schedule evaluation
 # ---------------------------------------------------------------------------
@@ -716,6 +777,36 @@ async def test_delete_schedule_applies_immediately(tmp_path):
 
     assert result["deleted"] is True
     assert state.mode == "normal"  # reverted because no rules match
+
+
+@pytest.mark.anyio
+async def test_delete_last_rule_clears_stale_override(tmp_path):
+    """Deleting the last rule while overriding to normal must clear override fields."""
+    from unittest.mock import AsyncMock, patch
+    from apps.permitato.schedule import ScheduleStore
+    from apps.permitato.state import PermitState
+
+    state = PermitState(data_dir=tmp_path, adapter=AsyncMock())
+    state.schedule_store = ScheduleStore(data_dir=tmp_path)
+    rule = state.schedule_store.add_rule("work", [0], "09:00", "17:00")
+    state.mode = "normal"
+    state.override_mode = "normal"
+    state.override_scheduled_mode = "work"
+    state.pihole_available = True
+
+    from apps.permitato import routes
+    now = datetime(2026, 3, 30, 14, 0)
+    with patch.object(routes, "_schedule_now", return_value=now):
+        await _call_delete_schedule(state, rule.id)
+
+    assert state.override_mode is None
+    assert state.override_scheduled_mode is None
+
+    # Adding a replacement rule in the same window must now take effect
+    state.schedule_store.add_rule("work", [0], "09:00", "17:00")
+    from apps.permitato.lifecycle import _apply_schedule_tick
+    await _apply_schedule_tick(state, now)
+    assert state.mode == "work"
 
 
 # ---------------------------------------------------------------------------

@@ -437,7 +437,23 @@ async def delete_schedule_rule(request: Request, rule_id: str):
         "mode": rule.mode,
     })
 
-    await _apply_schedule_tick(state, _schedule_now())
+    if state.schedule_store.list_rules():
+        await _apply_schedule_tick(state, _schedule_now())
+    else:
+        state.override_mode = None
+        state.override_scheduled_mode = None
+        if state.mode != "normal":
+            old_mode = state.mode
+            state.mode = "normal"
+            state.persist()
+            await apply_mode_to_client(state)
+            write_audit_entry(state.data_dir, {
+                "event": "scheduled_mode_switch",
+                "from_mode": old_mode,
+                "to_mode": "normal",
+            })
+        else:
+            state.persist()
     return {"deleted": True}
 
 
