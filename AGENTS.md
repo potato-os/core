@@ -54,10 +54,33 @@ Tests are organized under `tests/`:
 - First-time Playwright setup: `npx playwright install chromium`
 
 ### Pi deployment
-- Fast core deploy: `sshpass -e rsync -az --delete --rsync-path="sudo rsync" -e "ssh -o StrictHostKeyChecking=accept-new" core/ pi@potato.local:/opt/potato/core/`
-- Fast apps deploy: `sshpass -e rsync -az --rsync-path="sudo rsync" -e "ssh -o StrictHostKeyChecking=accept-new" apps/ pi@potato.local:/opt/potato/apps/`
+
+Credentials: `export SSHPASS=raspberry`. All commands below assume `SSHPASS` is set.
+
+`/opt/potato/` is owned by `potato:potato`. The `pi` user needs sudo for rsync. Use `SUDO_ASKPASS` (not `--rsync-path="sudo rsync"`, which fails because sudo requires a password).
+
+These commands are written for a **macOS dev environment**. `COPYFILE_DISABLE=1` prevents macOS tar/rsync from embedding `._` resource fork files (harmless on Linux). The separate chown step compensates for macOS rsync lacking `--chown` (Linux rsync 3.1+ supports it natively).
+
+- Fast core deploy:
+  ```
+  COPYFILE_DISABLE=1 sshpass -e rsync -az --delete \
+    --rsync-path="SUDO_ASKPASS=/opt/potato/bin/askpass.sh sudo -A rsync" \
+    -e "ssh -o StrictHostKeyChecking=accept-new" \
+    core/ pi@potato.local:/opt/potato/core/
+  ```
+- Fast apps deploy:
+  ```
+  COPYFILE_DISABLE=1 sshpass -e rsync -az \
+    --rsync-path="SUDO_ASKPASS=/opt/potato/bin/askpass.sh sudo -A rsync" \
+    -e "ssh -o StrictHostKeyChecking=accept-new" \
+    apps/ pi@potato.local:/opt/potato/apps/
+  ```
+- Fix ownership after deploy (macOS rsync lacks `--chown`):
+  ```
+  sshpass -e ssh pi@potato.local "echo raspberry | sudo -S chown -R potato:potato /opt/potato/core /opt/potato/apps"
+  ```
 - Full install: `sshpass -e ssh pi@potato.local "cd /tmp/potato-os && sudo ./bin/install_dev.sh"`
-- Restart service: `sshpass -e ssh pi@potato.local "sudo systemctl restart potato"`
+- Restart service: `sshpass -e ssh pi@potato.local "echo raspberry | sudo -S systemctl restart potato"`
 
 ### Image building
 - `./bin/build_local_image.sh --setup-docker`: Build Potato OS image from macOS (recommended entry point).
