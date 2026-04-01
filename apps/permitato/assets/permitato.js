@@ -130,8 +130,12 @@ function _updateStatusBar(data) {
     _showOnboarding();
     return;
   }
-  if (data.client_id && _onboardingVisible && !_pendingClientSelection) {
+  if (data.client_id && data.client_valid !== false && _onboardingVisible && !_pendingClientSelection) {
     _hideOnboarding();
+  }
+  // Reconfigure: keep refreshing clients while overlay is open with invalid client
+  if (data.client_valid === false && _onboardingVisible && !_pendingClientSelection) {
+    _showOnboarding();
   }
 
   // Recovery: show banner when client is invalid

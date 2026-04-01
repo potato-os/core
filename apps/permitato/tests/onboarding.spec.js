@@ -159,6 +159,50 @@ test("reconfigure button opens onboarding overlay", async ({ page }) => {
   await expect(page.locator("#permitatoRecoveryBanner")).toBeVisible();
   await page.locator("#permitatoReconfigureBtn").click();
   await expect(page.locator("#permitatoOnboarding")).toBeVisible();
+
+  // Wait for a status poll to complete — overlay must survive it
+  await page.waitForResponse((resp) => resp.url().includes("/app/permitato/api/status") && resp.status() === 200);
+  await expect(page.locator("#permitatoOnboarding")).toBeVisible();
+});
+
+
+test("reconfigure overlay picks up newly discovered devices", async ({ page }) => {
+  let clientFetchCount = 0;
+  const UPDATED_CLIENTS = {
+    clients: [
+      ...FAKE_CLIENTS.clients,
+      { client: "192.168.1.50", name: "New device", id: 3, selected: false, is_requester: false },
+    ],
+    pihole_available: true,
+  };
+
+  await page.clock.install();
+
+  await openPermitato(page, {
+    permitatoStatusRoute: async (route) => {
+      await route.fulfill({ status: 200, body: JSON.stringify(FAKE_PERMITATO_STATUS_INVALID_CLIENT) });
+    },
+    clientsRoute: async (route) => {
+      clientFetchCount++;
+      const data = clientFetchCount >= 2 ? UPDATED_CLIENTS : FAKE_CLIENTS;
+      await route.fulfill({ status: 200, body: JSON.stringify(data) });
+    },
+  });
+
+  await expect(page.locator("#permitatoRecoveryBanner")).toBeVisible();
+  await page.locator("#permitatoReconfigureBtn").click();
+  await expect(page.locator("#permitatoOnboarding")).toBeVisible();
+  await expect(page.locator("#permitatoClientList li")).toHaveCount(2);
+
+  // Advance past the 30-second client refresh throttle and wait for refresh
+  const clientRefresh = page.waitForResponse(
+    (resp) => resp.url().includes("/app/permitato/api/clients") && resp.status() === 200
+  );
+  await page.clock.fastForward(35000);
+  await clientRefresh;
+
+  await expect(page.locator("#permitatoClientList li")).toHaveCount(3);
+  await expect(page.locator("#permitatoClientList")).toContainText("New device");
 });
 
 
