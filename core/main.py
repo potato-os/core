@@ -900,6 +900,16 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
                 projector_filename = str(vision_settings.get("projector_filename") or "").strip()
                 if projector_mode == "custom" and projector_filename:
                     env["POTATO_MMPROJ_PATH"] = str(runtime.base_dir / "models" / projector_filename)
+    # ik_llama's IQK flash-attention kernels don't yet support q8_0 KV cache
+    # for Gemma 4's attention head configuration — fall back to f16 to avoid
+    # a ggml_abort in FlashQKV::normalize_and_store_1row.
+    if isinstance(active_model, dict):
+        active_fn = str(active_model.get("filename") or "")
+        installed_family = _detect_installed_runtime_family(runtime)
+        if is_gemma4_filename(active_fn) and installed_family == "ik_llama":
+            env["POTATO_CACHE_TYPE_K"] = "f16"
+            env["POTATO_CACHE_TYPE_V"] = "f16"
+
     device_class = classify_runtime_device(
         pi_model_name=_read_pi_device_model_name(),
     )

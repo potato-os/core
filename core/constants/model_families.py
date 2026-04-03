@@ -80,7 +80,7 @@ def _gemma4_projector_repo(filename: str | None, source_url: str | None = None) 
 def recommended_runtime_for_model(filename: str | None) -> str | None:
     """Return the preferred runtime family for a model, or None for no preference."""
     if is_gemma4_filename(filename):
-        return "llama_cpp"
+        return "ik_llama"
     return None
 
 
