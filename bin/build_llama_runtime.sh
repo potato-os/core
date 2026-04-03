@@ -59,6 +59,7 @@ copy_runtime_deps() {
           continue
           ;;
       esac
+      [ -e "${bundle_lib}/${base}" ] && continue
       cp -L "${dep}" "${bundle_lib}/"
     done < <(ldd "${f}" 2>/dev/null | awk '
       $2 == "=>" && $3 ~ /^\// { print $3 }
@@ -267,8 +268,12 @@ if command -v patchelf >/dev/null 2>&1; then
 fi
 
 shopt -s nullglob
-for so in "${build_dir}/bin/"*.so* "${build_dir}/lib/"*.so*; do
-  cp -P "${so}" "${slot_dir}/lib/"
+# Copy lib/ first (real files), then bin/ (may contain symlinks).
+# Use cp -L to dereference symlinks so we always get the real file.
+for so in "${build_dir}/lib/"*.so* "${build_dir}/bin/"*.so*; do
+  base="$(basename "${so}")"
+  [ -e "${slot_dir}/lib/${base}" ] && continue
+  cp -L "${so}" "${slot_dir}/lib/"
 done
 shopt -u nullglob
 

@@ -34,8 +34,10 @@ except ModuleNotFoundError:
 
 try:
     from core.constants import (
+        is_gemma4_filename,
         is_qwen35_filename,
         projector_repo_for_model,
+        recommended_runtime_for_model,
     )
     from core.model_state import (
         DEFAULT_MODEL_CHAT_SETTINGS,
@@ -96,6 +98,7 @@ try:
         POWER_CALIBRATION_DEFAULT_B,
         RuntimeConfig,
         _MODEL_LOADING_INACTIVE,
+        _detect_installed_runtime_family,
         build_large_model_compatibility,
         build_llama_large_model_override_status,
         build_llama_memory_loading_status,
@@ -157,8 +160,10 @@ try:
     )
 except ModuleNotFoundError:
     from constants import (  # type: ignore[no-redef]
+        is_gemma4_filename,
         is_qwen35_filename,
         projector_repo_for_model,
+        recommended_runtime_for_model,
     )
     from model_state import (  # type: ignore[no-redef]
         DEFAULT_MODEL_CHAT_SETTINGS,
@@ -219,6 +224,7 @@ except ModuleNotFoundError:
         POWER_CALIBRATION_DEFAULT_B,
         RuntimeConfig,
         _MODEL_LOADING_INACTIVE,
+        _detect_installed_runtime_family,
         build_large_model_compatibility,
         build_llama_large_model_override_status,
         build_llama_memory_loading_status,
@@ -866,6 +872,7 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env["POTATO_LLAMA_NO_MMAP"] = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
     env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
     env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4"] = "0"
     env.pop("POTATO_MMPROJ_PATH", None)
     try:
         state = ensure_models_state(runtime)
@@ -883,6 +890,8 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
                 env["POTATO_HF_MMPROJ_REPO"] = mmproj_repo
             if is_qwen35_filename(active_filename):
                 env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "1"
+            if is_gemma4_filename(active_filename):
+                env["POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4"] = "1"
             projector_status = build_model_projector_status(runtime, active_model)
             if projector_status.get("present") and projector_status.get("path"):
                 env["POTATO_MMPROJ_PATH"] = str(projector_status["path"])
@@ -1306,10 +1315,28 @@ async def activate_model(
     filename = str(target.get("filename") or "")
     if not model_file_present(runtime, filename):
         return False, "model_not_ready", False
+    # Auto-switch runtime before committing the model state so a failed
+    # install doesn't leave Potato pointing at an unrunnable model.
+    preferred = recommended_runtime_for_model(filename)
+    if preferred:
+        current = _detect_installed_runtime_family(runtime)
+        if current and current != preferred:
+            slot = find_runtime_slot_by_family(runtime, preferred)
+            if slot is not None:
+                slot_path = Path(slot["path"])
+                logger.info("Auto-switching runtime %s -> %s for model %s", current, preferred, filename)
+                async with app.state.llama_runtime_switch_lock:
+                    result = await install_llama_runtime_bundle(runtime, slot_path)
+                if not isinstance(result, dict) or not result.get("ok", False):
+                    reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
+                    logger.error("Runtime auto-switch failed during activation: %s", reason)
+                    return False, "runtime_switch_failed", False
+
     state["active_model_id"] = model_id
     target["status"] = "ready"
     save_models_state(runtime, state)
     runtime.model_path = resolve_model_runtime_path(runtime, filename)
+
     restarted, _reason = await restart_managed_llama_process(app)
     return True, "activated", restarted
 

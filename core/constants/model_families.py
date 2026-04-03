@@ -50,5 +50,42 @@ def _qwen35_projector_repo(filename: str | None, source_url: str | None = None) 
     return None
 
 
+GEMMA4_PROJECTOR_REPO_RULES: Final[tuple[tuple[tuple[str, ...], str], ...]] = (
+    (("e2b",), "unsloth/gemma-4-E2B-it-GGUF"),
+    (("e4b",), "unsloth/gemma-4-E4B-it-GGUF"),
+    (("26b", "a4b"), "unsloth/gemma-4-26B-A4B-it-GGUF"),
+)
+
+
+def is_gemma4_filename(filename: str | None) -> bool:
+    model_name = _normalized_model_name(filename)
+    return bool(model_name) and "gemma" in model_name and _token_at_boundary("4", model_name)
+
+
+def _gemma4_projector_repo(filename: str | None, source_url: str | None = None) -> str | None:
+    model_name = _normalized_model_name(filename)
+    if not is_gemma4_filename(model_name):
+        return None
+
+    match_text = model_name
+    if source_url:
+        match_text = _normalized_model_name(source_url) + " " + match_text
+
+    for required_tokens, repo in GEMMA4_PROJECTOR_REPO_RULES:
+        if all(_token_at_boundary(token, match_text) for token in required_tokens):
+            return repo
+    return None
+
+
+def recommended_runtime_for_model(filename: str | None) -> str | None:
+    """Return the preferred runtime family for a model, or None for no preference."""
+    if is_gemma4_filename(filename):
+        return "llama_cpp"
+    return None
+
+
 def projector_repo_for_model(filename: str | None, source_url: str | None = None) -> str | None:
-    return _qwen35_projector_repo(filename, source_url=source_url)
+    return (
+        _qwen35_projector_repo(filename, source_url=source_url)
+        or _gemma4_projector_repo(filename, source_url=source_url)
+    )

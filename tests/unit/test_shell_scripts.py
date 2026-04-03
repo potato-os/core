@@ -1188,6 +1188,84 @@ mmproj_filename_candidates
     )
 
 
+# ── Gemma 4 shell integration ─────────────────────────────────────
+
+
+def test_start_llama_gemma4_vision_uses_mmproj(tmp_path: Path):
+    """Gemma 4 with vision flag enabled must include --mmproj in command."""
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model_path = model_dir / "gemma-4-E2B-it-Q4_K_M.gguf"
+    model_path.write_bytes(b"gguf")
+    f16_mmproj = model_dir / "mmproj-F16.gguf"
+    f16_mmproj.write_bytes(b"f16")
+
+    args_out = tmp_path / "args.txt"
+    write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4"] = "1"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "0"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--mmproj" in args
+    assert str(f16_mmproj) in args
+
+
+def test_start_llama_gemma4_text_only_skips_mmproj(tmp_path: Path):
+    """Without Gemma 4 vision flag, no --mmproj even with Gemma 4 filename."""
+    runtime_dir = tmp_path / "llama"
+    runtime_bin = runtime_dir / "bin"
+    runtime_bin.mkdir(parents=True)
+
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    model_path = model_dir / "gemma-4-E2B-it-Q4_K_M.gguf"
+    model_path.write_bytes(b"gguf")
+    f16_mmproj = model_dir / "mmproj-F16.gguf"
+    f16_mmproj.write_bytes(b"f16")
+
+    args_out = tmp_path / "args.txt"
+    write_stub(
+        runtime_bin / "llama-server",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$ARGS_OUT"
+""",
+    )
+
+    env = os.environ.copy()
+    env["POTATO_BASE_DIR"] = str(tmp_path)
+    env["POTATO_LLAMA_RUNTIME_DIR"] = str(runtime_dir)
+    env["POTATO_MODEL_PATH"] = str(model_path)
+    env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4"] = "0"
+    env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "0"
+    env["ARGS_OUT"] = str(args_out)
+
+    subprocess.run([str(REPO_ROOT / "bin" / "start_llama.sh")], check=True, cwd=REPO_ROOT, env=env)
+
+    args = args_out.read_text(encoding="utf-8")
+    assert "--mmproj" not in args
+
+
 # ---------------------------------------------------------------------------
 # Pi-hole installation section in install_dev.sh (#212)
 # ---------------------------------------------------------------------------

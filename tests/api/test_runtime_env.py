@@ -345,3 +345,105 @@ def test_model_switch_passes_generic_with_auto_download_for_shell_upgrade(runtim
     assert "POTATO_HF_MMPROJ_REPO" in env
 
 
+# ── Gemma 4 runtime env ────────────────────────────────────────────
+
+
+def test_runtime_env_sets_gemma4_vision_flag_when_active(runtime):
+    model_filename = "gemma-4-E2B-it-Q4_K_M.gguf"
+    model_path = runtime.base_dir / "models" / model_filename
+    model_path.write_bytes(b"gguf")
+    mmproj = runtime.base_dir / "models" / "mmproj-gemma-4-E2B-it-f16.gguf"
+    mmproj.write_bytes(b"projector")
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "gemma4-model",
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": runtime.model_path.name,
+                        "source_url": "https://example.com/default.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                    {
+                        "id": "gemma4-model",
+                        "filename": model_filename,
+                        "source_url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                        "settings": {
+                            "vision": {
+                                "enabled": True,
+                                "projector_mode": "default",
+                                "projector_filename": None,
+                            }
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = _runtime_env(runtime)
+
+    assert env["POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4"] == "1"
+    assert env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] == "0"
+    assert env["POTATO_AUTO_DOWNLOAD_MMPROJ"] == "1"
+    assert env["POTATO_HF_MMPROJ_REPO"] == "unsloth/gemma-4-E2B-it-GGUF"
+    assert "POTATO_MMPROJ_PATH" in env
+    assert "gemma-4-E2B-it" in env["POTATO_MMPROJ_PATH"]
+
+
+def test_runtime_env_disables_gemma4_flag_when_vision_off(runtime):
+    model_filename = "gemma-4-E4B-it-Q4_0.gguf"
+    model_path = runtime.base_dir / "models" / model_filename
+    model_path.write_bytes(b"gguf")
+    runtime.model_path = model_path
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "gemma4-model",
+                "default_model_id": "gemma4-model",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "gemma4-model",
+                        "filename": model_filename,
+                        "source_url": "https://example.com/gemma4.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                        "settings": {
+                            "vision": {
+                                "enabled": False,
+                                "projector_mode": "default",
+                                "projector_filename": None,
+                            }
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = _runtime_env(runtime)
+
+    assert env["POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4"] == "0"
+    assert env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] == "0"
+    assert env["POTATO_AUTO_DOWNLOAD_MMPROJ"] == "0"
+    assert "POTATO_MMPROJ_PATH" not in env
+
+

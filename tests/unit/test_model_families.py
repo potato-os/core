@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.constants.model_families import projector_repo_for_model
+from core.constants.model_families import is_gemma4_filename, projector_repo_for_model, recommended_runtime_for_model
 
 
 def test_projector_repo_for_qwen35_9b():
@@ -119,3 +119,139 @@ def test_projector_status_ignores_stale_generic_bf16_for_wrong_model(runtime):
 def test_projector_repo_existing_sizes_unchanged(filename: str, expected_repo: str):
     """Existing size mappings must not regress."""
     assert projector_repo_for_model(filename) == expected_repo
+
+
+# ── Gemma 4 detection ──────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "gemma-4-E2B-it-Q4_K_M.gguf",
+        "gemma-4-E2B-it-UD-Q4_K_XL.gguf",
+        "gemma-4-E4B-it-Q4_0.gguf",
+        "gemma-4-E4B-it-Q8_0.gguf",
+        "gemma-4-26B-A4B-it-UD-IQ2_M.gguf",
+        "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
+    ],
+)
+def test_is_gemma4_filename_positive(filename: str):
+    """All Gemma 4 variant filenames are detected."""
+    assert is_gemma4_filename(filename) is True
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "gemma-3-9b-it-Q4_K_M.gguf",
+        "Qwen3.5-4B-Q4_K_M.gguf",
+        "llama-4-scout-Q4_K_M.gguf",
+        None,
+        "",
+    ],
+)
+def test_is_gemma4_filename_negative(filename):
+    """Non-Gemma-4 filenames must not match."""
+    assert is_gemma4_filename(filename) is False
+
+
+# ── Gemma 4 projector repo resolution ──────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "filename, expected_repo",
+    [
+        ("gemma-4-E2B-it-Q4_K_M.gguf", "unsloth/gemma-4-E2B-it-GGUF"),
+        ("gemma-4-E2B-it-UD-Q4_K_XL.gguf", "unsloth/gemma-4-E2B-it-GGUF"),
+        ("gemma-4-E2B-it-Q8_0.gguf", "unsloth/gemma-4-E2B-it-GGUF"),
+        ("gemma-4-E2B-it-IQ4_NL.gguf", "unsloth/gemma-4-E2B-it-GGUF"),
+        ("gemma-4-E4B-it-Q4_0.gguf", "unsloth/gemma-4-E4B-it-GGUF"),
+        ("gemma-4-E4B-it-Q8_0.gguf", "unsloth/gemma-4-E4B-it-GGUF"),
+        ("gemma-4-26B-A4B-it-UD-IQ2_M.gguf", "unsloth/gemma-4-26B-A4B-it-GGUF"),
+        ("gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf", "unsloth/gemma-4-26B-A4B-it-GGUF"),
+    ],
+)
+def test_projector_repo_for_gemma4(filename: str, expected_repo: str):
+    """Each Gemma 4 variant resolves to its Unsloth projector repo."""
+    assert projector_repo_for_model(filename) == expected_repo
+
+
+def test_projector_repo_returns_none_for_unknown_gemma4_variant():
+    """Unrecognized Gemma 4 variants must return None."""
+    assert projector_repo_for_model("gemma-4-99B-it-Q4_K_M.gguf") is None
+
+
+def test_projector_repo_gemma4_no_collision_with_quant_4():
+    """'4' in Q4_K_M must not trigger Gemma 4 detection on non-Gemma models."""
+    assert projector_repo_for_model("some-model-Q4_K_M.gguf") is None
+
+
+def test_projector_repo_gemma4_does_not_break_qwen35():
+    """Qwen3.5 repos must still resolve correctly with Gemma 4 code present."""
+    assert projector_repo_for_model("Qwen3.5-2B-Q4_K_M.gguf") == "unsloth/Qwen3.5-2B-GGUF"
+    assert projector_repo_for_model("Qwen3.5-9B-Q4_K_S.gguf") == "unsloth/Qwen3.5-9B-GGUF"
+
+
+# ── Gemma 4 projector candidates ───────────────────────────────────
+
+
+def test_default_candidates_gemma4_e2b():
+    """Gemma 4 E2B produces model-specific f16/bf16 then generic F16."""
+    from core.model_state import default_projector_candidates_for_model
+
+    candidates = default_projector_candidates_for_model("gemma-4-E2B-it-Q4_K_M.gguf")
+    assert len(candidates) > 0
+    assert "mmproj-gemma-4-E2B-it-f16.gguf" in candidates
+    assert "mmproj-gemma-4-E2B-it-bf16.gguf" in candidates
+    assert "mmproj-F16.gguf" in candidates
+    # Generic bf16 must NOT be in the list
+    assert "mmproj-bf16.gguf" not in candidates
+    # f16 model-specific should come before generic
+    assert candidates.index("mmproj-gemma-4-E2B-it-f16.gguf") < candidates.index("mmproj-F16.gguf")
+
+
+def test_default_candidates_gemma4_26b_a4b():
+    """Gemma 4 26B-A4B stem-trimming strips the UD-IQ2_M quant suffix."""
+    from core.model_state import default_projector_candidates_for_model
+
+    candidates = default_projector_candidates_for_model("gemma-4-26B-A4B-it-UD-IQ2_M.gguf")
+    assert "mmproj-gemma-4-26B-A4B-it-f16.gguf" in candidates
+    assert "mmproj-F16.gguf" in candidates
+
+
+def test_projector_status_gemma4_finds_model_specific_on_disk(runtime):
+    """build_model_projector_status detects a Gemma 4 model-specific projector."""
+    from core.model_state import build_model_projector_status
+
+    models_dir = runtime.base_dir / "models"
+    (models_dir / "mmproj-gemma-4-E2B-it-f16.gguf").write_bytes(b"g4-projector")
+
+    model = {
+        "filename": "gemma-4-E2B-it-Q4_K_M.gguf",
+        "settings": {
+            "vision": {"enabled": True, "projector_mode": "default", "projector_filename": None},
+        },
+    }
+    status = build_model_projector_status(runtime, model)
+    assert status["present"] is True
+    assert "gemma-4-E2B-it" in status["filename"]
+
+
+# ── Recommended runtime ────────────────────────────────────────────
+
+
+def test_recommended_runtime_gemma4_is_llama_cpp():
+    """Gemma 4 models should prefer the llama_cpp runtime."""
+    assert recommended_runtime_for_model("gemma-4-E2B-it-Q4_K_M.gguf") == "llama_cpp"
+    assert recommended_runtime_for_model("gemma-4-E4B-it-Q4_0.gguf") == "llama_cpp"
+    assert recommended_runtime_for_model("gemma-4-26B-A4B-it-UD-IQ2_M.gguf") == "llama_cpp"
+
+
+def test_recommended_runtime_qwen35_has_no_preference():
+    """Qwen3.5 models should have no runtime preference (None)."""
+    assert recommended_runtime_for_model("Qwen3.5-2B-Q4_K_M.gguf") is None
+
+
+def test_recommended_runtime_unknown_model_has_no_preference():
+    """Unknown models should have no runtime preference."""
+    assert recommended_runtime_for_model("some-random-model.gguf") is None

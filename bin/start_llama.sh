@@ -19,6 +19,7 @@ HF_MMPROJ_REPO="${POTATO_HF_MMPROJ_REPO:-}"
 # Plain Qwen3.5 2B/4B filenames are ambiguous across text-only and multimodal GGUFs.
 # Keep this opt-in so text models are not forced into mmproj by default.
 VISION_MODEL_NAME_PATTERN_QWEN35="${POTATO_VISION_MODEL_NAME_PATTERN_QWEN35:-0}"
+VISION_MODEL_NAME_PATTERN_GEMMA4="${POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4:-0}"
 
 CACHE_TYPE_K="${POTATO_CACHE_TYPE_K:-q8_0}"
 CACHE_TYPE_V="${POTATO_CACHE_TYPE_V:-q8_0}"
@@ -167,8 +168,17 @@ model_is_qwen35_vision() {
   [[ "${model_name}" == *qwen*3.5* ]]
 }
 
+model_is_gemma4_vision() {
+  local model_name
+  model_name="$(model_filename_lower)"
+  [[ "${model_name}" == *gemma*-4-* ]]
+}
+
 model_requires_mmproj() {
   if [ "${VISION_MODEL_NAME_PATTERN_QWEN35}" = "1" ] && model_is_qwen35_vision; then
+    return 0
+  fi
+  if [ "${VISION_MODEL_NAME_PATTERN_GEMMA4}" = "1" ] && model_is_gemma4_vision; then
     return 0
   fi
   return 1
@@ -195,6 +205,20 @@ resolve_mmproj_repo() {
     return 0
   fi
 
+  # Gemma 4 variants
+  if [[ "${model_name}" == *gemma*-4-*e2b* ]]; then
+    printf 'unsloth/gemma-4-E2B-it-GGUF'
+    return 0
+  fi
+  if [[ "${model_name}" == *gemma*-4-*e4b* ]]; then
+    printf 'unsloth/gemma-4-E4B-it-GGUF'
+    return 0
+  fi
+  if [[ "${model_name}" == *gemma*-4-*26b*a4b* ]]; then
+    printf 'unsloth/gemma-4-26B-A4B-it-GGUF'
+    return 0
+  fi
+
   # No fallback — unrecognized sizes must not silently get a wrong projector (#258)
   return 1
 }
@@ -208,7 +232,7 @@ _mmproj_candidates_for_precision() {
 
   printf 'mmproj-%s-%s.gguf\n' "${model_stem}" "${precision}"
   while true; do
-    next_stem="$(printf '%s\n' "${trimmed_stem}" | sed -E 's/-(I?Q[0-9]+(_[A-Za-z0-9]+)*|[0-9]+(\.[0-9]+)?bpw)$//I')"
+    next_stem="$(printf '%s\n' "${trimmed_stem}" | sed -E 's/-(UD-)?(I?Q[0-9]+(_[A-Za-z0-9]+)*|[0-9]+(\.[0-9]+)?bpw|MXFP[0-9]+_MOE)$//I')"
     if [ -z "${next_stem}" ] || [ "${next_stem}" = "${trimmed_stem}" ]; then
       break
     fi
@@ -228,10 +252,19 @@ qwen35_mmproj_name_candidates() {
   printf '%s\n' "mmproj-F16.gguf"
 }
 
+gemma4_mmproj_name_candidates() {
+  _mmproj_candidates_for_precision f16
+  _mmproj_candidates_for_precision bf16
+  printf '%s\n' "mmproj-F16.gguf"
+}
+
 mmproj_filename_candidates() {
   if model_is_qwen35_vision; then
     printf '%s\n' "mmproj-F16.gguf"
     printf '%s\n' "mmproj-bf16.gguf"
+  elif model_is_gemma4_vision; then
+    printf '%s\n' "mmproj-F16.gguf"
+    printf '%s\n' "mmproj-BF16.gguf"
   fi
 }
 
@@ -315,7 +348,7 @@ pick_mmproj() {
     # try to replace it with a model-specific version (#136).
     if [ "$(basename "${MMPROJ_PATH}")" = "mmproj-F16.gguf" ] \
         && [ "${AUTO_DOWNLOAD_MMPROJ}" = "1" ] \
-        && model_is_qwen35_vision; then
+        && { model_is_qwen35_vision || model_is_gemma4_vision; }; then
       if download_mmproj; then
         return 0
       fi
@@ -341,19 +374,32 @@ pick_mmproj() {
     die "No mmproj file found in ${model_dir}. Set POTATO_MMPROJ_PATH or place mmproj*.gguf there."
   fi
 
+  # Curated vision model families: try model-specific projectors first,
+  # then auto-download, then generic F16 fallback.
+  local vision_family_name=''
+  local vision_candidates_fn=''
   if model_is_qwen35_vision; then
+    vision_family_name='Qwen3.5'
+    vision_candidates_fn='qwen35_mmproj_name_candidates'
+  elif model_is_gemma4_vision; then
+    vision_family_name='Gemma 4'
+    vision_candidates_fn='gemma4_mmproj_name_candidates'
+  fi
+
+  if [ -n "${vision_family_name}" ]; then
     # 1. Try exact model-specific match (skip generics — handled below).
     while read -r candidate_base; do
       [ -n "${candidate_base}" ] || continue
       [ "${candidate_base}" = "mmproj-F16.gguf" ] && continue
       [ "${candidate_base}" = "mmproj-bf16.gguf" ] && continue
+      [ "${candidate_base}" = "mmproj-BF16.gguf" ] && continue
       for candidate in "${mmproj_candidates[@]}"; do
         if [ "$(basename "${candidate}")" = "${candidate_base}" ]; then
           MMPROJ_PATH="${candidate}"
           return 0
         fi
       done
-    done < <(qwen35_mmproj_name_candidates | awk '!seen[$0]++')
+    done < <(${vision_candidates_fn} | awk '!seen[$0]++')
 
     # 2. No model-specific match — try auto-download before falling back.
     #    download_mmproj saves with a model-specific local name (#136).
@@ -364,8 +410,6 @@ pick_mmproj() {
     # 3. Offline fallback: accept only generic mmproj-F16.gguf.
     #    Do NOT accept other models' specific projectors — they have
     #    different embedding dimensions and would crash llama-server (#136).
-    #    Generic mmproj-bf16.gguf is also excluded: it's ByteShape-specific
-    #    and could be stale from a different model size.
     for candidate in "${mmproj_candidates[@]}"; do
       candidate_base="$(basename "${candidate}" | tr '[:upper:]' '[:lower:]')"
       if [[ "${candidate_base}" == mmproj-f16.gguf ]]; then
@@ -376,7 +420,7 @@ pick_mmproj() {
       mmproj_candidates=("${compatible_candidates[@]}")
       compatible_candidates=()
     else
-      die "No compatible mmproj found for Qwen3.5 vision model (model: $(basename "${MODEL_PATH}"))."
+      die "No compatible mmproj found for ${vision_family_name} vision model (model: $(basename "${MODEL_PATH}"))."
     fi
   fi
 

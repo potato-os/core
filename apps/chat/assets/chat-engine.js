@@ -361,6 +361,13 @@ import { saveActiveSession } from "./session-manager.js";
       }
     }
 
+    // TODO(llama.cpp#21326): remove _stripChannelTokens once the upstream PEG
+    // parser handles Gemma 4 <|channel>thought tokens natively.
+    const _CHANNEL_RE = /<\|channel>[^<]*<channel\|>/g;
+    function _stripChannelTokens(text) {
+      return text.replace(_CHANNEL_RE, "");
+    }
+
     export function consumeSseDeltas(state, chunkText) {
       if (!chunkText) return { deltas: [], reasoningDeltas: [], events: [] };
       state.buffer += chunkText.replace(/\r\n/g, "\n");
@@ -612,7 +619,7 @@ import { saveActiveSession } from "./session-manager.js";
                 throwIfRequestStoppedAfterPrefill(requestCtx, finishResult);
               }
               assistantText += delta;
-              updateMessage(activeAssistantView, assistantText, { showActions: false });
+              updateMessage(activeAssistantView, _stripChannelTokens(assistantText), { showActions: false });
             }
             for (const reasoningDelta of parsed.reasoningDeltas) {
               assistantReasoningText += reasoningDelta;
@@ -653,7 +660,7 @@ import { saveActiveSession } from "./session-manager.js";
             const finishResult = await markPrefillGenerationStarted(requestCtx);
             throwIfRequestStoppedAfterPrefill(requestCtx, finishResult);
           }
-          const finalAssistantText = assistantText.trim() || formatReasoningOnlyMessage(assistantReasoningText);
+          const finalAssistantText = _stripChannelTokens(assistantText).trim() || formatReasoningOnlyMessage(assistantReasoningText);
           updateMessage(activeAssistantView, finalAssistantText, { showActions: true });
           const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
           if (requestCtx.stoppedByUser) {
@@ -677,7 +684,7 @@ import { saveActiveSession } from "./session-manager.js";
           throwIfRequestStoppedAfterPrefill(requestCtx, finishResult);
         }
         const message = body?.choices?.[0]?.message || {};
-        const messageContent = typeof message?.content === "string" ? message.content.trim() : "";
+        const messageContent = typeof message?.content === "string" ? _stripChannelTokens(message.content).trim() : "";
         const msg = messageContent || formatReasoningOnlyMessage(message?.reasoning_content) || JSON.stringify(body);
         updateMessage(activeAssistantView, msg, { showActions: true });
         const elapsedSeconds = Math.max(0, (performance.now() - requestStartMs) / 1000);
