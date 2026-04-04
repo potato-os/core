@@ -403,6 +403,131 @@ def test_runtime_env_sets_gemma4_vision_flag_when_active(runtime):
     assert "gemma-4-E2B-it" in env["POTATO_MMPROJ_PATH"]
 
 
+def test_runtime_env_suppresses_gemma4_vision_on_ik_llama(runtime):
+    """When ik_llama is the active runtime, Gemma 4 vision must be suppressed
+    because the fork doesn't support gemma4v projectors.  KV cache must NOT
+    be overridden — q8_0 default is correct with the upstream D=512 kernel."""
+    model_filename = "gemma-4-26B-A4B-it-UD-IQ4_NL.gguf"
+    model_path = runtime.base_dir / "models" / model_filename
+    model_path.write_bytes(b"gguf")
+    mmproj = runtime.base_dir / "models" / "mmproj-gemma-4-26B-A4B-it-f16.gguf"
+    mmproj.write_bytes(b"projector")
+    # Simulate ik_llama as the installed runtime
+    llama_dir = runtime.base_dir / "llama"
+    llama_dir.mkdir(parents=True, exist_ok=True)
+    (llama_dir / "runtime.json").write_text(
+        '{"family": "ik_llama", "commit": "584df79e"}',
+        encoding="utf-8",
+    )
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "gemma4-model",
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": runtime.model_path.name,
+                        "source_url": "https://example.com/default.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                    },
+                    {
+                        "id": "gemma4-model",
+                        "filename": model_filename,
+                        "source_url": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/" + model_filename,
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                        "settings": {
+                            "vision": {
+                                "enabled": True,
+                                "projector_mode": "default",
+                                "projector_filename": None,
+                            }
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = _runtime_env(runtime)
+
+    # Vision must be suppressed — ik_llama doesn't support gemma4v projectors
+    assert env["POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4"] == "0"
+    assert "POTATO_MMPROJ_PATH" not in env
+    # KV cache must NOT be overridden — q8_0 default works with D=512 kernel
+    assert "POTATO_CACHE_TYPE_K" not in env
+    assert "POTATO_CACHE_TYPE_V" not in env
+
+
+def test_status_reports_gemma4_vision_false_on_ik_llama(runtime):
+    """When ik_llama is installed, /status must report capabilities.vision=false
+    for the active Gemma 4 model so the UI hides image upload (#270 P2)."""
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    model_filename = "gemma-4-E2B-it-Q4_K_M.gguf"
+    model_path = runtime.base_dir / "models" / model_filename
+    model_path.write_bytes(b"gguf")
+    # Simulate ik_llama as the installed runtime
+    llama_dir = runtime.base_dir / "llama"
+    llama_dir.mkdir(parents=True, exist_ok=True)
+    (llama_dir / "runtime.json").write_text(
+        '{"family": "ik_llama", "commit": "584df79e"}',
+        encoding="utf-8",
+    )
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "gemma4-model",
+                "default_model_id": "gemma4-model",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "gemma4-model",
+                        "filename": model_filename,
+                        "source_url": "https://example.com/gemma4.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                        "settings": {
+                            "vision": {
+                                "enabled": True,
+                                "projector_mode": "default",
+                                "projector_filename": None,
+                            }
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    # Active model capabilities must report vision=false on ik_llama
+    assert body["model"]["capabilities"]["vision"] is False
+    # Model list entry should also reflect no vision
+    gemma4_entry = next(m for m in body["models"] if m["id"] == "gemma4-model")
+    assert gemma4_entry["capabilities"]["vision"] is False
+
+
 def test_runtime_env_disables_gemma4_flag_when_vision_off(runtime):
     model_filename = "gemma-4-E4B-it-Q4_0.gguf"
     model_path = runtime.base_dir / "models" / model_filename

@@ -259,13 +259,13 @@ import { flushPendingNoticeDismissal } from "./platform-notify.js";
           seed,
           system_prompt: document.getElementById("systemPrompt").value.trim(),
         },
-        vision: {
-          enabled: supportsVision && Boolean(document.getElementById("visionEnabled")?.checked),
-          projector_mode: "default",
-          projector_filename: supportsVision
-            ? String(document.getElementById("downloadProjectorBtn")?.dataset?.projectorFilename || "")
-            : "",
-        },
+        vision: supportsVision
+          ? {
+              enabled: Boolean(document.getElementById("visionEnabled")?.checked),
+              projector_mode: "default",
+              projector_filename: String(document.getElementById("downloadProjectorBtn")?.dataset?.projectorFilename || ""),
+            }
+          : (selectedModel?.settings?.vision || { enabled: false, projector_mode: "default", projector_filename: "" }),
       };
     }
 
@@ -368,7 +368,7 @@ import { flushPendingNoticeDismissal } from "./platform-notify.js";
         || String(repetitionPenaltyEl.value || "") !== String(chat.repetition_penalty)
         || String(presencePenaltyEl.value || "") !== String(chat.presence_penalty)
         || String(maxTokensEl.value || "") !== String(chat.max_tokens)
-        || (visionEnabledEl ? Boolean(visionEnabledEl.checked) !== Boolean(vision.enabled) : false)
+        || (visionEnabledEl && !visionEnabledEl.disabled ? Boolean(visionEnabledEl.checked) !== Boolean(vision.enabled) : false)
       );
     }
 

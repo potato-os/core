@@ -675,6 +675,14 @@ def _build_status_fs(
             }
         )
 
+    # ik_llama doesn't support gemma4v vision — downgrade capabilities so
+    # the UI hides image upload instead of sending images to a text-only server.
+    installed_family = _detect_installed_runtime_family(runtime)
+    if installed_family == "ik_llama":
+        for entry in models_payload:
+            if is_gemma4_filename(str(entry.get("filename") or "")):
+                entry["capabilities"] = dict(entry["capabilities"], vision=False)
+
     download_payload = dict(download)
     download_payload["active"] = bool(download_active)
     download_payload["auto_start_seconds"] = int(max(0, runtime.auto_download_idle_seconds))
@@ -760,7 +768,11 @@ def _build_status_fs(
             "active_model_id": models_state.get("active_model_id"),
             "storage": describe_model_storage(runtime, active_model_path.name),
             "settings": normalize_model_settings(active_model.get("settings"), filename=active_model_path.name),
-            "capabilities": build_model_capabilities(active_model_path.name),
+            "capabilities": (
+                dict(build_model_capabilities(active_model_path.name), vision=False)
+                if installed_family == "ik_llama" and is_gemma4_filename(active_model_path.name)
+                else build_model_capabilities(active_model_path.name)
+            ),
             "projector": build_model_projector_status(runtime, active_model),
         },
         "models": models_payload,
@@ -900,6 +912,15 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
                 projector_filename = str(vision_settings.get("projector_filename") or "").strip()
                 if projector_mode == "custom" and projector_filename:
                     env["POTATO_MMPROJ_PATH"] = str(runtime.base_dir / "models" / projector_filename)
+    # ik_llama doesn't support the gemma4v vision projector type yet —
+    # suppress vision to avoid a clip_init failure loop.
+    if isinstance(active_model, dict):
+        active_fn = str(active_model.get("filename") or "")
+        installed_family = _detect_installed_runtime_family(runtime)
+        if is_gemma4_filename(active_fn) and installed_family == "ik_llama":
+            env["POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4"] = "0"
+            env.pop("POTATO_MMPROJ_PATH", None)
+
     device_class = classify_runtime_device(
         pi_model_name=_read_pi_device_model_name(),
     )
@@ -1318,6 +1339,17 @@ async def activate_model(
     # Auto-switch runtime before committing the model state so a failed
     # install doesn't leave Potato pointing at an unrunnable model.
     preferred = recommended_runtime_for_model(filename)
+    if preferred:
+        device_class = classify_runtime_device(
+            pi_model_name=_read_pi_device_model_name(),
+        )
+        compat = check_runtime_device_compatibility(device_class, preferred)
+        if not compat.get("compatible", True):
+            logger.info(
+                "Skipping auto-switch to %s for %s: %s",
+                preferred, filename, compat.get("reason", "incompatible"),
+            )
+            preferred = None
     if preferred:
         current = _detect_installed_runtime_family(runtime)
         if current and current != preferred:

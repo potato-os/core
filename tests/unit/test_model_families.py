@@ -240,11 +240,12 @@ def test_projector_status_gemma4_finds_model_specific_on_disk(runtime):
 # ── Recommended runtime ────────────────────────────────────────────
 
 
-def test_recommended_runtime_gemma4_is_llama_cpp():
-    """Gemma 4 models should prefer the llama_cpp runtime."""
-    assert recommended_runtime_for_model("gemma-4-E2B-it-Q4_K_M.gguf") == "llama_cpp"
-    assert recommended_runtime_for_model("gemma-4-E4B-it-Q4_0.gguf") == "llama_cpp"
-    assert recommended_runtime_for_model("gemma-4-26B-A4B-it-UD-IQ2_M.gguf") == "llama_cpp"
+def test_recommended_runtime_gemma4_is_ik_llama():
+    """All Gemma 4 variants prefer ik_llama for the IQK speedup."""
+    assert recommended_runtime_for_model("gemma-4-E2B-it-Q4_K_M.gguf") == "ik_llama"
+    assert recommended_runtime_for_model("gemma-4-E4B-it-Q4_0.gguf") == "ik_llama"
+    assert recommended_runtime_for_model("gemma-4-26B-A4B-it-UD-IQ2_M.gguf") == "ik_llama"
+    assert recommended_runtime_for_model("gemma-4-26B-A4B-it-UD-IQ4_NL.gguf") == "ik_llama"
 
 
 def test_recommended_runtime_qwen35_has_no_preference():
