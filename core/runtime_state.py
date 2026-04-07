@@ -7,7 +7,6 @@ import math
 import os
 import platform
 import re
-import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -24,10 +23,40 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - optional on non-Pi dev hosts
     psutil = None  # type: ignore[assignment]
 
+try:
+    from core.inferno import runtime_manager as _inferno
+except ModuleNotFoundError:
+    from inferno import runtime_manager as _inferno  # type: ignore[no-redef]
+
+# ---------------------------------------------------------------------------
+# Re-exports from inferno (constants + pure functions)
+# ---------------------------------------------------------------------------
+
+DEVICE_CLOCK_LIMITS = _inferno.DEVICE_CLOCK_LIMITS
+LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME = _inferno.LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME
+LLAMA_SERVER_RUNTIME_FAMILIES = _inferno.LLAMA_SERVER_RUNTIME_FAMILIES
+MODEL_LOADING_INACTIVE = _inferno.MODEL_LOADING_INACTIVE
+MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES = _inferno.MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES
+PI4_8GB_MEMORY_THRESHOLD_BYTES = _inferno.PI4_8GB_MEMORY_THRESHOLD_BYTES
+PI4_INCOMPATIBLE_RUNTIMES = _inferno.PI4_INCOMPATIBLE_RUNTIMES
+SUPPORTED_RUNTIME_FAMILIES = _inferno.SUPPORTED_RUNTIME_FAMILIES
+
+check_runtime_device_compatibility = _inferno.check_runtime_device_compatibility
+compute_model_loading_progress = _inferno.compute_model_loading_progress
+get_device_clock_limits = _inferno.get_device_clock_limits
+llama_memory_loading_no_mmap_env = _inferno.llama_memory_loading_no_mmap_env
+normalize_allow_unsupported_large_models = _inferno.normalize_allow_unsupported_large_models
+normalize_llama_memory_loading_mode = _inferno.normalize_llama_memory_loading_mode
+
+# Legacy alias: callers import _MODEL_LOADING_INACTIVE (underscore prefix)
+_MODEL_LOADING_INACTIVE = MODEL_LOADING_INACTIVE
+
+# ---------------------------------------------------------------------------
+# Product-level constants (not in inferno)
+# ---------------------------------------------------------------------------
+
 MODEL_UPLOAD_STORAGE_SAFETY_FRACTION = 0.90
-MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES = 12 * 1024 * 1024 * 1024
 LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT = 5 * 1024 * 1024 * 1024
-LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME = ".potato-llama-runtime-bundle.json"
 POWER_CALIBRATION_DEFAULT_A = 1.260204
 POWER_CALIBRATION_DEFAULT_B = 0.704251
 POWER_CALIBRATION_DEFAULT_A_PI4 = 1.236268
@@ -165,6 +194,11 @@ class RuntimeConfig:
         )
 
 
+# ---------------------------------------------------------------------------
+# Shared utilities
+# ---------------------------------------------------------------------------
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         if value is None:
@@ -195,6 +229,11 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         logger.warning("Could not persist JSON state to %s", path, exc_info=True)
 
 
+# ---------------------------------------------------------------------------
+# Hardware probing (stays in Potato layer)
+# ---------------------------------------------------------------------------
+
+
 def _detect_total_memory_bytes() -> int | None:
     if psutil is None:
         return None
@@ -204,6 +243,75 @@ def _detect_total_memory_bytes() -> int | None:
         return None
     total = _safe_int(getattr(memory, "total", None), default=0)
     return total if total > 0 else None
+
+
+def _read_pi_device_model_name() -> str | None:
+    path = Path("/proc/device-tree/model")
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    text = raw.replace(b"\x00", b"").decode("utf-8", errors="replace").strip()
+    return text or None
+
+
+# ---------------------------------------------------------------------------
+# Inferno delegation helpers
+# ---------------------------------------------------------------------------
+
+
+def _llama_runtime_settings_path(runtime: RuntimeConfig) -> Path:
+    if runtime.llama_runtime_settings_path is not None:
+        return runtime.llama_runtime_settings_path
+    return runtime.base_dir / "state" / "llama_runtime.json"
+
+
+def _llama_runtime_install_dir(runtime: RuntimeConfig) -> Path:
+    return runtime.base_dir / "llama"
+
+
+def _store_config(runtime: RuntimeConfig) -> _inferno.RuntimeStoreConfig:
+    """Build an inferno RuntimeStoreConfig from a Potato RuntimeConfig."""
+    total_memory_bytes = _detect_total_memory_bytes() or 0
+    pi_model_name = _read_pi_device_model_name()
+    device_class = _inferno.classify_runtime_device(
+        pi_model_name=pi_model_name or "",
+        total_memory_bytes=total_memory_bytes,
+    )
+    return _inferno.RuntimeStoreConfig(
+        runtimes_dir=runtime.base_dir / "runtimes",
+        install_dir=runtime.base_dir / "llama",
+        settings_path=_llama_runtime_settings_path(runtime),
+        device_class=device_class,
+        total_memory_bytes=total_memory_bytes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Device classification (wrapper — preserves optional-params signature)
+# ---------------------------------------------------------------------------
+
+
+def classify_runtime_device(
+    *,
+    total_memory_bytes: int | None = None,
+    pi_model_name: str | None = None,
+) -> str:
+    model_name = pi_model_name
+    if model_name is None:
+        model_name = _read_pi_device_model_name()
+    total = total_memory_bytes
+    if total is None:
+        total = _detect_total_memory_bytes()
+    return _inferno.classify_runtime_device(
+        pi_model_name=model_name or "",
+        total_memory_bytes=total or 0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Storage helpers (stays in Potato layer)
+# ---------------------------------------------------------------------------
 
 
 def get_model_upload_max_bytes(runtime: RuntimeConfig) -> int | None:
@@ -223,121 +331,6 @@ def get_model_upload_max_bytes(runtime: RuntimeConfig) -> int | None:
     return None
 
 
-def _read_pi_device_model_name() -> str | None:
-    path = Path("/proc/device-tree/model")
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None
-    text = raw.replace(b"\x00", b"").decode("utf-8", errors="replace").strip()
-    return text or None
-
-
-PI4_8GB_MEMORY_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
-PI4_INCOMPATIBLE_RUNTIMES = ("ik_llama", "litert")
-
-DEVICE_CLOCK_LIMITS: dict[str, dict[str, int]] = {
-    "pi5": {"cpu_max_hz": 2_400_000_000, "gpu_max_hz": 1_000_000_000},
-    "pi4": {"cpu_max_hz": 1_800_000_000, "gpu_max_hz": 500_000_000},
-}
-
-
-def get_device_clock_limits(device_class: str) -> dict[str, int]:
-    for prefix, limits in DEVICE_CLOCK_LIMITS.items():
-        if device_class.startswith(prefix):
-            return dict(limits)
-    return dict(DEVICE_CLOCK_LIMITS["pi5"])
-
-
-def classify_runtime_device(
-    *,
-    total_memory_bytes: int | None = None,
-    pi_model_name: str | None = None,
-) -> str:
-    model_name = (pi_model_name or "").strip().lower()
-    if not model_name:
-        return "unknown"
-    if "raspberry pi" not in model_name:
-        return "unknown"
-    if "raspberry pi 5" in model_name:
-        total = total_memory_bytes if total_memory_bytes is not None else _detect_total_memory_bytes()
-        if total is not None and total >= MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES:
-            return "pi5-16gb"
-        return "pi5-8gb"
-    if "raspberry pi 4" in model_name:
-        total = total_memory_bytes if total_memory_bytes is not None else _detect_total_memory_bytes()
-        if total is not None and total >= MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES:
-            return "pi4-16gb"
-        if total is not None and total >= PI4_8GB_MEMORY_THRESHOLD_BYTES:
-            return "pi4-8gb"
-        return "pi4-4gb"
-    return "other-pi"
-
-
-def check_runtime_device_compatibility(
-    device_class: str,
-    runtime_family: str,
-) -> dict[str, Any]:
-    if device_class.startswith("pi4-") and runtime_family in PI4_INCOMPATIBLE_RUNTIMES:
-        return {
-            "compatible": False,
-            "reason": (
-                f"{runtime_family} requires ARMv8.2-A dot product instructions (Cortex-A76+). "
-                f"Pi 4 (Cortex-A72, ARMv8.0-A) must use llama_cpp."
-            ),
-            "recommended_family": "llama_cpp",
-        }
-    return {"compatible": True, "reason": None, "recommended_family": None}
-
-
-def _detect_installed_runtime_family(runtime: RuntimeConfig) -> str:
-    """Detect the active runtime family from marker or installed runtime.json."""
-    marker = read_llama_runtime_bundle_marker(runtime)
-    if isinstance(marker, dict) and marker.get("family"):
-        return str(marker["family"])
-    # Fallback: read runtime.json from the llama install dir (fresh installs have no marker)
-    install_dir = _llama_runtime_install_dir(runtime)
-    runtime_json = install_dir / "runtime.json"
-    if runtime_json.exists():
-        try:
-            meta = json.loads(runtime_json.read_text(encoding="utf-8"))
-            if isinstance(meta, dict) and meta.get("family"):
-                return str(meta["family"])
-        except (OSError, json.JSONDecodeError):
-            pass
-    return ""
-
-
-async def ensure_compatible_runtime(runtime: RuntimeConfig) -> tuple[bool, str]:
-    device_class = classify_runtime_device(
-        pi_model_name=_read_pi_device_model_name(),
-        total_memory_bytes=_detect_total_memory_bytes(),
-    )
-    current_family = _detect_installed_runtime_family(runtime)
-    compat = check_runtime_device_compatibility(device_class, current_family)
-    if compat["compatible"]:
-        return False, "compatible"
-    recommended = compat.get("recommended_family") or ""
-    if not recommended:
-        logger.warning("Device %s incompatible with %s but no recommendation available", device_class, current_family)
-        return False, "no_recommendation"
-    slot = find_runtime_slot_by_family(runtime, recommended)
-    if slot is None:
-        logger.warning("Recommended runtime %s not available as a slot", recommended)
-        return False, "slot_unavailable"
-    slot_path = Path(slot["path"])
-    logger.info(
-        "Auto-switching runtime: %s -> %s (device %s incompatible with %s)",
-        current_family, recommended, device_class, current_family,
-    )
-    result = await install_llama_runtime_bundle(runtime, slot_path)
-    if not isinstance(result, dict) or not result.get("ok", False):
-        reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
-        logger.error("Runtime install failed during auto-switch: %s", reason)
-        return False, "install_failed"
-    return True, "pi4_incompatible_runtime"
-
-
 def get_large_model_warn_threshold_bytes() -> int:
     raw = os.getenv("POTATO_UNSUPPORTED_PI_LARGE_MODEL_WARN_BYTES", "").strip()
     if not raw:
@@ -353,31 +346,9 @@ def get_large_model_warn_threshold_bytes() -> int:
     return LARGE_MODEL_UNSUPPORTED_PI_WARN_BYTES_DEFAULT
 
 
-def normalize_llama_memory_loading_mode(raw_mode: Any) -> str:
-    value = str(raw_mode or "").strip().lower()
-    if value in {"full_ram", "no_mmap", "no-mmap", "1", "true", "on"}:
-        return "full_ram"
-    if value in {"mmap", "mapped", "0", "false", "off"}:
-        return "mmap"
-    return "auto"
-
-
-def llama_memory_loading_no_mmap_env(mode: str) -> str:
-    normalized = normalize_llama_memory_loading_mode(mode)
-    if normalized == "full_ram":
-        return "1"
-    if normalized == "mmap":
-        return "0"
-    return "auto"
-
-
-def normalize_allow_unsupported_large_models(raw_value: Any) -> bool:
-    if isinstance(raw_value, bool):
-        return raw_value
-    if raw_value is None:
-        return False
-    value = str(raw_value).strip().lower()
-    return value in {"1", "true", "yes", "on"}
+# ---------------------------------------------------------------------------
+# Power calibration (stays in Potato layer)
+# ---------------------------------------------------------------------------
 
 
 def _safe_positive_float(raw_value: Any) -> float | None:
@@ -534,29 +505,15 @@ def _apply_power_calibration(raw_pmic_watts: Any, *, a: Any, b: Any) -> float | 
     return adjusted
 
 
-def _llama_runtime_settings_path(runtime: RuntimeConfig) -> Path:
-    if runtime.llama_runtime_settings_path is not None:
-        return runtime.llama_runtime_settings_path
-    return runtime.base_dir / "state" / "llama_runtime.json"
+# ---------------------------------------------------------------------------
+# Settings I/O (delegated to inferno, with power_calibration normalization)
+# ---------------------------------------------------------------------------
 
 
 def read_llama_runtime_settings(runtime: RuntimeConfig) -> dict[str, Any]:
-    path = _llama_runtime_settings_path(runtime)
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
-    mode = normalize_llama_memory_loading_mode(raw.get("memory_loading_mode"))
-    return {
-        "memory_loading_mode": mode,
-        "allow_unsupported_large_models": normalize_allow_unsupported_large_models(
-            raw.get("allow_unsupported_large_models")
-        ),
-        "power_calibration": normalize_power_calibration_settings(raw.get("power_calibration")),
-        "updated_at_unix": _safe_int(raw.get("updated_at_unix"), 0) or None,
-    }
+    result = _inferno.read_llama_runtime_settings(_llama_runtime_settings_path(runtime))
+    result["power_calibration"] = normalize_power_calibration_settings(result.get("power_calibration"))
+    return result
 
 
 def write_llama_runtime_settings(
@@ -585,72 +542,55 @@ def write_llama_runtime_settings(
     return payload
 
 
+# ---------------------------------------------------------------------------
+# Slot discovery (delegated to inferno)
+# ---------------------------------------------------------------------------
+
+
+def discover_runtime_slots(runtime: RuntimeConfig) -> list[dict[str, Any]]:
+    """Discover installed runtime slots across all supported families."""
+    return _inferno.discover_runtime_slots(runtime.base_dir / "runtimes")
+
+
+def find_runtime_slot_by_family(runtime: RuntimeConfig, family: str) -> dict[str, Any] | None:
+    """Find a runtime slot by family name."""
+    return _inferno.find_runtime_slot_by_family(runtime.base_dir / "runtimes", family)
+
+
+# ---------------------------------------------------------------------------
+# Marker management (delegated to inferno)
+# ---------------------------------------------------------------------------
+
+
+def read_llama_runtime_bundle_marker(runtime: RuntimeConfig) -> dict[str, Any] | None:
+    return _inferno.read_llama_runtime_bundle_marker(runtime.base_dir / "llama")
+
+
+def write_llama_runtime_bundle_marker(runtime: RuntimeConfig, bundle: dict[str, Any]) -> dict[str, Any]:
+    return _inferno.write_llama_runtime_bundle_marker(runtime.base_dir / "llama", bundle)
+
+
+def _detect_installed_runtime_family(runtime: RuntimeConfig) -> str:
+    """Detect the active runtime family from marker or installed runtime.json."""
+    return _inferno._detect_installed_runtime_family(runtime.base_dir / "llama")
+
+
+def _read_installed_runtime_metadata(runtime: RuntimeConfig) -> dict[str, Any]:
+    """Read runtime metadata from marker first, then fallback to runtime.json in install dir."""
+    return _inferno._read_installed_runtime_metadata(runtime.base_dir / "llama")
+
+
+# ---------------------------------------------------------------------------
+# Status builders (delegated to inferno, with Potato-layer adaptation)
+# ---------------------------------------------------------------------------
+
+
 def build_llama_memory_loading_status(runtime: RuntimeConfig) -> dict[str, Any]:
-    settings = read_llama_runtime_settings(runtime)
-    mode = normalize_llama_memory_loading_mode(settings.get("memory_loading_mode"))
-    no_mmap_env = llama_memory_loading_no_mmap_env(mode)
-    return {
-        "mode": mode,
-        "no_mmap_env": no_mmap_env,
-        "label": (
-            "Full RAM load (--no-mmap)"
-            if mode == "full_ram"
-            else "Memory-mapped (mmap)"
-            if mode == "mmap"
-            else "Automatic (profile-based)"
-        ),
-        "updated_at_unix": settings.get("updated_at_unix"),
-    }
-
-
-_MODEL_LOADING_INACTIVE: dict[str, Any] = {
-    "active": False,
-    "progress_percent": None,
-    "resident_bytes": None,
-    "model_size_bytes": None,
-}
-
-
-def compute_model_loading_progress(
-    *,
-    state: str,
-    has_model: bool,
-    model_size_bytes: int,
-    no_mmap_env: str,
-    llama_rss: dict[str, Any],
-) -> dict[str, Any]:
-    if state != "BOOTING" or not has_model or model_size_bytes <= 0:
-        return dict(_MODEL_LOADING_INACTIVE)
-    if not llama_rss.get("available"):
-        return dict(_MODEL_LOADING_INACTIVE)
-    if no_mmap_env == "1":
-        resident_bytes = llama_rss.get("rss_anon_bytes")
-    elif no_mmap_env == "auto":
-        anon = llama_rss.get("rss_anon_bytes") or 0
-        file = llama_rss.get("rss_file_bytes") or 0
-        resident_bytes = max(anon, file) if (anon or file) else None
-    else:
-        resident_bytes = llama_rss.get("rss_file_bytes")
-    if resident_bytes is None or not isinstance(resident_bytes, (int, float)):
-        return dict(_MODEL_LOADING_INACTIVE)
-    resident_bytes = int(resident_bytes)
-    progress_percent = min(100, max(0, int(resident_bytes * 100 / model_size_bytes)))
-    return {
-        "active": True,
-        "progress_percent": progress_percent,
-        "resident_bytes": resident_bytes,
-        "model_size_bytes": model_size_bytes,
-    }
+    return _inferno.build_llama_memory_loading_status(_llama_runtime_settings_path(runtime))
 
 
 def build_llama_large_model_override_status(runtime: RuntimeConfig) -> dict[str, Any]:
-    settings = read_llama_runtime_settings(runtime)
-    enabled = normalize_allow_unsupported_large_models(settings.get("allow_unsupported_large_models"))
-    return {
-        "enabled": enabled,
-        "label": "Try unsupported large model anyway" if enabled else "Use compatibility warnings (default)",
-        "updated_at_unix": settings.get("updated_at_unix"),
-    }
+    return _inferno.build_llama_large_model_override_status(_llama_runtime_settings_path(runtime))
 
 
 def build_power_calibration_status(runtime: RuntimeConfig) -> dict[str, Any]:
@@ -720,153 +660,30 @@ def _reset_power_calibration(runtime: RuntimeConfig) -> dict[str, Any]:
     return normalize_power_calibration_settings(saved.get("power_calibration"))
 
 
+# ---------------------------------------------------------------------------
+# Bundle discovery (delegated to inferno)
+# ---------------------------------------------------------------------------
+
+
 def _default_llama_runtime_bundle_roots(runtime: RuntimeConfig) -> list[Path]:
-    return [
-        runtime.base_dir / "llama-bundles",
-        Path("/tmp/potato-qwen35-ab/references/old_reference_design/llama_cpp_binary"),
-        Path("/tmp/potato-os/references/old_reference_design/llama_cpp_binary"),
-    ]
+    return _inferno._default_llama_runtime_bundle_roots(runtime.base_dir)
 
 
 def get_llama_runtime_bundle_roots(runtime: RuntimeConfig) -> list[Path]:
-    raw = os.getenv("POTATO_LLAMA_RUNTIME_BUNDLE_ROOTS", "").strip()
-    candidates: list[Path]
-    if raw:
-        candidates = [Path(part).expanduser() for part in raw.split(os.pathsep) if part.strip()]
-    else:
-        candidates = _default_llama_runtime_bundle_roots(runtime)
-
-    roots: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate)
-        if key in seen:
-            continue
-        seen.add(key)
-        roots.append(candidate)
-    return roots
-
-
-def _llama_runtime_bundle_profile_from_name(bundle_name: str) -> str | None:
-    lowered = bundle_name.lower()
-    if lowered.endswith("_pi5-opt"):
-        return "pi5-opt"
-    if lowered.endswith("_baseline"):
-        return "baseline"
-    return None
-
-
-def _llama_runtime_bundle_readme_fields(bundle_dir: Path) -> dict[str, str]:
-    readme = bundle_dir / "README.txt"
-    try:
-        text = readme.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return {}
-
-    fields: dict[str, str] = {}
-    version_lines: list[str] = []
-    in_version = False
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            if in_version and version_lines:
-                break
-            continue
-        if line.lower().startswith("profile:"):
-            fields["profile"] = line.split(":", 1)[1].strip()
-            continue
-        if line.lower().startswith("llama.cpp commit:"):
-            fields["llama_cpp_commit"] = line.split(":", 1)[1].strip()
-            continue
-        if line.lower() == "version:":
-            in_version = True
-            continue
-        if in_version and not line.lower().startswith("contents:"):
-            version_lines.append(line)
-            continue
-        if in_version and line.lower().startswith("contents:"):
-            break
-    if version_lines:
-        fields["version_summary"] = version_lines[0]
-    return fields
+    return _inferno.get_llama_runtime_bundle_roots(runtime.base_dir)
 
 
 def discover_llama_runtime_bundles(runtime: RuntimeConfig) -> list[dict[str, Any]]:
-    bundles: list[dict[str, Any]] = []
-    for root in get_llama_runtime_bundle_roots(runtime):
-        try:
-            if not root.exists() or not root.is_dir():
-                continue
-        except OSError:
-            continue
-        try:
-            children = list(root.iterdir())
-        except OSError:
-            continue
-        for bundle_dir in children:
-            name = bundle_dir.name
-            if not bundle_dir.is_dir() or not name.startswith("llama_server_bundle_"):
-                continue
-            server_path = bundle_dir / "bin" / "llama-server"
-            if not server_path.exists():
-                continue
-            readme_fields = _llama_runtime_bundle_readme_fields(bundle_dir)
-            profile = (
-                str(readme_fields.get("profile") or "").strip()
-                or _llama_runtime_bundle_profile_from_name(name)
-                or "unknown"
-            )
-            try:
-                mtime_unix = int(bundle_dir.stat().st_mtime)
-            except OSError:
-                mtime_unix = 0
-            bundles.append(
-                {
-                    "path": str(bundle_dir),
-                    "name": name,
-                    "root": str(root),
-                    "profile": profile,
-                    "is_pi5_optimized": profile == "pi5-opt",
-                    "has_bench": (bundle_dir / "bin" / "llama-bench").exists(),
-                    "has_lib_dir": (bundle_dir / "lib").is_dir(),
-                    "version_summary": readme_fields.get("version_summary"),
-                    "llama_cpp_commit": readme_fields.get("llama_cpp_commit"),
-                    "mtime_unix": mtime_unix,
-                }
-            )
-    bundles.sort(key=lambda item: (int(item.get("mtime_unix") or 0), str(item.get("name") or "")), reverse=True)
-    return bundles
+    return _inferno.discover_llama_runtime_bundles(get_llama_runtime_bundle_roots(runtime))
 
 
-def _llama_runtime_install_dir(runtime: RuntimeConfig) -> Path:
-    return runtime.base_dir / "llama"
+def find_llama_runtime_bundle_by_path(runtime: RuntimeConfig, bundle_path: str) -> dict[str, Any] | None:
+    return _inferno.find_llama_runtime_bundle_by_path(get_llama_runtime_bundle_roots(runtime), bundle_path)
 
 
-def _llama_runtime_marker_path(runtime: RuntimeConfig) -> Path:
-    return _llama_runtime_install_dir(runtime) / LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME
-
-
-def read_llama_runtime_bundle_marker(runtime: RuntimeConfig) -> dict[str, Any] | None:
-    marker_path = _llama_runtime_marker_path(runtime)
-    try:
-        raw = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return raw if isinstance(raw, dict) else None
-
-
-def write_llama_runtime_bundle_marker(runtime: RuntimeConfig, bundle: dict[str, Any]) -> dict[str, Any]:
-    payload = {
-        "family": str(bundle.get("family") or ""),
-        "source_bundle_path": str(bundle.get("path") or ""),
-        "source_bundle_name": str(bundle.get("name") or bundle.get("family") or ""),
-        "profile": str(bundle.get("profile") or "unknown"),
-        "version_summary": bundle.get("version_summary") or bundle.get("version"),
-        "llama_cpp_commit": bundle.get("llama_cpp_commit") or bundle.get("commit"),
-        "switched_at_unix": int(time.time()),
-    }
-    _atomic_write_json(_llama_runtime_marker_path(runtime), payload)
-    return payload
+# ---------------------------------------------------------------------------
+# Large model compatibility (delegated to inferno with hardware probing)
+# ---------------------------------------------------------------------------
 
 
 def build_large_model_compatibility(
@@ -884,116 +701,22 @@ def build_large_model_compatibility(
     )
     threshold_bytes = get_large_model_warn_threshold_bytes()
     storage_free = get_model_volume_free_bytes(runtime)
-    override_enabled = (
-        normalize_allow_unsupported_large_models(allow_override)
-        if allow_override is not None
-        else normalize_allow_unsupported_large_models(
-            read_llama_runtime_settings(runtime).get("allow_unsupported_large_models")
-        )
+
+    store = _store_config(runtime)
+    return _inferno.build_large_model_compatibility(
+        store,
+        model_filename=model_filename or runtime.model_path.name or "model.gguf",
+        model_size_bytes=max(0, _safe_int(model_size_bytes, 0)),
+        allow_override=allow_override,
+        threshold_bytes=threshold_bytes,
+        storage_free_bytes=storage_free or 0,
+        pi_model_name=pi_model_name or "",
     )
-    size_bytes = int(model_size_bytes) if isinstance(model_size_bytes, int) else _safe_int(model_size_bytes, 0)
-    if size_bytes <= 0:
-        size_bytes = 0
-
-    warnings: list[dict[str, Any]] = []
-    if size_bytes > threshold_bytes and device_class != "pi5-16gb" and not override_enabled:
-        filename = str(model_filename or runtime.model_path.name or "model.gguf")
-        warnings.append(
-            {
-                "code": "large_model_unsupported_pi_warning",
-                "severity": "warning",
-                "message": (
-                    f"{filename} is larger than the unsupported-device warning threshold "
-                    f"({threshold_bytes} bytes). Qwen3.5-35B-A3B is validated on Raspberry Pi 5 16GB only."
-                ),
-                "model_filename": filename,
-                "model_size_bytes": size_bytes,
-            }
-        )
-
-    runtime_family = _detect_installed_runtime_family(runtime)
-    runtime_compat = check_runtime_device_compatibility(device_class, runtime_family)
-
-    return {
-        "device_class": device_class,
-        "pi_model_name": pi_model_name,
-        "memory_total_bytes": total_memory_bytes or 0,
-        "large_model_warn_threshold_bytes": threshold_bytes,
-        "storage_free_bytes": storage_free,
-        "supported_target": "raspberry-pi-5-16gb",
-        "override_enabled": override_enabled,
-        "runtime_compatibility": runtime_compat,
-        "warnings": warnings,
-    }
 
 
-SUPPORTED_RUNTIME_FAMILIES = ("ik_llama", "llama_cpp", "litert")
-
-# Families that use an external server binary (bin/llama-server).
-# LiteRT uses a Python adapter instead — no binary needed in the slot.
-LLAMA_SERVER_RUNTIME_FAMILIES = ("ik_llama", "llama_cpp")
-
-
-def _runtime_slots_dir(runtime: RuntimeConfig) -> Path:
-    return runtime.base_dir / "runtimes"
-
-
-def discover_runtime_slots(runtime: RuntimeConfig) -> list[dict[str, Any]]:
-    """Discover installed runtime slots across all supported families."""
-    slots: list[dict[str, Any]] = []
-    slots_dir = _runtime_slots_dir(runtime)
-    for family in SUPPORTED_RUNTIME_FAMILIES:
-        slot_dir = slots_dir / family
-        if not slot_dir.is_dir():
-            continue
-        # Llama-based families require a server binary; litert does not.
-        if family in LLAMA_SERVER_RUNTIME_FAMILIES:
-            if not (slot_dir / "bin" / "llama-server").exists():
-                continue
-        else:
-            if not (slot_dir / "runtime.json").exists():
-                continue
-        metadata: dict[str, Any] = {"family": family, "path": str(slot_dir)}
-        runtime_json = slot_dir / "runtime.json"
-        if runtime_json.exists():
-            try:
-                meta = json.loads(runtime_json.read_text(encoding="utf-8"))
-                if isinstance(meta, dict):
-                    metadata.update(meta)
-            except (OSError, json.JSONDecodeError):
-                pass
-        metadata.setdefault("commit", "unknown")
-        metadata.setdefault("profile", "unknown")
-        metadata.setdefault("repo", "")
-        metadata.setdefault("build_timestamp", "")
-        metadata.setdefault("version", "")
-        slots.append(metadata)
-    return slots
-
-
-def find_runtime_slot_by_family(runtime: RuntimeConfig, family: str) -> dict[str, Any] | None:
-    """Find a runtime slot by family name."""
-    for slot in discover_runtime_slots(runtime):
-        if slot.get("family") == family:
-            return slot
-    return None
-
-
-def _read_installed_runtime_metadata(runtime: RuntimeConfig) -> dict[str, Any]:
-    """Read runtime metadata from marker first, then fallback to runtime.json in install dir."""
-    marker = read_llama_runtime_bundle_marker(runtime)
-    if isinstance(marker, dict) and marker.get("family"):
-        return marker
-    install_dir = _llama_runtime_install_dir(runtime)
-    runtime_json = install_dir / "runtime.json"
-    if runtime_json.exists():
-        try:
-            meta = json.loads(runtime_json.read_text(encoding="utf-8"))
-            if isinstance(meta, dict):
-                return meta
-        except (OSError, json.JSONDecodeError):
-            pass
-    return {}
+# ---------------------------------------------------------------------------
+# Runtime status (delegated to inferno with app.state extraction)
+# ---------------------------------------------------------------------------
 
 
 def build_llama_runtime_status(
@@ -1001,142 +724,47 @@ def build_llama_runtime_status(
     app: FastAPI | None = None,
     active_model_filename: str = "",
 ) -> dict[str, Any]:
-    install_dir = _llama_runtime_install_dir(runtime)
-    metadata = _read_installed_runtime_metadata(runtime)
-    available_runtimes = discover_runtime_slots(runtime)
-
-    current_family = str(metadata.get("family") or metadata.get("source_bundle_name") or "").strip()
-    device_class = classify_runtime_device(
-        pi_model_name=_read_pi_device_model_name(),
-        total_memory_bytes=_detect_total_memory_bytes(),
-    )
-    # LiteRT can only run .litertlm models; hide it when a GGUF model is active.
-    active_is_gguf = active_model_filename.lower().endswith(".gguf") if active_model_filename else True
-    active_is_litertlm = active_model_filename.lower().endswith(".litertlm") if active_model_filename else False
-    for slot in available_runtimes:
-        slot["is_active"] = slot.get("family") == current_family
-        compat = check_runtime_device_compatibility(
-            device_class, slot.get("family", "")
-        )
-        family = slot.get("family", "")
-        if family == "litert" and active_is_gguf:
-            slot["compatible"] = False
-        elif family in LLAMA_SERVER_RUNTIME_FAMILIES and active_is_litertlm:
-            slot["compatible"] = False
-        else:
-            slot["compatible"] = compat["compatible"]
-
-    switch_snapshot = {
-        "active": False,
-        "target_family": None,
-        "started_at_unix": None,
-        "completed_at_unix": None,
-        "error": None,
-    }
+    switch_snapshot: dict[str, Any] | None = None
     if app is not None:
         raw = getattr(app.state, "llama_runtime_switch_state", None)
         if isinstance(raw, dict):
-            switch_snapshot.update(
-                {
-                    "active": bool(raw.get("active", False)),
-                    "target_family": raw.get("target_family"),
-                    "started_at_unix": raw.get("started_at_unix"),
-                    "completed_at_unix": raw.get("completed_at_unix"),
-                    "error": raw.get("error"),
-                }
-            )
+            switch_snapshot = {
+                "active": bool(raw.get("active", False)),
+                "target_family": raw.get("target_family"),
+                "started_at_unix": raw.get("started_at_unix"),
+                "completed_at_unix": raw.get("completed_at_unix"),
+                "error": raw.get("error"),
+            }
 
-    detected_family = str(metadata.get("family") or "")
-    runtime_type = "litert_adapter" if detected_family == "litert" else "llama_server"
+    store = _store_config(runtime)
+    return _inferno.build_llama_runtime_status(
+        store,
+        active_model_filename=active_model_filename,
+        switch_snapshot=switch_snapshot,
+    )
 
-    current = {
-        "install_dir": str(install_dir),
-        "exists": install_dir.exists(),
-        "has_server_binary": (install_dir / "bin" / "llama-server").exists(),
-        "runtime_type": runtime_type,
-        "family": metadata.get("family"),
-        "source_bundle_path": metadata.get("source_bundle_path"),
-        "source_bundle_name": metadata.get("source_bundle_name"),
-        "profile": metadata.get("profile"),
-        "version_summary": metadata.get("version_summary") or metadata.get("version"),
-        "llama_cpp_commit": metadata.get("llama_cpp_commit") or metadata.get("commit"),
-        "switched_at_unix": metadata.get("switched_at_unix"),
-    }
 
-    return {
-        "current": current,
-        "available_runtimes": available_runtimes,
-        "switch": switch_snapshot,
-        "memory_loading": build_llama_memory_loading_status(runtime),
-        "large_model_override": build_llama_large_model_override_status(runtime),
-    }
+# ---------------------------------------------------------------------------
+# Runtime installation (delegated to inferno)
+# ---------------------------------------------------------------------------
 
 
 async def install_llama_runtime_bundle(runtime: RuntimeConfig, bundle_dir: Path) -> dict[str, Any]:
-    install_dir = _llama_runtime_install_dir(runtime)
-    install_dir.mkdir(parents=True, exist_ok=True)
-
-    # LiteRT has no binary to rsync — just ensure install dir exists.
-    bundle_runtime_json = bundle_dir / "runtime.json"
-    if bundle_runtime_json.exists():
-        try:
-            meta = json.loads(bundle_runtime_json.read_text(encoding="utf-8"))
-            if isinstance(meta, dict) and meta.get("family") == "litert":
-                return {"ok": True, "reason": "litert_no_rsync_needed", "install_dir": str(install_dir)}
-        except (OSError, json.JSONDecodeError):
-            pass
-
-    rsync = shutil.which("rsync")
-    if not rsync:
-        return {"ok": False, "reason": "rsync_not_available", "install_dir": str(install_dir)}
-
-    proc = await asyncio.create_subprocess_exec(
-        rsync,
-        "-a",
-        "--delete",
-        f"{bundle_dir}/",
-        f"{install_dir}/",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    stdout, _stderr = await proc.communicate()
-    if stdout:
-        logger.info("llama runtime rsync: %s", stdout.decode("utf-8", errors="replace").rstrip())
-    if proc.returncode != 0:
-        return {
-            "ok": False,
-            "reason": "rsync_failed",
-            "returncode": proc.returncode,
-            "install_dir": str(install_dir),
-        }
-
-    for rel in ("bin/llama-server", "run-llama-server.sh", "run-llama-bench.sh"):
-        path = install_dir / rel
-        try:
-            if path.exists():
-                path.chmod(path.stat().st_mode | 0o111)
-        except OSError:
-            logger.warning("Could not chmod runtime bundle file: %s", path, exc_info=True)
-
-    return {"ok": True, "reason": "installed", "install_dir": str(install_dir)}
+    return await _inferno.install_llama_runtime_bundle(runtime.base_dir / "llama", bundle_dir)
 
 
-def find_llama_runtime_bundle_by_path(runtime: RuntimeConfig, bundle_path: str) -> dict[str, Any] | None:
-    candidate = str(bundle_path or "").strip()
-    if not candidate:
-        return None
-    try:
-        resolved = str(Path(candidate).resolve())
-    except OSError:
-        return None
-    for bundle in discover_llama_runtime_bundles(runtime):
-        try:
-            bundle_resolved = str(Path(str(bundle.get("path") or "")).resolve())
-        except OSError:
-            continue
-        if bundle_resolved == resolved:
-            return bundle
-    return None
+# ---------------------------------------------------------------------------
+# Compatibility enforcement (delegated to inferno)
+# ---------------------------------------------------------------------------
+
+
+async def ensure_compatible_runtime(runtime: RuntimeConfig) -> tuple[bool, str]:
+    return await _inferno.ensure_compatible_runtime(_store_config(runtime))
+
+
+# ---------------------------------------------------------------------------
+# System metrics (stays in Potato layer — hardware probing)
+# ---------------------------------------------------------------------------
 
 
 def default_system_metrics_snapshot() -> dict[str, Any]:
@@ -1810,6 +1438,11 @@ async def system_metrics_loop(app: FastAPI) -> None:
             await asyncio.sleep(2)
 
 
+# ---------------------------------------------------------------------------
+# Download / storage helpers (stays in Potato layer)
+# ---------------------------------------------------------------------------
+
+
 def read_download_progress(runtime: RuntimeConfig) -> dict[str, Any]:
     progress = {
         "bytes_total": 0,
@@ -1887,6 +1520,11 @@ def is_likely_too_large_for_storage(
         return False
     required = compute_required_download_bytes(total_bytes, partial_bytes)
     return int(free_bytes) < required
+
+
+# ---------------------------------------------------------------------------
+# HTTP helpers (stays in Potato layer)
+# ---------------------------------------------------------------------------
 
 
 async def fetch_remote_content_length_bytes(source_url: str) -> int:

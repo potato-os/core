@@ -811,10 +811,10 @@ async def test_ensure_compatible_runtime_returns_false_when_install_fails(monkey
     monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
     monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024**3)
 
-    async def _fake_install_fail(_runtime, _path):
+    async def _fake_install_fail(_install_dir, _path):
         return {"ok": False, "reason": "rsync_not_available"}
 
-    monkeypatch.setattr("core.runtime_state.install_llama_runtime_bundle", _fake_install_fail)
+    monkeypatch.setattr("core.inferno.runtime_manager.install_llama_runtime_bundle", _fake_install_fail)
 
     switched, reason = await ensure_compatible_runtime(runtime)
     assert switched is False
