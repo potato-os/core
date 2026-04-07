@@ -12,13 +12,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 try:
     from core.deps import get_runtime, get_chat_repository
     from core.model_state import apply_model_chat_defaults
-    from core.repositories.chat_repository import BackendProxyError, ChatRepositoryManager
+    from core.inferno import BackendProxyError, ChatRepositoryManager
     from core.runtime_state import RuntimeConfig
     from core.settings import merge_active_model_chat_defaults, merge_chat_defaults
 except ModuleNotFoundError:
     from deps import get_runtime, get_chat_repository  # type: ignore[no-redef]
     from model_state import apply_model_chat_defaults  # type: ignore[no-redef]
-    from repositories.chat_repository import BackendProxyError, ChatRepositoryManager  # type: ignore[no-redef]
+    from inferno import BackendProxyError, ChatRepositoryManager  # type: ignore[no-redef]
     from runtime_state import RuntimeConfig  # type: ignore[no-redef]
     from settings import merge_active_model_chat_defaults, merge_chat_defaults  # type: ignore[no-redef]
 

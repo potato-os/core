@@ -18,14 +18,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 try:
-    from core.repositories import (
+    from core.inferno import (
         BackendProxyError,
         ChatRepositoryManager,
         FakeLlamaRepository,
         LlamaCppRepository,
     )
 except ModuleNotFoundError:
-    from repositories import (  # type: ignore[no-redef]
+    from inferno import (  # type: ignore[no-redef]
         BackendProxyError,
         ChatRepositoryManager,
         FakeLlamaRepository,
@@ -33,7 +33,7 @@ except ModuleNotFoundError:
     )
 
 try:
-    from core.constants import (
+    from core.inferno import (
         is_gemma4_filename,
         is_qwen35_filename,
         projector_repo_for_model,
@@ -162,7 +162,7 @@ try:
         _run_vcgencmd,
     )
 except ModuleNotFoundError:
-    from constants import (  # type: ignore[no-redef]
+    from inferno import (  # type: ignore[no-redef]
         is_gemma4_filename,
         is_qwen35_filename,
         projector_repo_for_model,

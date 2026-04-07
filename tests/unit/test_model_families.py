@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.constants.model_families import is_gemma4_filename, projector_repo_for_model, recommended_runtime_for_model
+from core.inferno.model_families import is_gemma4_filename, projector_repo_for_model, recommended_runtime_for_model
 
 
 def test_projector_repo_for_qwen35_9b():

@@ -6,10 +6,10 @@ from fastapi import Request
 
 try:
     from core.runtime_state import RuntimeConfig
-    from core.repositories.chat_repository import ChatRepositoryManager
+    from core.inferno import ChatRepositoryManager
 except ModuleNotFoundError:
     from runtime_state import RuntimeConfig  # type: ignore[no-redef]
-    from repositories.chat_repository import ChatRepositoryManager  # type: ignore[no-redef]
+    from inferno import ChatRepositoryManager  # type: ignore[no-redef]
 
 
 def get_runtime(request: Request) -> RuntimeConfig:

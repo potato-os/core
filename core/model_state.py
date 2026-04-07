@@ -94,9 +94,9 @@ def model_supports_vision_filename(filename: str | None) -> bool:
     if "qwen" in value and "3.5" in value:
         return True
     try:
-        from core.constants import is_gemma4_filename
+        from core.inferno import is_gemma4_filename
     except ModuleNotFoundError:
-        from constants import is_gemma4_filename  # type: ignore[no-redef]
+        from inferno import is_gemma4_filename  # type: ignore[no-redef]
     if is_gemma4_filename(value):
         return True
     return False
@@ -680,9 +680,9 @@ def _is_vision_family(filename: str) -> bool:
     if "qwen" in model_name and "3.5" in model_name:
         return True
     try:
-        from core.constants import is_gemma4_filename
+        from core.inferno import is_gemma4_filename
     except ModuleNotFoundError:
-        from constants import is_gemma4_filename  # type: ignore[no-redef]
+        from inferno import is_gemma4_filename  # type: ignore[no-redef]
     return is_gemma4_filename(model_name)
 
 
@@ -727,9 +727,9 @@ def download_default_projector_for_model(*, runtime: RuntimeConfig, model_id: st
     import httpx
 
     try:
-        from core.constants import projector_repo_for_model
+        from core.inferno import projector_repo_for_model
     except ModuleNotFoundError:
-        from constants import projector_repo_for_model  # type: ignore[no-redef]
+        from inferno import projector_repo_for_model  # type: ignore[no-redef]
 
     state = ensure_models_state(runtime)
     model = get_model_by_id(state, model_id)

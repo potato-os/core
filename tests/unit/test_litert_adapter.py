@@ -66,7 +66,7 @@ def _mock_litert_lm(monkeypatch):
         if "litert_adapter" in key:
             del sys.modules[key]
 
-    import core.litert_adapter as adapter
+    import core.inferno.litert_adapter as adapter
     adapter.litert_lm = fake_module  # type: ignore[attr-defined]
     adapter._engine = _FakeEngine("test.litertlm", backend=_FakeBackend.CPU)
     adapter._conversation = _FakeConversation()

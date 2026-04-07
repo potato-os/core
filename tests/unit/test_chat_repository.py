@@ -5,8 +5,8 @@ from typing import Any
 import httpx
 import pytest
 
-from core.repositories import chat_repository
-from core.repositories.chat_repository import BackendProxyError
+from core.inferno import backend
+from core.inferno.backend import BackendProxyError
 
 
 class _FakeUpstream:
@@ -48,9 +48,9 @@ async def test_llama_stream_closes_upstream_and_client_when_consumer_closes(monk
         _ = args, kwargs
         return client
 
-    monkeypatch.setattr(chat_repository.httpx, "AsyncClient", _client_factory)
+    monkeypatch.setattr(backend.httpx, "AsyncClient", _client_factory)
 
-    repo = chat_repository.LlamaCppRepository("http://llama.local")
+    repo = backend.LlamaCppRepository("http://llama.local")
     response = await repo.create_chat_completion(
         payload={"stream": True, "messages": [{"role": "user", "content": "ping"}]},
         forward_headers={},
@@ -78,9 +78,9 @@ async def test_fake_stream_uses_test_mode_prefill_and_chunk_delay(monkeypatch: p
     monkeypatch.setenv("POTATO_TEST_MODE", "1")
     monkeypatch.setenv("POTATO_FAKE_PREFILL_DELAY_MS", "250")
     monkeypatch.setenv("POTATO_FAKE_STREAM_CHUNK_DELAY_MS", "40")
-    monkeypatch.setattr(chat_repository.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(backend.asyncio, "sleep", _fake_sleep)
 
-    repo = chat_repository.FakeLlamaRepository()
+    repo = backend.FakeLlamaRepository()
     response = await repo.create_chat_completion(
         payload={"stream": True, "messages": [{"role": "user", "content": "hello"}]},
         forward_headers={},
@@ -107,9 +107,9 @@ async def test_fake_stream_honors_prefill_delay_override_without_test_mode(monke
 
     monkeypatch.delenv("POTATO_TEST_MODE", raising=False)
     monkeypatch.setenv("POTATO_FAKE_PREFILL_DELAY_MS", "250")
-    monkeypatch.setattr(chat_repository.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(backend.asyncio, "sleep", _fake_sleep)
 
-    repo = chat_repository.FakeLlamaRepository()
+    repo = backend.FakeLlamaRepository()
     response = await repo.create_chat_completion(
         payload={"stream": True, "messages": [{"role": "user", "content": "hello"}]},
         forward_headers={},
@@ -131,7 +131,7 @@ def test_fake_content_has_fake_marker_and_last_user_message():
         ]
     }
 
-    content = chat_repository._fake_content(payload)
+    content = backend._fake_content(payload)
 
     assert "[fake-llama.cpp]" in content
     assert "Potato OS" in content
@@ -139,13 +139,13 @@ def test_fake_content_has_fake_marker_and_last_user_message():
 
 
 def test_fake_reply_pool_has_ten_entries():
-    assert len(chat_repository.FAKE_PARODY_REPLIES) == 10
+    assert len(backend.FAKE_PARODY_REPLIES) == 10
 
 
 def test_fake_content_uses_random_choice_for_reply(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(chat_repository.random, "choice", lambda _items: "RANDOM_POTATO_REPLY")
+    monkeypatch.setattr(backend.random, "choice", lambda _items: "RANDOM_POTATO_REPLY")
     payload = {"messages": [{"role": "user", "content": "same prompt every time"}]}
-    content = chat_repository._fake_content(payload)
+    content = backend._fake_content(payload)
     assert "RANDOM_POTATO_REPLY" in content
 
 
@@ -153,14 +153,14 @@ def test_fake_content_is_deterministic_when_seed_is_provided(monkeypatch: pytest
     def _random_choice_should_not_run(_items):
         raise AssertionError("global random.choice should not be used for seeded fake replies")
 
-    monkeypatch.setattr(chat_repository.random, "choice", _random_choice_should_not_run)
+    monkeypatch.setattr(backend.random, "choice", _random_choice_should_not_run)
     payload = {
         "seed": 42,
         "messages": [{"role": "user", "content": "same prompt every time"}],
     }
 
-    first = chat_repository._fake_content(payload)
-    second = chat_repository._fake_content(payload)
+    first = backend._fake_content(payload)
+    second = backend._fake_content(payload)
 
     assert first == second
 
@@ -170,7 +170,7 @@ def test_fake_default_timing_targets_about_five_tokens_per_second(monkeypatch: p
     monkeypatch.delenv("POTATO_FAKE_PREFILL_DELAY_MS", raising=False)
     monkeypatch.delenv("POTATO_FAKE_STREAM_CHUNK_DELAY_MS", raising=False)
 
-    prefill_s, chunk_s = chat_repository._read_fake_timing_config()
+    prefill_s, chunk_s = backend._read_fake_timing_config()
     assert prefill_s == 0.0
     assert 0.19 <= chunk_s <= 0.23
 
@@ -207,8 +207,8 @@ class _TimeoutCapturingClient:
 @pytest.mark.anyio
 async def test_llama_stream_uses_unbounded_read_timeout(monkeypatch: pytest.MonkeyPatch):
     _TimeoutCapturingClient.captured_timeouts.clear()
-    monkeypatch.setattr(chat_repository.httpx, "AsyncClient", _TimeoutCapturingClient)
-    repo = chat_repository.LlamaCppRepository("http://llama.local")
+    monkeypatch.setattr(backend.httpx, "AsyncClient", _TimeoutCapturingClient)
+    repo = backend.LlamaCppRepository("http://llama.local")
     with pytest.raises(BackendProxyError):
         await repo.create_chat_completion(
             payload={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
@@ -221,8 +221,8 @@ async def test_llama_stream_uses_unbounded_read_timeout(monkeypatch: pytest.Monk
 @pytest.mark.anyio
 async def test_llama_non_stream_uses_unbounded_read_timeout(monkeypatch: pytest.MonkeyPatch):
     _TimeoutCapturingClient.captured_timeouts.clear()
-    monkeypatch.setattr(chat_repository.httpx, "AsyncClient", _TimeoutCapturingClient)
-    repo = chat_repository.LlamaCppRepository("http://llama.local")
+    monkeypatch.setattr(backend.httpx, "AsyncClient", _TimeoutCapturingClient)
+    repo = backend.LlamaCppRepository("http://llama.local")
     with pytest.raises(BackendProxyError):
         await repo.create_chat_completion(
             payload={"stream": False, "messages": [{"role": "user", "content": "hi"}]},
@@ -235,8 +235,8 @@ async def test_llama_non_stream_uses_unbounded_read_timeout(monkeypatch: pytest.
 @pytest.mark.anyio
 async def test_llama_both_paths_have_bounded_connect_timeout(monkeypatch: pytest.MonkeyPatch):
     _TimeoutCapturingClient.captured_timeouts.clear()
-    monkeypatch.setattr(chat_repository.httpx, "AsyncClient", _TimeoutCapturingClient)
-    repo = chat_repository.LlamaCppRepository("http://llama.local")
+    monkeypatch.setattr(backend.httpx, "AsyncClient", _TimeoutCapturingClient)
+    repo = backend.LlamaCppRepository("http://llama.local")
     for stream in (True, False):
         with pytest.raises(BackendProxyError):
             await repo.create_chat_completion(

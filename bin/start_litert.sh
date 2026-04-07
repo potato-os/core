@@ -29,7 +29,7 @@ export POTATO_BASE_DIR
 cd "${POTATO_BASE_DIR}"
 
 exec "${POTATO_VENV_DIR}/bin/uvicorn" \
-  core.litert_adapter:app \
+  core.inferno.litert_adapter:app \
   --host 0.0.0.0 \
   --port "${POTATO_LLAMA_PORT}" \
   --workers 1

@@ -6,8 +6,7 @@ Core application code lives in `core/`:
 - `core/main.py`: FastAPI entrypoint, API routes, orchestrator loop, lifespan.
 - `core/model_state.py`: Model registry, settings persistence, projector helpers.
 - `core/runtime_state.py`: Runtime config, dual-runtime slot discovery, system metrics, power calibration.
-- `core/repositories/`: Backend abstraction (real llama.cpp proxy and fake backend).
-- `core/constants/`: Model family detection, projector repo mapping.
+- `core/inferno/`: Inference layer — backend proxy, model family classification, LiteRT adapter. See `core/inferno/__init__.py` for boundary contract.
 - `core/assets/`: Frontend — `index.html`, `shell.css`, `shell.js` (platform shell), vendor libs.
 - `core/rig_envelope.py`: RIG step envelope validation (MS/TS contract checks).
 
