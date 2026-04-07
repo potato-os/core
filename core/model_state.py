@@ -20,6 +20,8 @@ MODEL_URL = (
     "Qwen3.5-2B-Q4_K_M.gguf"
 )
 
+VALID_MODEL_EXTENSIONS = (".gguf", ".litertlm")
+
 MODEL_FILENAME_PI4 = "Qwen3.5-0.8B-IQ4_NL.gguf"
 MODEL_URL_PI4 = (
     "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/"
@@ -235,6 +237,17 @@ def _unique_filename(base_name: str, existing_names: set[str]) -> str:
     return candidate
 
 
+def _has_valid_model_extension(filename: str) -> bool:
+    lower = filename.lower()
+    return any(lower.endswith(ext) for ext in VALID_MODEL_EXTENSIONS)
+
+
+def model_format_for_filename(filename: str) -> str:
+    if filename.lower().endswith(".litertlm"):
+        return "litertlm"
+    return "gguf"
+
+
 def validate_model_url(source_url: str) -> tuple[bool, str, str]:
     parsed = urlparse(source_url.strip())
     if parsed.scheme != "https":
@@ -242,10 +255,10 @@ def validate_model_url(source_url: str) -> tuple[bool, str, str]:
     basename = unquote(Path(parsed.path).name)
     if not basename:
         return False, "filename_missing", ""
-    if not basename.lower().endswith(".gguf"):
-        return False, "gguf_required", ""
+    if not _has_valid_model_extension(basename):
+        return False, "unsupported_model_format", ""
     safe_name = _sanitize_filename(basename)
-    if not safe_name.lower().endswith(".gguf"):
+    if not _has_valid_model_extension(safe_name):
         safe_name = f"{Path(safe_name).stem}.gguf"
     return True, "", safe_name
 
@@ -270,7 +283,7 @@ def _default_model_record(_runtime: RuntimeConfig, *, device_class: str = "") ->
 
 def _is_discoverable_local_model_filename(filename: str) -> bool:
     name = _sanitize_filename(filename)
-    if not name.lower().endswith(".gguf"):
+    if not _has_valid_model_extension(name):
         return False
     stem = Path(name).stem.lower()
     if stem.startswith("mmproj") or "mmproj" in stem:
@@ -361,7 +374,7 @@ def _normalize_models_state(runtime: RuntimeConfig, raw: dict[str, Any] | None =
                 continue
             source_url = str(item.get("source_url") or "")
             filename = _sanitize_filename(str(item.get("filename") or ""))
-            if not filename.lower().endswith(".gguf"):
+            if not _has_valid_model_extension(filename):
                 filename = f"{Path(filename).stem}.gguf"
             item_id_raw = str(item.get("id") or _slugify_id(Path(filename).stem))
             item_id = _unique_model_id(_slugify_id(item_id_raw), seen_ids)

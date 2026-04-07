@@ -260,3 +260,18 @@ def test_recommended_runtime_qwen35_has_no_preference():
 def test_recommended_runtime_unknown_model_has_no_preference():
     """Unknown models should have no runtime preference."""
     assert recommended_runtime_for_model("some-random-model.gguf") is None
+
+
+# ── LiteRT model routing ─────────────────────────────────────────────
+
+
+def test_recommended_runtime_for_litertlm_is_litert():
+    """All .litertlm files route to the litert runtime."""
+    assert recommended_runtime_for_model("gemma-4-E2B-it.litertlm") == "litert"
+    assert recommended_runtime_for_model("some-model.litertlm") == "litert"
+
+
+def test_recommended_runtime_for_gguf_unchanged():
+    """GGUF files should not route to litert."""
+    assert recommended_runtime_for_model("gemma-4-E2B-it-Q4_K_M.gguf") is None
+    assert recommended_runtime_for_model("Qwen3.5-2B-Q4_K_M.gguf") is None

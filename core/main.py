@@ -48,6 +48,8 @@ try:
         default_model_for_device,
         ModelSettingsValidationError,
         _default_model_record,
+        _has_valid_model_extension,
+        model_format_for_filename,
         apply_model_chat_defaults,
         build_model_capabilities,
         delete_model,
@@ -93,6 +95,7 @@ try:
     )
     from core.runtime_state import (
         LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME,
+        LLAMA_SERVER_RUNTIME_FAMILIES,
         MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES,
         POWER_CALIBRATION_DEFAULT_A,
         POWER_CALIBRATION_DEFAULT_B,
@@ -174,6 +177,8 @@ except ModuleNotFoundError:
         default_model_for_device,
         ModelSettingsValidationError,
         _default_model_record,
+        _has_valid_model_extension,
+        model_format_for_filename,
         apply_model_chat_defaults,
         build_model_capabilities,
         delete_model,
@@ -219,6 +224,7 @@ except ModuleNotFoundError:
     )
     from runtime_state import (  # type: ignore[no-redef]
         LLAMA_RUNTIME_BUNDLE_MARKER_FILENAME,
+        LLAMA_SERVER_RUNTIME_FAMILIES,
         MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES,
         POWER_CALIBRATION_DEFAULT_A,
         POWER_CALIBRATION_DEFAULT_B,
@@ -437,11 +443,13 @@ try:
     from core.process import (
         terminate_process as _terminate_process,
         terminate_stray_llama_processes,
+        terminate_stray_litert_processes,
     )
 except ModuleNotFoundError:
     from process import (  # type: ignore[no-redef]
         terminate_process as _terminate_process,
         terminate_stray_llama_processes,
+        terminate_stray_litert_processes,
     )
 
 
@@ -793,7 +801,7 @@ def _build_status_fs(
             "fallback_active": fallback_active,
         },
         "compatibility": compatibility,
-        "llama_runtime": build_llama_runtime_status(runtime, app=app),
+        "llama_runtime": build_llama_runtime_status(runtime, app=app, active_model_filename=active_model_path.name),
         "system": system_payload,
         "update": build_update_status(runtime),
         "_needs_health_check": needs_health_check,
@@ -873,6 +881,7 @@ def _upsert_model_status(
 
 def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env = os.environ.copy()
+    installed_family = _detect_installed_runtime_family(runtime)
     env["POTATO_BASE_DIR"] = str(runtime.base_dir)
     env["POTATO_MODEL_PATH"] = str(runtime.model_path)
     env["POTATO_DOWNLOAD_STATE_PATH"] = str(runtime.download_state_path)
@@ -881,6 +890,10 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env["POTATO_CHAT_BACKEND"] = runtime.chat_backend_mode
     env["POTATO_ALLOW_FAKE_FALLBACK"] = "1" if runtime.allow_fake_fallback else "0"
     env["POTATO_LLAMA_PORT"] = str(runtime.llama_port)
+    env["POTATO_RUNTIME_FAMILY"] = installed_family
+    # LiteRT adapter doesn't need llama-specific env vars.
+    if installed_family == "litert":
+        return env
     env["POTATO_LLAMA_NO_MMAP"] = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
     env["POTATO_AUTO_DOWNLOAD_MMPROJ"] = "0"
     env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] = "0"
@@ -1339,19 +1352,31 @@ async def activate_model(
     # Auto-switch runtime before committing the model state so a failed
     # install doesn't leave Potato pointing at an unrunnable model.
     preferred = recommended_runtime_for_model(filename)
+    current = _detect_installed_runtime_family(runtime)
+    # GGUF models can't run on litert — fall back to llama_cpp.
+    if not preferred and current == "litert" and model_format_for_filename(filename) == "gguf":
+        preferred = "llama_cpp"
     if preferred:
         device_class = classify_runtime_device(
             pi_model_name=_read_pi_device_model_name(),
         )
         compat = check_runtime_device_compatibility(device_class, preferred)
         if not compat.get("compatible", True):
+            # If the model format requires this specific runtime and it's
+            # incompatible with the device, activation must fail outright.
+            fmt = model_format_for_filename(filename)
+            if (fmt == "litertlm" and preferred == "litert") or (fmt == "gguf" and preferred in LLAMA_SERVER_RUNTIME_FAMILIES):
+                logger.error(
+                    "Cannot activate %s: required runtime %s is incompatible with device (%s)",
+                    filename, preferred, compat.get("reason", "incompatible"),
+                )
+                return False, "incompatible_runtime", False
             logger.info(
                 "Skipping auto-switch to %s for %s: %s",
                 preferred, filename, compat.get("reason", "incompatible"),
             )
             preferred = None
     if preferred:
-        current = _detect_installed_runtime_family(runtime)
         if current and current != preferred:
             slot = find_runtime_slot_by_family(runtime, preferred)
             if slot is not None:
@@ -1363,6 +1388,7 @@ async def activate_model(
                     reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
                     logger.error("Runtime auto-switch failed during activation: %s", reason)
                     return False, "runtime_switch_failed", False
+                write_llama_runtime_bundle_marker(runtime, slot)
 
     state["active_model_id"] = model_id
     target["status"] = "ready"
@@ -1509,8 +1535,8 @@ async def purge_all_models(
 
 def _safe_upload_filename(name: str) -> str:
     cleaned = _sanitize_filename(name)
-    if not cleaned.lower().endswith(".gguf"):
-        raise ValueError("gguf_required")
+    if not _has_valid_model_extension(cleaned):
+        raise ValueError("unsupported_model_format")
     return cleaned
 
 
@@ -1583,15 +1609,24 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
 
                     if app.state.llama_consecutive_failures >= LLAMA_MAX_CONSECUTIVE_FAILURES:
                         pass  # Limit reached — don't restart.
-                    elif runtime.start_llama_script.exists():
-                        await terminate_stray_llama_processes(runtime)
-                        app.state.llama_process = await asyncio.create_subprocess_exec(
-                            str(runtime.start_llama_script),
-                            env=_runtime_env(runtime),
-                        )
-                        logger.info("Started llama-server process")
                     else:
-                        logger.warning("start_llama script missing: %s", runtime.start_llama_script)
+                        installed_family = _detect_installed_runtime_family(runtime)
+                        if installed_family == "litert" and runtime.start_litert_script and runtime.start_litert_script.exists():
+                            await terminate_stray_litert_processes(runtime)
+                            app.state.llama_process = await asyncio.create_subprocess_exec(
+                                str(runtime.start_litert_script),
+                                env=_runtime_env(runtime),
+                            )
+                            logger.info("Started litert adapter process")
+                        elif runtime.start_llama_script.exists():
+                            await terminate_stray_llama_processes(runtime)
+                            app.state.llama_process = await asyncio.create_subprocess_exec(
+                                str(runtime.start_llama_script),
+                                env=_runtime_env(runtime),
+                            )
+                            logger.info("Started llama-server process")
+                        else:
+                            logger.warning("start script missing for family=%s", installed_family)
 
                 readiness = await refresh_llama_readiness(app, runtime, active_model_path=active_model_path)
                 if readiness.get("ready"):

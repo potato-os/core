@@ -164,7 +164,7 @@ def test_status_includes_llama_runtime_payload(client, monkeypatch):
     monkeypatch.setattr("core.main.check_llama_health", _healthy_false)
     monkeypatch.setattr(
         "core.main.build_llama_runtime_status",
-        lambda _runtime, app=None: {
+        lambda _runtime, app=None, active_model_filename="": {
             "current": {"install_dir": "/opt/potato/llama", "family": "ik_llama"},
             "available_runtimes": [{"family": "ik_llama", "path": "/opt/potato/runtimes/ik_llama"}],
             "switch": {"active": False, "error": None},

@@ -84,6 +84,8 @@ def _is_gemma4_26b_a4b(filename: str | None) -> bool:
 
 def recommended_runtime_for_model(filename: str | None) -> str | None:
     """Return the preferred runtime family for a model, or None for no preference."""
+    if filename and _normalized_model_name(filename).endswith(".litertlm"):
+        return "litert"
     if _is_gemma4_26b_a4b(filename):
         return "ik_llama"
     return None

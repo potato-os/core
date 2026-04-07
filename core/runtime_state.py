@@ -81,12 +81,15 @@ class RuntimeConfig:
     llama_runtime_settings_path: Path | None = None
     update_state_path: Path | None = None
     runtime_reset_service: str = "potato-runtime-reset.service"
+    start_litert_script: Path | None = None
 
     def __post_init__(self) -> None:
         if self.ensure_model_script is None:
             self.ensure_model_script = self.base_dir / "bin" / "ensure_model.sh"
         if self.start_llama_script is None:
             self.start_llama_script = self.base_dir / "bin" / "start_llama.sh"
+        if self.start_litert_script is None:
+            self.start_litert_script = self.base_dir / "bin" / "start_litert.sh"
         if self.llama_runtime_settings_path is None:
             self.llama_runtime_settings_path = self.base_dir / "state" / "llama_runtime.json"
         if self.update_state_path is None:
@@ -127,6 +130,9 @@ class RuntimeConfig:
         start_llama_script = Path(
             os.getenv("POTATO_START_LLAMA_SCRIPT", str(base_dir / "bin" / "start_llama.sh"))
         )
+        start_litert_script = Path(
+            os.getenv("POTATO_START_LITERT_SCRIPT", str(base_dir / "bin" / "start_litert.sh"))
+        )
         llama_runtime_settings_path = Path(
             os.getenv("POTATO_LLAMA_RUNTIME_SETTINGS_PATH", str(base_dir / "state" / "llama_runtime.json"))
         )
@@ -149,6 +155,7 @@ class RuntimeConfig:
             llama_port=llama_port,
             ensure_model_script=ensure_model_script,
             start_llama_script=start_llama_script,
+            start_litert_script=start_litert_script,
             llama_runtime_settings_path=llama_runtime_settings_path,
             update_state_path=update_state_path,
             runtime_reset_service=runtime_reset_service,
@@ -227,7 +234,7 @@ def _read_pi_device_model_name() -> str | None:
 
 
 PI4_8GB_MEMORY_THRESHOLD_BYTES = 6 * 1024 * 1024 * 1024
-PI4_INCOMPATIBLE_RUNTIMES = ("ik_llama",)
+PI4_INCOMPATIBLE_RUNTIMES = ("ik_llama", "litert")
 
 DEVICE_CLOCK_LIMITS: dict[str, dict[str, int]] = {
     "pi5": {"cpu_max_hz": 2_400_000_000, "gpu_max_hz": 1_000_000_000},
@@ -920,7 +927,11 @@ def build_large_model_compatibility(
     }
 
 
-SUPPORTED_RUNTIME_FAMILIES = ("ik_llama", "llama_cpp")
+SUPPORTED_RUNTIME_FAMILIES = ("ik_llama", "llama_cpp", "litert")
+
+# Families that use an external server binary (bin/llama-server).
+# LiteRT uses a Python adapter instead — no binary needed in the slot.
+LLAMA_SERVER_RUNTIME_FAMILIES = ("ik_llama", "llama_cpp")
 
 
 def _runtime_slots_dir(runtime: RuntimeConfig) -> Path:
@@ -928,14 +939,20 @@ def _runtime_slots_dir(runtime: RuntimeConfig) -> Path:
 
 
 def discover_runtime_slots(runtime: RuntimeConfig) -> list[dict[str, Any]]:
-    """Discover the two explicit runtime slots (ik_llama, llama_cpp)."""
+    """Discover installed runtime slots across all supported families."""
     slots: list[dict[str, Any]] = []
     slots_dir = _runtime_slots_dir(runtime)
     for family in SUPPORTED_RUNTIME_FAMILIES:
         slot_dir = slots_dir / family
-        server_bin = slot_dir / "bin" / "llama-server"
-        if not slot_dir.is_dir() or not server_bin.exists():
+        if not slot_dir.is_dir():
             continue
+        # Llama-based families require a server binary; litert does not.
+        if family in LLAMA_SERVER_RUNTIME_FAMILIES:
+            if not (slot_dir / "bin" / "llama-server").exists():
+                continue
+        else:
+            if not (slot_dir / "runtime.json").exists():
+                continue
         metadata: dict[str, Any] = {"family": family, "path": str(slot_dir)}
         runtime_json = slot_dir / "runtime.json"
         if runtime_json.exists():
@@ -979,7 +996,11 @@ def _read_installed_runtime_metadata(runtime: RuntimeConfig) -> dict[str, Any]:
     return {}
 
 
-def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = None) -> dict[str, Any]:
+def build_llama_runtime_status(
+    runtime: RuntimeConfig,
+    app: FastAPI | None = None,
+    active_model_filename: str = "",
+) -> dict[str, Any]:
     install_dir = _llama_runtime_install_dir(runtime)
     metadata = _read_installed_runtime_metadata(runtime)
     available_runtimes = discover_runtime_slots(runtime)
@@ -989,11 +1010,21 @@ def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = Non
         pi_model_name=_read_pi_device_model_name(),
         total_memory_bytes=_detect_total_memory_bytes(),
     )
+    # LiteRT can only run .litertlm models; hide it when a GGUF model is active.
+    active_is_gguf = active_model_filename.lower().endswith(".gguf") if active_model_filename else True
+    active_is_litertlm = active_model_filename.lower().endswith(".litertlm") if active_model_filename else False
     for slot in available_runtimes:
         slot["is_active"] = slot.get("family") == current_family
-        slot["compatible"] = check_runtime_device_compatibility(
+        compat = check_runtime_device_compatibility(
             device_class, slot.get("family", "")
-        )["compatible"]
+        )
+        family = slot.get("family", "")
+        if family == "litert" and active_is_gguf:
+            slot["compatible"] = False
+        elif family in LLAMA_SERVER_RUNTIME_FAMILIES and active_is_litertlm:
+            slot["compatible"] = False
+        else:
+            slot["compatible"] = compat["compatible"]
 
     switch_snapshot = {
         "active": False,
@@ -1015,10 +1046,14 @@ def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = Non
                 }
             )
 
+    detected_family = str(metadata.get("family") or "")
+    runtime_type = "litert_adapter" if detected_family == "litert" else "llama_server"
+
     current = {
         "install_dir": str(install_dir),
         "exists": install_dir.exists(),
         "has_server_binary": (install_dir / "bin" / "llama-server").exists(),
+        "runtime_type": runtime_type,
         "family": metadata.get("family"),
         "source_bundle_path": metadata.get("source_bundle_path"),
         "source_bundle_name": metadata.get("source_bundle_name"),
@@ -1040,6 +1075,16 @@ def build_llama_runtime_status(runtime: RuntimeConfig, app: FastAPI | None = Non
 async def install_llama_runtime_bundle(runtime: RuntimeConfig, bundle_dir: Path) -> dict[str, Any]:
     install_dir = _llama_runtime_install_dir(runtime)
     install_dir.mkdir(parents=True, exist_ok=True)
+
+    # LiteRT has no binary to rsync — just ensure install dir exists.
+    bundle_runtime_json = bundle_dir / "runtime.json"
+    if bundle_runtime_json.exists():
+        try:
+            meta = json.loads(bundle_runtime_json.read_text(encoding="utf-8"))
+            if isinstance(meta, dict) and meta.get("family") == "litert":
+                return {"ok": True, "reason": "litert_no_rsync_needed", "install_dir": str(install_dir)}
+        except (OSError, json.JSONDecodeError):
+            pass
 
     rsync = shutil.which("rsync")
     if not rsync:

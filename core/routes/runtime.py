@@ -12,7 +12,9 @@ from fastapi.responses import JSONResponse
 
 try:
     from core.deps import get_runtime
+    from core.model_state import model_format_for_filename, ensure_models_state, get_model_by_id
     from core.runtime_state import (
+        LLAMA_SERVER_RUNTIME_FAMILIES,
         RuntimeConfig,
         build_large_model_compatibility,
         build_llama_memory_loading_status,
@@ -34,7 +36,9 @@ try:
     )
 except ModuleNotFoundError:
     from deps import get_runtime  # type: ignore[no-redef]
+    from model_state import model_format_for_filename, ensure_models_state, get_model_by_id  # type: ignore[no-redef]
     from runtime_state import (  # type: ignore[no-redef]
+        LLAMA_SERVER_RUNTIME_FAMILIES,
         RuntimeConfig,
         build_large_model_compatibility,
         build_llama_memory_loading_status,
@@ -109,6 +113,20 @@ async def switch_llama_runtime(
     compat = check_runtime_device_compatibility(device_class, family)
     if not compat["compatible"]:
         return JSONResponse(status_code=409, content={"switched": False, "reason": "incompatible_runtime"})
+
+    # Reject switching to a runtime that can't serve the active model format.
+    try:
+        models_state = ensure_models_state(runtime_cfg)
+        active_model = get_model_by_id(models_state, str(models_state.get("active_model_id") or ""))
+        active_filename = str(active_model.get("filename") or "") if isinstance(active_model, dict) else ""
+    except Exception:
+        active_filename = ""
+    if active_filename:
+        fmt = model_format_for_filename(active_filename)
+        if family == "litert" and fmt != "litertlm":
+            return JSONResponse(status_code=409, content={"switched": False, "reason": "model_format_incompatible"})
+        if family in LLAMA_SERVER_RUNTIME_FAMILIES and fmt == "litertlm":
+            return JSONResponse(status_code=409, content={"switched": False, "reason": "model_format_incompatible"})
 
     async with request.app.state.llama_runtime_switch_lock:
         switch_state = request.app.state.llama_runtime_switch_state

@@ -21,7 +21,7 @@ def test_register_model_url_rejects_invalid(runtime):
         response = client.post("/internal/models/register", json={"source_url": "http://example.com/model.bin"})
 
     assert response.status_code == 400
-    assert response.json()["reason"] in {"https_required", "gguf_required"}
+    assert response.json()["reason"] in {"https_required", "unsupported_model_format"}
 
 
 def test_activate_model_blocks_non_ready(runtime):
@@ -81,7 +81,7 @@ def test_upload_rejects_non_gguf(runtime):
         )
 
     assert response.status_code == 400
-    assert response.json()["reason"] == "gguf_required"
+    assert response.json()["reason"] == "unsupported_model_format"
 
 
 def test_upload_returns_warning_for_large_model_on_unsupported_pi(runtime, monkeypatch):

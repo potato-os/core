@@ -175,6 +175,108 @@ def test_set_large_model_override_persists_without_restart(runtime, monkeypatch)
     assert after_body["llama_runtime"]["large_model_override"]["enabled"] is True
 
 
+def test_switch_to_litert_works_with_litertlm_model(runtime, monkeypatch):
+    """POST /internal/llama-runtime/switch to litert succeeds when active model is .litertlm."""
+    runtime.enable_orchestrator = True
+    # Set a .litertlm model as active
+    runtime.model_path = runtime.base_dir / "models" / "gemma-4-E2B-it.litertlm"
+    runtime.model_path.write_bytes(b"litertlm")
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    # Write models state with a .litertlm active model
+    runtime.models_state_path.write_text(json.dumps({
+        "version": 1, "countdown_enabled": True, "default_model_downloaded_once": False,
+        "active_model_id": "litert-model", "default_model_id": "default",
+        "models": [
+            {"id": "litert-model", "filename": "gemma-4-E2B-it.litertlm",
+             "source_url": "https://example.com/gemma.litertlm", "source_type": "url",
+             "status": "ready", "error": None},
+        ],
+    }), encoding="utf-8")
+
+    # Create litert slot (no bin/llama-server, just runtime.json)
+    slot = runtime.base_dir / "runtimes" / "litert"
+    slot.mkdir(parents=True)
+    (slot / "runtime.json").write_text(
+        json.dumps({"family": "litert", "runtime_type": "litert_adapter", "version": "0.10.1"}),
+        encoding="utf-8",
+    )
+
+    async def _fake_install(_runtime, bundle_dir):
+        install_dir = _runtime.base_dir / "llama"
+        install_dir.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "reason": "litert_no_rsync_needed", "install_dir": str(install_dir)}
+
+    async def _fake_restart(_app):
+        return False, "no_running_process"
+
+    monkeypatch.setattr("core.main.install_llama_runtime_bundle", _fake_install)
+    monkeypatch.setattr("core.main.restart_managed_llama_process", _fake_restart)
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 16 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.routes.runtime._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.routes.runtime._detect_total_memory_bytes", lambda: 16 * 1024 * 1024 * 1024)
+
+    with TestClient(app) as client:
+        response = client.post("/internal/llama-runtime/switch", json={"family": "litert"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["switched"] is True
+    assert body["family"] == "litert"
+
+
+def test_switch_to_litert_rejected_for_gguf_model(runtime, monkeypatch):
+    """POST /internal/llama-runtime/switch to litert must fail when active model is GGUF."""
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    slot = runtime.base_dir / "runtimes" / "litert"
+    slot.mkdir(parents=True)
+    (slot / "runtime.json").write_text(
+        json.dumps({"family": "litert"}), encoding="utf-8",
+    )
+
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 16 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.routes.runtime._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.routes.runtime._detect_total_memory_bytes", lambda: 16 * 1024 * 1024 * 1024)
+
+    with TestClient(app) as client:
+        response = client.post("/internal/llama-runtime/switch", json={"family": "litert"})
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "model_format_incompatible"
+
+
+def test_switch_to_litert_rejected_on_pi4(runtime, monkeypatch):
+    """POST /internal/llama-runtime/switch to litert rejected on Pi 4."""
+    runtime.enable_orchestrator = True
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    slot = runtime.base_dir / "runtimes" / "litert"
+    slot.mkdir(parents=True)
+    (slot / "runtime.json").write_text(
+        json.dumps({"family": "litert"}), encoding="utf-8",
+    )
+
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr("core.routes.runtime._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.routes.runtime._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+
+    with TestClient(app) as client:
+        response = client.post("/internal/llama-runtime/switch", json={"family": "litert"})
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["switched"] is False
+    assert body["reason"] == "incompatible_runtime"
+
+
 def test_power_calibration_sample_fit_and_reset_persist_in_status(runtime, monkeypatch):
     runtime.enable_orchestrator = True
     app = create_app(runtime=runtime, enable_orchestrator=True)

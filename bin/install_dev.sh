@@ -240,6 +240,29 @@ fi
 run_sudo "${TARGET_ROOT}/venv/bin/pip" install --upgrade pip
 run_sudo "${TARGET_ROOT}/venv/bin/pip" install -r "${TARGET_ROOT}/core/requirements.txt"
 
+# --- LiteRT runtime slot provisioning ---
+# LiteRT uses a Python adapter (no binary), so we just create the slot metadata.
+# litert-lm-api is aarch64-only — install only on ARM.
+_arch="$(uname -m 2>/dev/null || true)"
+if [ "${_arch}" = "aarch64" ] || [ "${_arch}" = "arm64" ]; then
+  _litert_version="$(run_sudo "${TARGET_ROOT}/venv/bin/pip" show litert-lm-api 2>/dev/null | grep '^Version:' | awk '{print $2}' || true)"
+  if [ -z "${_litert_version}" ]; then
+    printf 'Installing litert-lm-api...\n'
+    run_sudo "${TARGET_ROOT}/venv/bin/pip" install litert-lm-api || printf 'WARNING: litert-lm-api install failed (non-fatal)\n' >&2
+    _litert_version="$(run_sudo "${TARGET_ROOT}/venv/bin/pip" show litert-lm-api 2>/dev/null | grep '^Version:' | awk '{print $2}' || true)"
+  fi
+  # Only provision the slot if litert-lm-api is actually installed.
+  if [ -n "${_litert_version}" ]; then
+    _litert_slot="${TARGET_ROOT}/runtimes/litert"
+    run_sudo mkdir -p "${_litert_slot}"
+    printf '{"family":"litert","runtime_type":"litert_adapter","version":"%s"}\n' "${_litert_version}" | \
+      run_sudo tee "${_litert_slot}/runtime.json" > /dev/null
+    printf 'LiteRT runtime slot provisioned at %s (version: %s)\n' "${_litert_slot}" "${_litert_version}"
+  else
+    printf 'WARNING: litert-lm-api not available — skipping LiteRT slot provisioning\n' >&2
+  fi
+fi
+
 # --- App-specific install hooks ---
 # Each app can provide install.sh for infrastructure setup (e.g., Pi-hole for Permitato).
 for _app_name in "${_selected_apps[@]}"; do

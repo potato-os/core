@@ -547,6 +547,38 @@ test("runtime dropdown shows all compatible runtimes on Pi 5 mock", async ({ pag
 });
 
 
+test("runtime dropdown includes litert when available and compatible", async ({ page }) => {
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(makeStatusPayload({
+        llama_runtime: {
+          current: { family: "ik_llama", llama_cpp_commit: "abc12345", profile: "pi5-opt", has_server_binary: true, runtime_type: "llama_server" },
+          available_runtimes: [
+            { family: "ik_llama", commit: "abc12345", is_active: true, compatible: true },
+            { family: "llama_cpp", commit: "def67890", is_active: false, compatible: true },
+            { family: "litert", runtime_type: "litert_adapter", is_active: false, compatible: true },
+          ],
+          switch: { active: false, target_family: null, error: null },
+          memory_loading: { mode: "auto", label: "Automatic", no_mmap_env: "0" },
+          large_model_override: { enabled: false },
+        },
+      })),
+    });
+  });
+  await page.goto("/");
+  await waitForStatusApplied(page);
+  await openSettingsModal(page);
+  await openAdvancedSettingsModal(page);
+  const options = await page.locator("#llamaRuntimeFamilySelect option").allTextContents();
+  expect(options).toHaveLength(3);
+  expect(options[0]).toContain("ik llama");
+  expect(options[1]).toContain("llama cpp");
+  expect(options[2]).toContain("litert");
+});
+
+
 // ── Memory pressure diagnostics tests ─────────────────────────────────
 
 test("memory row shows RAM used as total minus free", async ({ page }) => {

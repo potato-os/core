@@ -28,14 +28,69 @@ def test_validate_model_url_accepts_https_gguf():
     assert filename == "cool-model.Q4_K_M.gguf"
 
 
-def test_validate_model_url_rejects_non_https_and_non_gguf():
+def test_validate_model_url_rejects_non_https_and_unsupported_format():
     ok_http, reason_http, _ = validate_model_url("http://example.com/model.gguf")
     ok_ext, reason_ext, _ = validate_model_url("https://example.com/model.bin")
 
     assert ok_http is False
     assert reason_http == "https_required"
     assert ok_ext is False
-    assert reason_ext == "gguf_required"
+    assert reason_ext == "unsupported_model_format"
+
+
+def test_validate_model_url_accepts_litertlm():
+    ok, reason, filename = validate_model_url(
+        "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
+    )
+    assert ok is True
+    assert reason == ""
+    assert filename == "gemma-4-E2B-it.litertlm"
+
+
+def test_validate_model_url_rejects_unknown_extension():
+    ok, reason, _ = validate_model_url("https://example.com/model.safetensors")
+    assert ok is False
+    assert reason == "unsupported_model_format"
+
+
+def test_discoverable_local_model_includes_litertlm():
+    from core.model_state import _is_discoverable_local_model_filename
+    assert _is_discoverable_local_model_filename("gemma-4-E2B-it.litertlm") is True
+    assert _is_discoverable_local_model_filename("model.gguf") is True
+    assert _is_discoverable_local_model_filename("model.bin") is False
+
+
+def test_normalize_preserves_litertlm_suffix(runtime: RuntimeConfig):
+    """_normalize_models_state must not force .gguf on .litertlm files."""
+    import json
+    runtime.models_state_path.write_text(json.dumps({
+        "version": 1,
+        "countdown_enabled": True,
+        "default_model_downloaded_once": False,
+        "active_model_id": "litert-model",
+        "default_model_id": "default",
+        "models": [
+            {
+                "id": "litert-model",
+                "filename": "gemma-4-E2B-it.litertlm",
+                "source_url": "https://example.com/gemma-4-E2B-it.litertlm",
+                "source_type": "url",
+                "status": "ready",
+                "error": None,
+            }
+        ],
+    }), encoding="utf-8")
+    state = ensure_models_state(runtime)
+    model = next(m for m in state["models"] if m["id"] == "litert-model")
+    assert model["filename"].endswith(".litertlm")
+
+
+def test_model_format_for_filename():
+    from core.model_state import model_format_for_filename
+    assert model_format_for_filename("model.gguf") == "gguf"
+    assert model_format_for_filename("gemma-4-E2B-it.litertlm") == "litertlm"
+    assert model_format_for_filename("Model.GGUF") == "gguf"
+    assert model_format_for_filename("model.LITERTLM") == "litertlm"
 
 
 def test_ensure_models_state_has_default_model(runtime: RuntimeConfig):

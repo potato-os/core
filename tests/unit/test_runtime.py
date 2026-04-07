@@ -997,6 +997,165 @@ def test_available_runtimes_works_with_single_slot(runtime, monkeypatch):
     assert status["available_runtimes"][0]["compatible"] is True
 
 
+# ── LiteRT runtime support ───────────────────────────────────────────
+
+
+def _create_litert_slot(runtime) -> None:
+    """Helper: create a minimal litert runtime slot (no binary, just runtime.json)."""
+    slot_dir = runtime.base_dir / "runtimes" / "litert"
+    slot_dir.mkdir(parents=True, exist_ok=True)
+    (slot_dir / "runtime.json").write_text(
+        json.dumps({"family": "litert", "runtime_type": "litert_adapter", "version": "0.10.1"}),
+        encoding="utf-8",
+    )
+
+
+def test_supported_runtime_families_includes_litert():
+    from core.runtime_state import SUPPORTED_RUNTIME_FAMILIES
+    assert "litert" in SUPPORTED_RUNTIME_FAMILIES
+
+
+def test_discover_runtime_slots_finds_litert_without_binary(runtime):
+    """LiteRT slot has no bin/llama-server — only runtime.json."""
+    from core.runtime_state import discover_runtime_slots
+    _create_litert_slot(runtime)
+    slots = discover_runtime_slots(runtime)
+    families = [s["family"] for s in slots]
+    assert "litert" in families
+
+
+def test_discover_runtime_slots_still_requires_binary_for_llama_families(runtime):
+    """Llama families must still have bin/llama-server to be discovered."""
+    from core.runtime_state import discover_runtime_slots
+    # Create ik_llama slot WITHOUT binary
+    slot_dir = runtime.base_dir / "runtimes" / "ik_llama"
+    slot_dir.mkdir(parents=True, exist_ok=True)
+    (slot_dir / "runtime.json").write_text(
+        json.dumps({"family": "ik_llama", "commit": "abc"}),
+        encoding="utf-8",
+    )
+    slots = discover_runtime_slots(runtime)
+    families = [s["family"] for s in slots]
+    assert "ik_llama" not in families
+
+
+def test_runtime_device_compatibility_litert_pi5(runtime, monkeypatch):
+    assert check_runtime_device_compatibility("pi5-8gb", "litert")["compatible"] is True
+
+
+def test_runtime_device_compatibility_litert_pi4(runtime, monkeypatch):
+    result = check_runtime_device_compatibility("pi4-8gb", "litert")
+    assert result["compatible"] is False
+
+
+def test_runtime_status_reports_runtime_type(runtime, monkeypatch):
+    """Status current dict includes runtime_type field."""
+    from core.runtime_state import build_llama_runtime_status
+    _create_litert_slot(runtime)
+    marker_path = runtime.base_dir / "llama"
+    marker_path.mkdir(parents=True, exist_ok=True)
+    (marker_path / "runtime.json").write_text(
+        json.dumps({"family": "litert"}), encoding="utf-8"
+    )
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    status = build_llama_runtime_status(runtime)
+    assert status["current"]["runtime_type"] == "litert_adapter"
+
+
+def test_runtime_status_llama_server_type(runtime, monkeypatch):
+    """Llama-based runtimes report runtime_type=llama_server."""
+    from core.runtime_state import build_llama_runtime_status
+    _create_runtime_slot(runtime, "llama_cpp")
+    marker_path = runtime.base_dir / "llama"
+    marker_path.mkdir(parents=True, exist_ok=True)
+    (marker_path / "runtime.json").write_text(
+        json.dumps({"family": "llama_cpp"}), encoding="utf-8"
+    )
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    status = build_llama_runtime_status(runtime)
+    assert status["current"]["runtime_type"] == "llama_server"
+
+
+def test_runtime_config_has_start_litert_script(runtime):
+    assert runtime.start_litert_script is not None
+    assert str(runtime.start_litert_script).endswith("bin/start_litert.sh")
+
+
+def test_install_litert_bundle_skips_binary_rsync(runtime):
+    """install_llama_runtime_bundle should skip rsync for litert slots."""
+    import asyncio
+    from core.runtime_state import install_llama_runtime_bundle
+
+    slot_dir = runtime.base_dir / "runtimes" / "litert"
+    slot_dir.mkdir(parents=True, exist_ok=True)
+    (slot_dir / "runtime.json").write_text(
+        json.dumps({"family": "litert"}), encoding="utf-8"
+    )
+
+    result = asyncio.run(install_llama_runtime_bundle(runtime, slot_dir))
+    assert result["ok"] is True
+    assert result["reason"] == "litert_no_rsync_needed"
+
+
+def test_available_runtimes_litert_compatible_on_pi5_with_litertlm_model(runtime, monkeypatch):
+    """On Pi 5 with a .litertlm model active, litert must be compatible=True."""
+    from core.runtime_state import build_llama_runtime_status
+    _create_runtime_slot(runtime, "llama_cpp")
+    _create_litert_slot(runtime)
+    marker_path = runtime.base_dir / "llama"
+    marker_path.mkdir(parents=True, exist_ok=True)
+    (marker_path / "runtime.json").write_text(
+        json.dumps({"family": "litert"}), encoding="utf-8"
+    )
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    status = build_llama_runtime_status(runtime, active_model_filename="gemma-4-E2B-it.litertlm")
+    runtimes_by_family = {rt["family"]: rt for rt in status["available_runtimes"]}
+    assert "litert" in runtimes_by_family
+    assert runtimes_by_family["litert"]["compatible"] is True
+    # llama_cpp should be incompatible when a .litertlm model is active
+    assert runtimes_by_family["llama_cpp"]["compatible"] is False
+
+
+def test_available_runtimes_litert_hidden_with_gguf_model(runtime, monkeypatch):
+    """LiteRT must be marked incompatible when the active model is GGUF."""
+    from core.runtime_state import build_llama_runtime_status
+    _create_runtime_slot(runtime, "llama_cpp")
+    _create_litert_slot(runtime)
+    marker_path = runtime.base_dir / "llama"
+    marker_path.mkdir(parents=True, exist_ok=True)
+    (marker_path / "runtime.json").write_text(
+        json.dumps({"family": "llama_cpp"}), encoding="utf-8"
+    )
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 5 Model B Rev 1.0")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    status = build_llama_runtime_status(runtime, active_model_filename="Qwen3.5-2B-Q4_K_M.gguf")
+    runtimes_by_family = {rt["family"]: rt for rt in status["available_runtimes"]}
+    assert "litert" in runtimes_by_family
+    assert runtimes_by_family["litert"]["compatible"] is False
+    assert runtimes_by_family["llama_cpp"]["compatible"] is True
+
+
+def test_available_runtimes_litert_incompatible_on_pi4(runtime, monkeypatch):
+    """On Pi 4, litert must be marked compatible=False even with a .litertlm model."""
+    from core.runtime_state import build_llama_runtime_status
+    _create_runtime_slot(runtime, "llama_cpp")
+    _create_litert_slot(runtime)
+    marker_path = runtime.base_dir / "llama"
+    marker_path.mkdir(parents=True, exist_ok=True)
+    (marker_path / "runtime.json").write_text(
+        json.dumps({"family": "llama_cpp"}), encoding="utf-8"
+    )
+    monkeypatch.setattr("core.runtime_state._read_pi_device_model_name", lambda: "Raspberry Pi 4 Model B Rev 1.4")
+    monkeypatch.setattr("core.runtime_state._detect_total_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    status = build_llama_runtime_status(runtime, active_model_filename="gemma-4-E2B-it.litertlm")
+    runtimes_by_family = {rt["family"]: rt for rt in status["available_runtimes"]}
+    assert "litert" in runtimes_by_family
+    assert runtimes_by_family["litert"]["compatible"] is False
+
+
 # ── PSI memory pressure parser tests ──────────────────────────────────
 
 

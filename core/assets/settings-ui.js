@@ -304,10 +304,10 @@ import { flushPendingNoticeDismissal } from "./platform-notify.js";
     export function formatModelUrlStatus(reason, fallbackStatus) {
       const normalized = String(reason || "").trim().toLowerCase();
       if (normalized === "https_required") {
-        return "Use an HTTPS model URL that ends with .gguf.";
+        return "Use an HTTPS model URL that ends with .gguf or .litertlm.";
       }
-      if (normalized === "gguf_required") {
-        return "Model URL must point to a .gguf file.";
+      if (normalized === "gguf_required" || normalized === "unsupported_model_format") {
+        return "Model URL must point to a .gguf or .litertlm file.";
       }
       if (normalized === "filename_missing") {
         return "Model URL must include a model filename.";
