@@ -32,10 +32,32 @@ except ImportError:
 
 _engine: Any = None
 _conversation: Any = None
+_vision_enabled: bool = False
 # Tracks the messages we've already sent to the persistent conversation
 # so we can detect continuations vs new sessions.
-_conversation_history: list[dict[str, str]] = []
+_conversation_history: list[dict[str, Any]] = []
 _lock = asyncio.Lock()
+
+
+def _probe_vision_support(model_path: str) -> tuple[Any, bool]:
+    """Try to create an Engine with vision support.
+
+    Returns (engine, vision_enabled).  Falls back to text-only if the
+    current litert-lm build does not support the vision_backend kwarg
+    or if the runtime vision calculator is missing.
+    """
+    try:
+        engine = litert_lm.Engine(
+            model_path,
+            backend=litert_lm.Backend.CPU,
+            vision_backend=litert_lm.Backend.CPU,
+        )
+        logger.info("LiteRT vision probe succeeded — multimodal enabled")
+        return engine, True
+    except (TypeError, RuntimeError, Exception) as exc:
+        logger.info("LiteRT vision probe failed (%s) — text-only mode", exc)
+        engine = litert_lm.Engine(model_path, backend=litert_lm.Backend.CPU)
+        return engine, False
 
 
 def _reset_conversation() -> None:
@@ -54,7 +76,7 @@ def _reset_conversation() -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    global _engine
+    global _engine, _vision_enabled
     model_path = os.environ.get("POTATO_MODEL_PATH", "")
     if not model_path:
         logger.error("POTATO_MODEL_PATH not set")
@@ -63,9 +85,9 @@ async def _lifespan(app: FastAPI):
     else:
         logger.info("Loading LiteRT engine from %s", model_path)
         try:
-            _engine = litert_lm.Engine(model_path, backend=litert_lm.Backend.CPU)
+            _engine, _vision_enabled = _probe_vision_support(model_path)
             _reset_conversation()
-            logger.info("LiteRT engine loaded successfully")
+            logger.info("LiteRT engine loaded successfully (vision=%s)", _vision_enabled)
         except Exception:
             logger.exception("Failed to load LiteRT engine")
             _engine = None
@@ -92,7 +114,7 @@ app = FastAPI(lifespan=_lifespan)
 async def health():
     if _engine is None:
         return JSONResponse(status_code=503, content={"status": "error", "reason": "engine_not_loaded"})
-    return {"status": "ok"}
+    return {"status": "ok", "vision": _vision_enabled}
 
 
 def _build_openai_response(text: str, model: str, prompt_tokens: int = 0) -> dict[str, Any]:
@@ -125,7 +147,63 @@ def _extract_text(response: Any) -> str:
     return ""
 
 
-def _messages_match(incoming: list[dict[str, str]], history: list[dict[str, str]]) -> bool:
+def _convert_openai_to_litert_content(content: str | list[dict[str, Any]]) -> str | list[dict[str, Any]]:
+    """Convert OpenAI-format multimodal content to litert-lm format.
+
+    OpenAI: [{"type": "text", ...}, {"type": "image_url", "image_url": {"url": "data:...;base64,AAAA"}}]
+    LiteRT: [{"type": "text", ...}, {"type": "image", "blob": "AAAA"}]
+
+    Only base64 data URLs are supported.  Remote URLs (https://...) are
+    rejected — LiteRT expects raw image bytes, not a URL fetch.
+    """
+    if isinstance(content, str):
+        return content
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if part.get("type") == "image_url":
+            data_url = part.get("image_url", {}).get("url", "")
+            if not data_url.startswith("data:"):
+                raise ValueError(f"Only base64 data URLs are supported for LiteRT vision, got: {data_url[:60]}")
+            blob = data_url.split(",", 1)[1] if "," in data_url else ""
+            parts.append({"type": "image", "blob": blob})
+        else:
+            parts.append(part)
+    return parts
+
+
+def _content_equal(a: str | list | None, b: str | list | None) -> bool:
+    """Compare message content that may be a string or a list of parts."""
+    return a == b
+
+
+def _has_image_content(messages: list[dict[str, Any]]) -> bool:
+    """Return True if any message contains an image_url content part."""
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if part.get("type") == "image_url":
+                    return True
+    return False
+
+
+def _estimate_prompt_chars(messages: list[dict[str, Any]]) -> int:
+    """Estimate total character count across all messages, handling multimodal."""
+    total = 0
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            total += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if part.get("type") == "text":
+                    total += len(part.get("text", ""))
+                else:
+                    total += 256  # approximate image token cost in chars
+    return total
+
+
+def _messages_match(incoming: list[dict[str, Any]], history: list[dict[str, Any]]) -> bool:
     """Check if incoming message history is a continuation of our tracked history.
 
     Returns True only when history is non-empty AND every tracked message
@@ -137,7 +215,7 @@ def _messages_match(incoming: list[dict[str, str]], history: list[dict[str, str]
     if len(history) > len(incoming):
         return False
     for prev, inc in zip(history, incoming):
-        if prev.get("role") != inc.get("role") or prev.get("content") != inc.get("content"):
+        if prev.get("role") != inc.get("role") or not _content_equal(prev.get("content"), inc.get("content")):
             return False
     return True
 
@@ -171,25 +249,34 @@ def _prepare_conversation_sync(messages: list[dict[str, str]]) -> None:
             # the preceding user turn via send_message above.
             continue
         if role == "system":
-            _conversation.send_message(f"[System instruction] {content}")
+            _conversation.send_message(f"[System instruction] {content}" if isinstance(content, str) else content)
+        elif isinstance(content, list):
+            # Multimodal: send_message expects a dict with role/content
+            converted = _convert_openai_to_litert_content(content)
+            _conversation.send_message({"role": "user", "content": converted})
         else:
             _conversation.send_message(content)
 
     _conversation_history = list(history_messages)
 
 
-def _run_inference_sync(messages: list[dict[str, str]], stream: bool) -> Any:
+def _run_inference_sync(messages: list[dict[str, Any]], stream: bool) -> Any:
     """Run inference synchronously — must be called via asyncio.to_thread."""
     _prepare_conversation_sync(messages)
 
-    final_content = messages[-1].get("content", "") if messages else ""
+    raw_content = messages[-1].get("content", "") if messages else ""
+    if isinstance(raw_content, list):
+        # Multimodal: send_message expects {"role": "user", "content": [...]}
+        final_content = {"role": "user", "content": _convert_openai_to_litert_content(raw_content)}
+    else:
+        final_content = raw_content
 
     if stream:
         return _conversation.send_message_async(final_content)
     else:
         response = _conversation.send_message(final_content)
         text = _extract_text(response)
-        # Track the full exchange in history
+        # Track the full exchange in history (store original content for matching)
         _conversation_history.append(messages[-1])
         _conversation_history.append({"role": "assistant", "content": text})
         return text
@@ -216,6 +303,13 @@ async def chat_completions(request: Request):
         return JSONResponse(
             status_code=400,
             content={"error": {"message": "messages required", "type": "invalid_request_error"}},
+        )
+
+    # Reject multimodal input when vision is not available
+    if not _vision_enabled and _has_image_content(messages):
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"message": "Vision input is not supported by this model/runtime configuration", "type": "invalid_request_error"}},
         )
 
     stream = payload.get("stream", False)
@@ -289,7 +383,7 @@ async def chat_completions(request: Request):
                         predicted_ms = (now - decode_start) * 1000
                         per_token_ms = (predicted_ms / predicted_n) if predicted_n > 0 else 0
                         per_second = (predicted_n / (predicted_ms / 1000)) if predicted_ms > 0 else 0
-                        prompt_n = sum(len(m.get("content", "")) // 4 for m in messages)
+                        prompt_n = _estimate_prompt_chars(messages) // 4
 
                         stop_chunk = {
                             "id": response_id,
@@ -329,8 +423,13 @@ async def chat_completions(request: Request):
                 )
             else:
                 text = await asyncio.to_thread(_run_inference_sync, messages, False)
-                prompt_tokens = sum(len(m.get("content", "")) // 4 for m in messages)
+                prompt_tokens = _estimate_prompt_chars(messages) // 4
                 return JSONResponse(content=_build_openai_response(str(text), model_name, prompt_tokens))
+        except ValueError as ve:
+            return JSONResponse(
+                status_code=400,
+                content={"error": {"message": str(ve), "type": "invalid_request_error"}},
+            )
         except Exception:
             logger.exception("Inference error")
             return JSONResponse(

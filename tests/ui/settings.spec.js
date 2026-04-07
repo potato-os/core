@@ -1007,3 +1007,133 @@ test("add model by URL shows inline validation feedback", async ({ page }) => {
   await expect(page.locator("#modelUrlInput")).toHaveValue("http://example.com/bad-model.gguf");
 });
 
+
+test("litert-backed vision model shows Vision chip and enables image upload", async ({ page }) => {
+  await page.route("**/v1/chat/completions", (route) => fulfillStreamingChat(route));
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(makeStatusPayload({
+        model: {
+          filename: "gemma-4-E2B-it.litertlm",
+          active_model_id: "gemma4-litert",
+          settings: {
+            chat: {
+              system_prompt: "", stream: true, generation_mode: "random", seed: 42,
+              temperature: 0.7, top_p: 0.8, top_k: 20, repetition_penalty: 1.0,
+              presence_penalty: 1.5, max_tokens: 16384, cache_prompt: true,
+            },
+            vision: { enabled: true, projector_mode: "default", projector_filename: "" },
+          },
+          capabilities: { vision: true },
+          projector: { present: true, filename: null, default_candidates: [] },
+        },
+        models: [
+          {
+            id: "gemma4-litert",
+            filename: "gemma-4-E2B-it.litertlm",
+            source_url: null, source_type: "local_file",
+            status: "ready", is_active: true,
+            settings: {
+              chat: {
+                system_prompt: "", stream: true, generation_mode: "random", seed: 42,
+                temperature: 0.7, top_p: 0.8, top_k: 20, repetition_penalty: 1.0,
+                presence_penalty: 1.5, max_tokens: 16384, cache_prompt: true,
+              },
+              vision: { enabled: true, projector_mode: "default", projector_filename: "" },
+            },
+            capabilities: { vision: true },
+            projector: { present: true, filename: null, default_candidates: [] },
+            bytes_total: 0, bytes_downloaded: 0, percent: 0, error: null,
+          },
+        ],
+        llama_runtime: {
+          current: { family: "litert", runtime_type: "litert_adapter", has_server_binary: false },
+          available_runtimes: [
+            { family: "litert", runtime_type: "litert_adapter", is_active: true, compatible: true },
+          ],
+          switch: { active: false, target_family: null, error: null },
+          memory_loading: { mode: "auto", label: "Automatic", no_mmap_env: "0" },
+          large_model_override: { enabled: false },
+        },
+      })),
+    });
+  });
+
+  await waitUntilReady(page);
+  await openSettingsModal(page);
+
+  await page.locator('#modelsList .model-row[data-model-id="gemma4-litert"]').click();
+  await expect(page.locator("#modelCapabilitiesChips")).toContainText("Vision");
+  await expect(page.locator("#modelCapabilitiesChips")).not.toContainText("Text only");
+
+  await closeSettingsModal(page);
+  await expect(page.locator("#attachImageBtn")).toBeEnabled();
+});
+
+
+test("litert-backed text-only model shows Text only chip and disables image upload", async ({ page }) => {
+  await page.route("**/v1/chat/completions", (route) => fulfillStreamingChat(route));
+  await page.route("**/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(makeStatusPayload({
+        model: {
+          filename: "gemma-4-E2B-it.litertlm",
+          active_model_id: "gemma4-litert",
+          settings: {
+            chat: {
+              system_prompt: "", stream: true, generation_mode: "random", seed: 42,
+              temperature: 0.7, top_p: 0.8, top_k: 20, repetition_penalty: 1.0,
+              presence_penalty: 1.5, max_tokens: 16384, cache_prompt: true,
+            },
+            vision: { enabled: true, projector_mode: "default", projector_filename: "" },
+          },
+          capabilities: { vision: false },
+          projector: { present: false, filename: null, default_candidates: [] },
+        },
+        models: [
+          {
+            id: "gemma4-litert",
+            filename: "gemma-4-E2B-it.litertlm",
+            source_url: null, source_type: "local_file",
+            status: "ready", is_active: true,
+            settings: {
+              chat: {
+                system_prompt: "", stream: true, generation_mode: "random", seed: 42,
+                temperature: 0.7, top_p: 0.8, top_k: 20, repetition_penalty: 1.0,
+                presence_penalty: 1.5, max_tokens: 16384, cache_prompt: true,
+              },
+              vision: { enabled: true, projector_mode: "default", projector_filename: "" },
+            },
+            capabilities: { vision: false },
+            projector: { present: false, filename: null, default_candidates: [] },
+            bytes_total: 0, bytes_downloaded: 0, percent: 0, error: null,
+          },
+        ],
+        llama_runtime: {
+          current: { family: "litert", runtime_type: "litert_adapter", has_server_binary: false },
+          available_runtimes: [
+            { family: "litert", runtime_type: "litert_adapter", is_active: true, compatible: true },
+          ],
+          switch: { active: false, target_family: null, error: null },
+          memory_loading: { mode: "auto", label: "Automatic", no_mmap_env: "0" },
+          large_model_override: { enabled: false },
+        },
+      })),
+    });
+  });
+
+  await waitUntilReady(page);
+  await openSettingsModal(page);
+
+  await page.locator('#modelsList .model-row[data-model-id="gemma4-litert"]').click();
+  await expect(page.locator("#modelCapabilitiesChips")).toContainText("Text only");
+  await expect(page.locator("#modelCapabilitiesChips")).not.toContainText("Vision");
+
+  await closeSettingsModal(page);
+  await expect(page.locator("#attachImageBtn")).toBeDisabled();
+});
+

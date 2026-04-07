@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from core.main import _runtime_env, create_app, ensure_models_state, get_runtime, save_models_state
+from core.main import _runtime_env, build_status, create_app, ensure_models_state, get_runtime, save_models_state
 from core.model_state import build_model_projector_status
 
 
@@ -570,5 +570,122 @@ def test_runtime_env_disables_gemma4_flag_when_vision_off(runtime):
     assert env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] == "0"
     assert env["POTATO_AUTO_DOWNLOAD_MMPROJ"] == "0"
     assert "POTATO_MMPROJ_PATH" not in env
+
+
+# -- LiteRT Gemma 4 vision gating in /status ------------------------------------
+
+
+def _make_litert_gemma4_runtime(runtime, model_filename="gemma-4-E2B-it.litertlm"):
+    """Set up a runtime with a LiteRT Gemma 4 model and litert installed."""
+    runtime.enable_orchestrator = True
+    model_path = runtime.base_dir / "models" / model_filename
+    model_path.write_bytes(b"litert-model")
+    runtime.model_path = model_path
+    # Install litert runtime marker
+    llama_dir = runtime.base_dir / "llama"
+    llama_dir.mkdir(parents=True, exist_ok=True)
+    (llama_dir / "runtime.json").write_text(
+        '{"family": "litert", "commit": "abc123"}',
+        encoding="utf-8",
+    )
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "gemma4-litert",
+                "default_model_id": "gemma4-litert",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "gemma4-litert",
+                        "filename": model_filename,
+                        "source_url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                        "settings": {
+                            "vision": {
+                                "enabled": True,
+                                "projector_mode": "default",
+                                "projector_filename": None,
+                            }
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return runtime
+
+
+def test_status_litert_gemma4_vision_true_when_adapter_confirms(runtime, monkeypatch):
+    """When LiteRT adapter reports vision=true, /status capabilities.vision=True."""
+    _make_litert_gemma4_runtime(runtime)
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    async def _adapter_health_vision_true(_runtime):
+        return True
+
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main._probe_litert_adapter_vision", _adapter_health_vision_true)
+
+    with TestClient(app) as client:
+        response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"]["capabilities"]["vision"] is True
+    gemma4_entry = next(m for m in body["models"] if m["id"] == "gemma4-litert")
+    assert gemma4_entry["capabilities"]["vision"] is True
+    # LiteRT bundles vision — projector.present should be True, no download needed
+    assert body["model"]["projector"]["present"] is True
+    assert body["model"]["projector"]["default_candidates"] == []
+
+
+def test_status_litert_gemma4_vision_false_when_adapter_denies(runtime, monkeypatch):
+    """When LiteRT adapter reports vision=false, /status capabilities.vision=False."""
+    _make_litert_gemma4_runtime(runtime)
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    async def _adapter_health_vision_false(_runtime):
+        return False
+
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main._probe_litert_adapter_vision", _adapter_health_vision_false)
+
+    with TestClient(app) as client:
+        response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"]["capabilities"]["vision"] is False
+    gemma4_entry = next(m for m in body["models"] if m["id"] == "gemma4-litert")
+    assert gemma4_entry["capabilities"]["vision"] is False
+
+
+def test_status_litert_preserves_vision_when_adapter_unreachable(runtime, monkeypatch):
+    """When adapter is unreachable (probe returns None), preserve filename-derived capabilities."""
+    _make_litert_gemma4_runtime(runtime)
+    app = create_app(runtime=runtime, enable_orchestrator=True)
+    app.dependency_overrides[get_runtime] = lambda: runtime
+
+    async def _adapter_unreachable(_runtime):
+        return None
+
+    monkeypatch.setattr("core.main.check_llama_health", _healthy_true)
+    monkeypatch.setattr("core.main._probe_litert_adapter_vision", _adapter_unreachable)
+
+    with TestClient(app) as client:
+        response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    # Gemma 4 is vision-capable by filename — should NOT be downgraded to false
+    assert body["model"]["capabilities"]["vision"] is True
 
 

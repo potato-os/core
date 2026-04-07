@@ -808,6 +808,31 @@ def _build_status_fs(
     }
 
 
+async def _probe_litert_adapter_vision(runtime: RuntimeConfig) -> bool | None:
+    """Check if the running LiteRT adapter reports vision support.
+
+    Returns True/False if adapter is reachable, None if unreachable.
+    """
+    timeout = httpx.Timeout(2.0, connect=1.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(f"{runtime.llama_base_url}/health")
+        if response.status_code == 200:
+            return bool(response.json().get("vision", False))
+    except httpx.HTTPError:
+        pass
+    return None
+
+
+_LITERT_BUNDLED_PROJECTOR: dict[str, Any] = {
+    "configured_filename": None,
+    "filename": None,
+    "present": False,
+    "path": None,
+    "default_candidates": [],
+}
+
+
 async def build_status(
     runtime: RuntimeConfig,
     *,
@@ -840,6 +865,25 @@ async def build_status(
             result["backend"]["active"] = active_backend
             result["backend"]["fallback_active"] = fallback_active
             result["model_loading"] = dict(_MODEL_LOADING_INACTIVE)
+
+    # LiteRT: gate vision capabilities on adapter-reported support.
+    # When the probe returns None (adapter unreachable / restarting), preserve
+    # the existing filename-derived capabilities instead of forcing false.
+    installed_family = _detect_installed_runtime_family(runtime)
+    if installed_family == "litert":
+        litert_vision = await _probe_litert_adapter_vision(runtime)
+        if isinstance(litert_vision, bool):
+            for entry in result.get("models", []):
+                if is_gemma4_filename(str(entry.get("filename") or "")):
+                    entry["capabilities"] = dict(entry["capabilities"], vision=litert_vision)
+                    if str(entry.get("filename") or "").endswith(".litertlm"):
+                        entry["projector"] = dict(_LITERT_BUNDLED_PROJECTOR, present=litert_vision)
+            model = result.get("model")
+            if model and is_gemma4_filename(str(model.get("filename") or "")):
+                model["capabilities"] = dict(model["capabilities"], vision=litert_vision)
+                if str(model.get("filename") or "").endswith(".litertlm"):
+                    model["projector"] = dict(_LITERT_BUNDLED_PROJECTOR, present=litert_vision)
+
     return result
 
 
