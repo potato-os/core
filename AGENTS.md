@@ -144,6 +144,7 @@ PRs must include:
 
 - `main` is merge-only. No direct commits for feature/bug/chore work.
 - Branch from `main`: `feat/issue-<id>-<slug>`, `fix/issue-<id>-<slug>`, `chore/issue-<id>-<slug>`.
+- Use the org-owned `Potato OS` board at `https://github.com/orgs/potato-os/projects/1` for all active work.
 - Board flow: Todo → In Progress → In Review → QA → Done.
 - Squash merge preferred. Delete branch after merge.
 - See `WORKFLOW.md` for full lifecycle details.

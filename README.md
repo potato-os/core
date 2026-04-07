@@ -128,7 +128,7 @@ See [Building Images](docs/building-images.md) for prerequisites, variants, flas
 
 ### Project
 
-- Board: [github.com/orgs/potato-os/projects/1](https://github.com/orgs/potato-os/projects/1)
+- Active board: [github.com/orgs/potato-os/projects/1](https://github.com/orgs/potato-os/projects/1)
 - Defaults: hostname `potato`, SSH `pi`/`raspberry`
 
 ## License

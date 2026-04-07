@@ -4,7 +4,8 @@ This is the single source of truth for how we plan, execute, and close work.
 
 ## Project Board
 
-- Board: <https://github.com/orgs/potato-os/projects/1>
+- Canonical active board: <https://github.com/orgs/potato-os/projects/1>
+- All active work, automation, and `gh project` commands must use the org-owned `potato-os` board.
 - Default status flow:
   - `Todo`
   - `In Progress`
@@ -302,6 +303,8 @@ After building a runtime on Pi, publish it so fresh installs can auto-download:
 - **Local build always wins** when `runtimes/<family>/` exists locally.
 
 ## Helpful CLI snippets
+
+These commands target the canonical org-owned `Potato OS` board.
 
 ```bash
 # Create issue
