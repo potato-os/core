@@ -28,7 +28,7 @@ def test_download_default_projector_for_model_uses_curated_helper(runtime, monke
     with TestClient(app) as client:
         upload = client.post(
             "/internal/models/upload",
-            headers={"x-potato-filename": "Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"},
+            headers={"x-potato-filename": "Qwen3.5-4B-Q4_K_M.gguf"},
             content=b"gguf",
         )
         assert upload.status_code == 200
