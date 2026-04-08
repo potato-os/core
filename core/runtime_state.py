@@ -23,10 +23,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - optional on non-Pi dev hosts
     psutil = None  # type: ignore[assignment]
 
-try:
-    from core.inferno import runtime_manager as _inferno
-except ModuleNotFoundError:
-    from inferno import runtime_manager as _inferno  # type: ignore[no-redef]
+from inferno import runtime_manager as _inferno
 
 # ---------------------------------------------------------------------------
 # Re-exports from inferno (constants + pure functions)
@@ -571,7 +568,14 @@ def write_llama_runtime_bundle_marker(runtime: RuntimeConfig, bundle: dict[str, 
 
 
 def _detect_installed_runtime_family(runtime: RuntimeConfig) -> str:
-    """Detect the active runtime family from marker or installed runtime.json."""
+    """Detect the effective runtime family for the active model.
+
+    .litertlm models always need the litert adapter regardless of
+    what binary runtime is installed in the llama/ slot.
+    """
+    model_name = getattr(runtime.model_path, "name", "")
+    if model_name.endswith(".litertlm"):
+        return "litert"
     return _inferno._detect_installed_runtime_family(runtime.base_dir / "llama")
 
 

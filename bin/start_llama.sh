@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Thin wrapper around llama-server — all business logic lives in Python
-# (core.inferno.launch_config.build_llama_server_args).
+# (inferno.launch_config.build_llama_server_args).
 #
 # This script only handles:
 #   1. Dynamic library path for GGML backends

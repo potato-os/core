@@ -1,10 +1,10 @@
-"""Model state -- Potato-specific adapter over core.inferno.model_registry.
+"""Model state -- Potato-specific adapter over inferno.model_registry.
 
 This module provides the RuntimeConfig-aware interface that the rest of
 Potato uses.  All registry, format, settings, and projector logic lives
-in core.inferno.model_registry and core.inferno.model_families; this
-file supplies product-level defaults (device detection, default model
-selection) and translates RuntimeConfig into ModelStoreConfig for inferno.
+in inferno.model_registry and inferno.model_families; this file supplies
+product-level defaults (device detection, default model selection) and
+translates RuntimeConfig into ModelStoreConfig for inferno.
 
 Activation flow (resolve_active_model, model_present) remains here
 because it mutates RuntimeConfig.model_path -- extraction is planned
@@ -25,94 +25,49 @@ except ModuleNotFoundError:
 # Re-exports from inferno (pure functions, no RuntimeConfig dependency)
 # ---------------------------------------------------------------------------
 
-try:
-    from core.inferno.model_registry import (  # noqa: F401 — re-exports
-        DEFAULT_MODEL_CHAT_SETTINGS,
-        DEFAULT_MODEL_VISION_SETTINGS,
-        MODELS_STATE_VERSION,
-        VALID_MODEL_EXTENSIONS,
-        ModelSettingsValidationError,
-        ModelStoreConfig,
-        _has_valid_model_extension,
-        _is_discoverable_local_model_filename,
-        _sanitize_filename,
-        _slugify_id,
-        _unique_filename,
-        _unique_model_id,
-        apply_model_chat_defaults,
-        build_model_capabilities,
-        get_model_by_id,
-        is_qwen35_a3b_filename,
-        model_format_for_filename,
-        model_supports_vision_filename,
-        normalize_model_settings,
-        validate_model_url,
-    )
-    from core.inferno.model_families import (  # noqa: F401 — re-exports
-        _is_vision_family,
-        default_projector_candidates_for_model,
-    )
-    from core.inferno.model_registry import (
-        model_file_path as _inferno_model_file_path,
-        model_file_present as _inferno_model_file_present,
-        describe_model_storage as _inferno_describe_model_storage,
-        resolve_model_runtime_path as _inferno_resolve_model_runtime_path,
-        discover_local_model_filenames as _inferno_discover_local_model_filenames,
-        ensure_models_state as _inferno_ensure_models_state,
-        save_models_state as _inferno_save_models_state,
-        register_model_url as _inferno_register_model_url,
-        delete_model as _inferno_delete_model,
-        update_model_settings as _inferno_update_model_settings,
-        any_model_ready as _inferno_any_model_ready,
-        download_default_projector_for_model as _inferno_download_default_projector,
-    )
-    from core.inferno.model_families import (
-        build_model_projector_status as _inferno_build_model_projector_status,
-    )
-except ModuleNotFoundError:
-    from inferno.model_registry import (  # type: ignore[no-redef]
-        DEFAULT_MODEL_CHAT_SETTINGS,
-        DEFAULT_MODEL_VISION_SETTINGS,
-        MODELS_STATE_VERSION,
-        VALID_MODEL_EXTENSIONS,
-        ModelSettingsValidationError,
-        ModelStoreConfig,
-        _has_valid_model_extension,
-        _is_discoverable_local_model_filename,
-        _sanitize_filename,
-        _slugify_id,
-        _unique_filename,
-        _unique_model_id,
-        apply_model_chat_defaults,
-        build_model_capabilities,
-        get_model_by_id,
-        is_qwen35_a3b_filename,
-        model_format_for_filename,
-        model_supports_vision_filename,
-        normalize_model_settings,
-        validate_model_url,
-    )
-    from inferno.model_families import (  # type: ignore[no-redef]
-        _is_vision_family,
-        default_projector_candidates_for_model,
-    )
-    from inferno.model_registry import (  # type: ignore[no-redef]
-        model_file_path as _inferno_model_file_path,
-        model_file_present as _inferno_model_file_present,
-        describe_model_storage as _inferno_describe_model_storage,
-        resolve_model_runtime_path as _inferno_resolve_model_runtime_path,
-        discover_local_model_filenames as _inferno_discover_local_model_filenames,
-        ensure_models_state as _inferno_ensure_models_state,
-        save_models_state as _inferno_save_models_state,
-        register_model_url as _inferno_register_model_url,
-        delete_model as _inferno_delete_model,
-        update_model_settings as _inferno_update_model_settings,
-        any_model_ready as _inferno_any_model_ready,
-        download_default_projector_for_model as _inferno_download_default_projector,
-    )
-    from inferno.model_families import (  # type: ignore[no-redef]
-        build_model_projector_status as _inferno_build_model_projector_status,
-    )
+from inferno.model_registry import (  # noqa: F401 — re-exports
+    DEFAULT_MODEL_CHAT_SETTINGS,
+    DEFAULT_MODEL_VISION_SETTINGS,
+    MODELS_STATE_VERSION,
+    VALID_MODEL_EXTENSIONS,
+    ModelSettingsValidationError,
+    ModelStoreConfig,
+    _has_valid_model_extension,
+    _is_discoverable_local_model_filename,
+    _sanitize_filename,
+    _slugify_id,
+    _unique_filename,
+    _unique_model_id,
+    apply_model_chat_defaults,
+    build_model_capabilities,
+    get_model_by_id,
+    is_qwen35_a3b_filename,
+    model_format_for_filename,
+    model_supports_vision_filename,
+    normalize_model_settings,
+    validate_model_url,
+)
+from inferno.model_families import (  # noqa: F401 — re-exports
+    _is_vision_family,
+    default_projector_candidates_for_model,
+)
+from inferno.model_registry import (
+    model_file_path as _inferno_model_file_path,
+    model_file_present as _inferno_model_file_present,
+    describe_model_storage as _inferno_describe_model_storage,
+    resolve_model_runtime_path as _inferno_resolve_model_runtime_path,
+    discover_local_model_filenames as _inferno_discover_local_model_filenames,
+    ensure_models_state as _inferno_ensure_models_state,
+    save_models_state as _inferno_save_models_state,
+    register_model_url as _inferno_register_model_url,
+    delete_model as _inferno_delete_model,
+    update_model_settings as _inferno_update_model_settings,
+    any_model_ready as _inferno_any_model_ready,
+    download_default_projector_for_model as _inferno_download_default_projector,
+)
+from inferno.model_families import (
+    build_model_projector_status as _inferno_build_model_projector_status,
+)
 
 
 # ---------------------------------------------------------------------------

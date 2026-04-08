@@ -301,8 +301,8 @@ rm -f "${sudoers_terminal_tmp}"
 
 sudoers_ota_tmp="$(mktemp)"
 cat > "${sudoers_ota_tmp}" <<'SUDOERS'
-potato ALL=(root) NOPASSWD: /bin/chown -R potato\:potato /opt/potato/app
-potato ALL=(root) NOPASSWD: /usr/bin/chown -R potato\:potato /opt/potato/app
+potato ALL=(root) NOPASSWD: /bin/chown -R potato\:potato /opt/potato/core
+potato ALL=(root) NOPASSWD: /usr/bin/chown -R potato\:potato /opt/potato/core
 potato ALL=(root) NOPASSWD: /bin/chown -R potato\:potato /opt/potato/bin
 potato ALL=(root) NOPASSWD: /usr/bin/chown -R potato\:potato /opt/potato/bin
 SUDOERS

@@ -50,12 +50,16 @@ To re-deploy the working code from your dev machine:
 export SSHPASS=raspberry
 # Fix ownership if needed
 sshpass -e ssh -o StrictHostKeyChecking=accept-new pi@potato.local \
-  "echo raspberry | sudo -S chown -R pi:pi /opt/potato/app"
+  "echo raspberry | sudo -S chown -R pi:pi /opt/potato/core"
 
 # Rsync known-good core/ from your checkout
 sshpass -e rsync -az --delete \
   -e "ssh -o StrictHostKeyChecking=accept-new" \
-  core/ pi@potato.local:/opt/potato/app/
+  core/ pi@potato.local:/opt/potato/core/
+
+# Install dependencies (required — some packages live outside core/)
+sshpass -e ssh -o StrictHostKeyChecking=accept-new pi@potato.local \
+  "echo raspberry | sudo -S /opt/potato/venv/bin/pip install -r /opt/potato/core/requirements.txt"
 
 # Restart the service
 sshpass -e ssh -o StrictHostKeyChecking=accept-new pi@potato.local \

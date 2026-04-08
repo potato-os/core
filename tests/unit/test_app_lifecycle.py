@@ -180,7 +180,7 @@ def test_max_consecutive_failures_constant_exists():
 def test_orchestrator_loop_has_crash_loop_guard():
     """The orchestrator must check consecutive_failures before restarting."""
     import inspect
-    from core.inferno import orchestrator
+    from inferno import orchestrator
 
     source = inspect.getsource(orchestrator.run_inference_tick)
     assert "consecutive_failures" in source

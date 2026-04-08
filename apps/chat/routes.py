@@ -9,16 +9,16 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from inferno import BackendProxyError, ChatRepositoryManager
+
 try:
     from core.deps import get_runtime, get_chat_repository
     from core.model_state import apply_model_chat_defaults
-    from core.inferno import BackendProxyError, ChatRepositoryManager
     from core.runtime_state import RuntimeConfig
     from core.settings import merge_active_model_chat_defaults, merge_chat_defaults
 except ModuleNotFoundError:
     from deps import get_runtime, get_chat_repository  # type: ignore[no-redef]
     from model_state import apply_model_chat_defaults  # type: ignore[no-redef]
-    from inferno import BackendProxyError, ChatRepositoryManager  # type: ignore[no-redef]
     from runtime_state import RuntimeConfig  # type: ignore[no-redef]
     from settings import merge_active_model_chat_defaults, merge_chat_defaults  # type: ignore[no-redef]
 
