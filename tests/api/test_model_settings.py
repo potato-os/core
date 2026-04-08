@@ -20,7 +20,7 @@ def test_update_model_settings_persists_per_model_chat_and_vision(runtime):
     with TestClient(app) as client:
         upload = client.post(
             "/internal/models/upload",
-            headers={"x-potato-filename": "Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"},
+            headers={"x-potato-filename": "Qwen3.5-4B-Q4_K_M.gguf"},
             content=b"gguf",
         )
         assert upload.status_code == 200
@@ -74,7 +74,7 @@ def test_settings_document_yaml_round_trip_updates_active_model_and_model_settin
     with TestClient(app) as client:
         upload = client.post(
             "/internal/models/upload",
-            headers={"x-potato-filename": "Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"},
+            headers={"x-potato-filename": "Qwen3.5-4B-Q4_K_M.gguf"},
             content=b"gguf",
         )
         assert upload.status_code == 200
@@ -155,7 +155,7 @@ def test_update_model_settings_rejects_invalid_numeric_value(runtime):
     with TestClient(app) as client:
         upload = client.post(
             "/internal/models/upload",
-            headers={"x-potato-filename": "Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"},
+            headers={"x-potato-filename": "Qwen3.5-4B-Q4_K_M.gguf"},
             content=b"gguf",
         )
         assert upload.status_code == 200

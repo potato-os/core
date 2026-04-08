@@ -263,6 +263,50 @@ def test_runtime_env_enables_mmproj_auto_download_when_vision_on_and_no_mmproj(r
     assert "unsloth" in env["POTATO_HF_MMPROJ_REPO"] or "huggingface" in env["POTATO_HF_MMPROJ_REPO"].lower()
 
 
+def test_runtime_env_resolves_9b_non_byteshape_to_unsloth_repo(runtime):
+    """Non-ByteShape Qwen3.5-9B must resolve to unsloth/Qwen3.5-9B-GGUF."""
+    model_filename = "Qwen3.5-9B-Q4_K_M.gguf"
+    model_path = runtime.base_dir / "models" / model_filename
+    model_path.write_bytes(b"gguf")
+    runtime.model_path = model_path
+    runtime.models_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "countdown_enabled": True,
+                "default_model_downloaded_once": True,
+                "active_model_id": "default",
+                "default_model_id": "default",
+                "current_download_model_id": None,
+                "models": [
+                    {
+                        "id": "default",
+                        "filename": model_filename,
+                        "source_url": "https://example.com/qwen35-9b.gguf",
+                        "source_type": "url",
+                        "status": "ready",
+                        "error": None,
+                        "settings": {
+                            "vision": {
+                                "enabled": True,
+                                "projector_mode": "default",
+                                "projector_filename": None,
+                            }
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = _runtime_env(runtime)
+
+    assert env["POTATO_VISION_MODEL_NAME_PATTERN_QWEN35"] == "1"
+    assert env["POTATO_AUTO_DOWNLOAD_MMPROJ"] == "1"
+    assert env["POTATO_HF_MMPROJ_REPO"] == "unsloth/Qwen3.5-9B-GGUF"
+
+
 def test_projector_status_reports_generic_truthfully_for_offline_compat(runtime):
     """build_model_projector_status must report mmproj-F16.gguf as present even
     when model-specific candidates exist — preserves offline upgrades where the
