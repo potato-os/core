@@ -178,12 +178,13 @@ def test_max_consecutive_failures_constant_exists():
 
 
 def test_orchestrator_loop_has_crash_loop_guard():
-    """The orchestrator must check llama_consecutive_failures before restarting."""
+    """The orchestrator must check consecutive_failures before restarting."""
     import inspect
-    source = inspect.getsource(main.orchestrator_loop)
+    from core.inferno import orchestrator
 
-    assert "llama_consecutive_failures" in source
-    assert "LLAMA_MAX_CONSECUTIVE_FAILURES" in source
+    source = inspect.getsource(orchestrator.run_inference_tick)
+    assert "consecutive_failures" in source
+    assert "MAX_CONSECUTIVE_FAILURES" in source
 
 
 def test_orchestrator_resets_failures_on_model_change():

@@ -25,6 +25,7 @@ try:
         LlamaCppRepository,
         build_llama_server_args,
     )
+    from core.inferno import orchestrator as _orchestrator
 except ModuleNotFoundError:
     from inferno import (  # type: ignore[no-redef]
         BackendProxyError,
@@ -33,6 +34,7 @@ except ModuleNotFoundError:
         LlamaCppRepository,
         build_llama_server_args,
     )
+    from inferno import orchestrator as _orchestrator  # type: ignore[no-redef]
 
 try:
     from core.inferno import (
@@ -101,6 +103,7 @@ try:
         MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES,
         POWER_CALIBRATION_DEFAULT_A,
         POWER_CALIBRATION_DEFAULT_B,
+        read_llama_runtime_bundle_marker,
         RuntimeConfig,
         _MODEL_LOADING_INACTIVE,
         _detect_installed_runtime_family,
@@ -230,6 +233,7 @@ except ModuleNotFoundError:
         MODEL_UPLOAD_PI_16GB_MEMORY_THRESHOLD_BYTES,
         POWER_CALIBRATION_DEFAULT_A,
         POWER_CALIBRATION_DEFAULT_B,
+        read_llama_runtime_bundle_marker,
         RuntimeConfig,
         _MODEL_LOADING_INACTIVE,
         _detect_installed_runtime_family,
@@ -302,9 +306,9 @@ MODEL_DOWNLOAD_CANCEL_WAIT_TIMEOUT_SECONDS = 20.0
 # One-off auto-download: on first start with no model, downloads the default
 # starter model (Qwen3.5-2B-Q4_K_M) after a 5-minute idle countdown.
 AUTO_DOWNLOAD_BOOTSTRAP_ENABLED = True
-LLAMA_READY_HEALTH_POLLS_REQUIRED = 2
+LLAMA_READY_HEALTH_POLLS_REQUIRED = _orchestrator.READY_HEALTH_POLLS_REQUIRED
 LLAMA_SHUTDOWN_TIMEOUT_SECONDS = 5.0
-LLAMA_MAX_CONSECUTIVE_FAILURES = 5
+LLAMA_MAX_CONSECUTIVE_FAILURES = _orchestrator.MAX_CONSECUTIVE_FAILURES
 
 DEFAULT_CHAT_SETTINGS = {
     **DEFAULT_MODEL_CHAT_SETTINGS,
@@ -325,27 +329,11 @@ def _empty_model_upload_state() -> dict[str, Any]:
 
 
 def _empty_llama_runtime_switch_state() -> dict[str, Any]:
-    return {
-        "active": False,
-        "target_bundle_path": None,
-        "started_at_unix": None,
-        "completed_at_unix": None,
-        "error": None,
-        "last_bundle_path": None,
-    }
+    return _orchestrator.empty_runtime_switch_state()
 
 
 def _empty_llama_readiness_state() -> dict[str, Any]:
-    return {
-        "generation": 0,
-        "model_path": None,
-        "status": "idle",
-        "transport_healthy": False,
-        "ready": False,
-        "healthy_polls": 0,
-        "last_error": None,
-        "last_ready_at_unix": None,
-    }
+    return _orchestrator.empty_readiness_state()
 
 
 def reset_llama_readiness_state(
@@ -355,29 +343,25 @@ def reset_llama_readiness_state(
     reason: str | None = None,
 ) -> dict[str, Any]:
     previous = getattr(app.state, "llama_readiness_state", None)
-    generation = 1
-    if isinstance(previous, dict):
-        generation = max(0, int(previous.get("generation") or 0)) + 1
-    next_state = _empty_llama_readiness_state()
-    next_state["generation"] = generation
-    next_state["model_path"] = str(model_path) if model_path else None
-    next_state["status"] = "loading" if model_path else "idle"
-    next_state["last_error"] = reason
+    next_state = _orchestrator.reset_readiness(
+        previous,
+        model_path=str(model_path) if model_path else None,
+        reason=reason,
+    )
     app.state.llama_readiness_state = next_state
     return dict(next_state)
 
 
 def get_llama_readiness_state(app: FastAPI, *, active_model_path: Path | None = None) -> dict[str, Any]:
-    state = getattr(app.state, "llama_readiness_state", None)
-    if not isinstance(state, dict):
-        state = _empty_llama_readiness_state()
-        app.state.llama_readiness_state = state
+    current = getattr(app.state, "llama_readiness_state", None)
+    if not isinstance(current, dict):
+        current = _orchestrator.empty_readiness_state()
+        app.state.llama_readiness_state = current
     target_path = str(active_model_path) if active_model_path is not None else None
-    if target_path and state.get("model_path") != target_path:
-        return reset_llama_readiness_state(app, model_path=active_model_path, reason="model_changed")
-    if target_path is None and state.get("model_path") is not None:
-        return reset_llama_readiness_state(app, reason="no_model")
-    return dict(state)
+    resolved = _orchestrator.resolve_readiness(current, active_model_path=target_path)
+    if resolved is not current and resolved != current:
+        app.state.llama_readiness_state = resolved
+    return dict(resolved)
 
 
 async def refresh_llama_readiness(
@@ -396,27 +380,14 @@ async def refresh_llama_readiness(
     proc = getattr(app.state, "llama_process", None)
     running = proc is not None and proc.returncode is None
     if not running:
-        next_state.update(
-            {
-                "status": "loading",
-                "transport_healthy": False,
-                "ready": False,
-                "healthy_polls": 0,
-            }
-        )
+        next_state.update({"status": "loading", "transport_healthy": False, "ready": False, "healthy_polls": 0})
         return dict(next_state)
 
     busy_is_healthy = bool(next_state.get("ready"))
     transport_healthy = await check_llama_health(runtime, busy_is_healthy=busy_is_healthy)
     next_state["transport_healthy"] = transport_healthy
     if not transport_healthy:
-        next_state.update(
-            {
-                "status": "loading",
-                "ready": False,
-                "healthy_polls": 0,
-            }
-        )
+        next_state.update({"status": "loading", "ready": False, "healthy_polls": 0})
         return dict(next_state)
 
     next_state["healthy_polls"] = min(
@@ -460,25 +431,24 @@ async def restart_managed_llama_process(app: FastAPI) -> tuple[bool, str]:
         current_model_path = getattr(app.state.runtime, "model_path", None)
     except Exception:
         current_model_path = None
-    reset_llama_readiness_state(app, model_path=current_model_path, reason="restart_requested")
+    readiness = getattr(app.state, "llama_readiness_state", None) or {}
     proc = app.state.llama_process
-    terminated_running = False
-
-    if proc is not None and proc.returncode is None:
-        await _terminate_process(proc, timeout=3.0)
-        terminated_running = True
-
-    terminated_stale = await terminate_stray_llama_processes(app.state.runtime)
-
+    runtime = getattr(app.state, "runtime", None)
+    new_readiness, terminated, reason = await _orchestrator.restart_inference_process(
+        readiness=readiness,
+        process=proc,
+        model_path=str(current_model_path) if current_model_path else None,
+        terminate_fn=_terminate_process,
+        stray_kill_fn=lambda: terminate_stray_llama_processes(runtime) if runtime else _noop_stray_kill(),
+    )
+    app.state.llama_readiness_state = new_readiness
     app.state.llama_process = None
     app.state.llama_consecutive_failures = 0
-    if terminated_running and terminated_stale:
-        return True, "terminated_running_and_stale_processes"
-    if terminated_running:
-        return True, "terminated_running_process"
-    if terminated_stale:
-        return True, "terminated_stale_processes"
-    return False, "no_running_process"
+    return terminated, reason
+
+
+async def _noop_stray_kill() -> int:
+    return 0
 
 
 def _resolve_backend_active(
@@ -937,7 +907,6 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
     env["POTATO_ALLOW_FAKE_FALLBACK"] = "1" if runtime.allow_fake_fallback else "0"
     env["POTATO_LLAMA_PORT"] = str(runtime.llama_port)
     env["POTATO_RUNTIME_FAMILY"] = installed_family
-    # LiteRT adapter doesn't need llama-specific env vars.
     if installed_family == "litert":
         return env
     env["POTATO_LLAMA_NO_MMAP"] = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
@@ -971,18 +940,13 @@ def _runtime_env(runtime: RuntimeConfig) -> dict[str, str]:
                 projector_filename = str(vision_settings.get("projector_filename") or "").strip()
                 if projector_mode == "custom" and projector_filename:
                     env["POTATO_MMPROJ_PATH"] = str(runtime.base_dir / "models" / projector_filename)
-    # ik_llama doesn't support the gemma4v vision projector type yet —
-    # suppress vision to avoid a clip_init failure loop.
     if isinstance(active_model, dict):
         active_fn = str(active_model.get("filename") or "")
         installed_family = _detect_installed_runtime_family(runtime)
         if is_gemma4_filename(active_fn) and installed_family == "ik_llama":
             env["POTATO_VISION_MODEL_NAME_PATTERN_GEMMA4"] = "0"
             env.pop("POTATO_MMPROJ_PATH", None)
-
-    device_class = classify_runtime_device(
-        pi_model_name=_read_pi_device_model_name(),
-    )
+    device_class = classify_runtime_device(pi_model_name=_read_pi_device_model_name())
     _, device_model_url = default_model_for_device(device_class)
     env.setdefault("POTATO_MODEL_URL", device_model_url)
     return env
@@ -993,49 +957,13 @@ def _resolve_mmproj_for_launch(
     active_model: dict[str, Any],
     installed_family: str,
 ) -> str | None:
-    """Resolve the mmproj path for a vision-enabled model.
-
-    Returns the projector path, or None if vision is not enabled/required.
-    Raises RuntimeError if vision is enabled but no projector is available
-    (the orchestrator should skip launch and retry later).
-    """
+    models_dir = runtime.base_dir / "models"
     active_filename = str(active_model.get("filename") or "")
-    active_settings = normalize_model_settings(active_model.get("settings"), filename=active_filename)
-    vision_settings = active_settings.get("vision", {})
-
-    if not (model_supports_vision_filename(active_filename) and bool(vision_settings.get("enabled", False))):
-        return None
-
-    # Suppress Gemma4 vision on ik_llama (clip_init failure).
-    if is_gemma4_filename(active_filename) and installed_family == "ik_llama":
-        return None
-
-    projector_mode = str(vision_settings.get("projector_mode") or "default").strip().lower()
-    projector_filename = str(vision_settings.get("projector_filename") or "").strip()
-
-    if projector_mode == "custom" and projector_filename:
-        custom_path = runtime.base_dir / "models" / projector_filename
-        if custom_path.exists():
-            return str(custom_path)
-        raise RuntimeError(f"Custom projector not found: {custom_path}")
-
-    # Search managed models dir AND resolved model directory (symlink targets
-    # on USB/NVMe may have adjacent projectors).
-    projector_status = build_model_projector_status(runtime, active_model)
-    if projector_status.get("present") and projector_status.get("path"):
-        return str(projector_status["path"])
-
-    resolved_model_dir = resolve_model_runtime_path(runtime, active_filename).parent
-    managed_model_dir = runtime.base_dir / "models"
-    if resolved_model_dir != managed_model_dir:
-        for candidate in projector_status.get("default_candidates") or []:
-            candidate_path = resolved_model_dir / candidate
-            if candidate_path.exists():
-                return str(candidate_path)
-
-    # No projector on disk — vision is enabled but mmproj is missing.
-    # The caller must attempt download or skip launch.
-    raise RuntimeError(f"Vision enabled but no projector found for {active_filename}")
+    try:
+        resolved_dir = resolve_model_runtime_path(runtime, active_filename).parent
+    except Exception:
+        resolved_dir = models_dir
+    return _orchestrator.resolve_mmproj_for_launch(models_dir, resolved_dir, active_model, installed_family)
 
 
 async def _ensure_mmproj_for_launch(
@@ -1043,83 +971,29 @@ async def _ensure_mmproj_for_launch(
     active_model: dict[str, Any],
     installed_family: str,
 ) -> str | None:
-    """Resolve or download the mmproj for launch.  Returns the path or None.
+    models_dir = runtime.base_dir / "models"
 
-    Downloads run in a thread to keep the event loop free.
-    Returns None with a warning if vision is enabled but the projector
-    cannot be obtained (the orchestrator should skip launch).
-    """
-    try:
-        return _resolve_mmproj_for_launch(runtime, active_model, installed_family)
-    except RuntimeError:
-        pass
-
-    # Try downloading in a thread (mirrors the old shell curl behavior
-    # without blocking the event loop).
-    active_model_id = str(active_model.get("id") or "")
-    if not active_model_id:
-        logger.warning("Vision enabled but model has no id — skipping projector download")
-        return None
-    try:
-        ok, _reason, downloaded_name = await asyncio.to_thread(
+    async def _download(model_id: str) -> tuple[bool, str, str | None]:
+        return await asyncio.to_thread(
             download_default_projector_for_model,
             runtime=runtime,
-            model_id=active_model_id,
+            model_id=model_id,
         )
-    except Exception:
-        logger.warning("Projector download failed — skipping vision launch", exc_info=True)
-        return None
-    if ok and downloaded_name:
-        return str(runtime.base_dir / "models" / downloaded_name)
 
-    logger.warning("Vision projector unavailable — skipping launch (will retry)")
-    return None
-
-
-def _resolve_no_mmap(runtime: RuntimeConfig, active_filename: str, installed_family: str) -> bool:
-    """Resolve the --no-mmap flag, including the 'auto' heuristic.
-
-    Auto mode: disable mmap for Qwen3.5-35B-A3B on Pi 5 16GB with the
-    pi5-opt runtime profile (same logic as the old shell should_disable_mmap).
-    """
-    no_mmap_env = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
-    if no_mmap_env.lower() in ("true", "1"):
-        return True
-    if no_mmap_env.lower() in ("false", "0"):
-        return False
-
-    # Auto mode — replicate the old shell heuristic.
-    if not is_qwen35_a3b_filename(active_filename):
-        return False
-    device_class = classify_runtime_device(
-        pi_model_name=_read_pi_device_model_name(),
-        total_memory_bytes=_detect_total_memory_bytes(),
+    return await _orchestrator.ensure_mmproj_for_launch(
+        models_dir, active_model, installed_family, download_fn=_download,
     )
-    if device_class != "pi5-16gb":
-        return False
-    marker = read_llama_runtime_bundle_marker(runtime)
-    runtime_profile = str((marker or {}).get("profile") or "")
-    return runtime_profile == "pi5-opt" and installed_family == "ik_llama"
 
 
 async def _build_llama_launch_args(runtime: RuntimeConfig) -> list[str] | None:
-    """Build the complete llama-server CLI arg list from runtime config.
-
-    Returns None if a required projector is unavailable (caller should skip
-    launch and let the orchestrator retry).
-    """
     installed_family = _detect_installed_runtime_family(runtime)
-
-    # Resolve mmproj path from model state.
     mmproj_path: str | None = None
-    vision_required = False
     active_filename = ""
     try:
         state = ensure_models_state(runtime)
         active_model = get_model_by_id(state, str(state.get("active_model_id") or ""))
     except Exception:
         active_model = None
-
     if isinstance(active_model, dict):
         active_filename = str(active_model.get("filename") or "")
         active_settings = normalize_model_settings(active_model.get("settings"), filename=active_filename)
@@ -1132,12 +1006,17 @@ async def _build_llama_launch_args(runtime: RuntimeConfig) -> list[str] | None:
         if vision_required:
             mmproj_path = await _ensure_mmproj_for_launch(runtime, active_model, installed_family)
             if mmproj_path is None:
-                return None  # Signal: don't launch, retry later.
-
-    # Resolve mmap mode (including auto heuristic for A3B).
-    no_mmap = _resolve_no_mmap(runtime, active_filename, installed_family)
-
-    # Read tuning settings from environment (user-overridable).
+                return None
+    no_mmap_env = str(build_llama_memory_loading_status(runtime).get("no_mmap_env") or "auto")
+    device_class = classify_runtime_device(
+        pi_model_name=_read_pi_device_model_name(),
+        total_memory_bytes=_detect_total_memory_bytes(),
+    )
+    marker = read_llama_runtime_bundle_marker(runtime)
+    no_mmap = _orchestrator.resolve_no_mmap(
+        {"no_mmap_env": no_mmap_env}, active_filename, installed_family,
+        device_class=device_class, bundle_marker=marker,
+    )
     return build_llama_server_args(
         llama_server_bin=runtime.base_dir / "llama" / "bin" / "llama-server",
         model_path=runtime.model_path,
@@ -1571,44 +1450,31 @@ async def activate_model(
         return False, "model_not_ready", False
     # Auto-switch runtime before committing the model state so a failed
     # install doesn't leave Potato pointing at an unrunnable model.
-    preferred = recommended_runtime_for_model(filename)
     current = _detect_installed_runtime_family(runtime)
-    # GGUF models can't run on litert — fall back to llama_cpp.
-    if not preferred and current == "litert" and model_format_for_filename(filename) == "gguf":
-        preferred = "llama_cpp"
-    if preferred:
-        device_class = classify_runtime_device(
-            pi_model_name=_read_pi_device_model_name(),
-        )
-        compat = check_runtime_device_compatibility(device_class, preferred)
-        if not compat.get("compatible", True):
-            # If the model format requires this specific runtime and it's
-            # incompatible with the device, activation must fail outright.
-            fmt = model_format_for_filename(filename)
-            if (fmt == "litertlm" and preferred == "litert") or (fmt == "gguf" and preferred in LLAMA_SERVER_RUNTIME_FAMILIES):
-                logger.error(
-                    "Cannot activate %s: required runtime %s is incompatible with device (%s)",
-                    filename, preferred, compat.get("reason", "incompatible"),
-                )
-                return False, "incompatible_runtime", False
-            logger.info(
-                "Skipping auto-switch to %s for %s: %s",
-                preferred, filename, compat.get("reason", "incompatible"),
-            )
-            preferred = None
-    if preferred:
-        if current and current != preferred:
-            slot = find_runtime_slot_by_family(runtime, preferred)
-            if slot is not None:
-                slot_path = Path(slot["path"])
-                logger.info("Auto-switching runtime %s -> %s for model %s", current, preferred, filename)
-                async with app.state.llama_runtime_switch_lock:
-                    result = await install_llama_runtime_bundle(runtime, slot_path)
-                if not isinstance(result, dict) or not result.get("ok", False):
-                    reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
-                    logger.error("Runtime auto-switch failed during activation: %s", reason)
-                    return False, "runtime_switch_failed", False
-                write_llama_runtime_bundle_marker(runtime, slot)
+    device_class = classify_runtime_device(pi_model_name=_read_pi_device_model_name())
+    fmt = model_format_for_filename(filename)
+    should_switch, switch_reason, preferred = _orchestrator.prepare_activation_runtime(
+        model_filename=filename,
+        model_format=fmt,
+        current_family=current,
+        device_class=device_class,
+        runtimes_dir=runtime.base_dir / "runtimes",
+    )
+    if switch_reason == "incompatible_runtime":
+        logger.error("Cannot activate %s: required runtime incompatible with device", filename)
+        return False, "incompatible_runtime", False
+    if should_switch and preferred:
+        slot = find_runtime_slot_by_family(runtime, preferred)
+        if slot is not None:
+            slot_path = Path(slot["path"])
+            logger.info("Auto-switching runtime %s -> %s for model %s", current, preferred, filename)
+            async with app.state.llama_runtime_switch_lock:
+                result = await install_llama_runtime_bundle(runtime, slot_path)
+            if not isinstance(result, dict) or not result.get("ok", False):
+                reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
+                logger.error("Runtime auto-switch failed during activation: %s", reason)
+                return False, "runtime_switch_failed", False
+            write_llama_runtime_bundle_marker(runtime, slot)
 
     state["active_model_id"] = model_id
     target["status"] = "ready"
@@ -1798,67 +1664,51 @@ async def orchestrator_loop(app: FastAPI, runtime: RuntimeConfig) -> None:
                         model_id=str(models_state.get("default_model_id") or "default"),
                     )
 
-            # Llama process management: always runs.
-            # Uses runtime.model_path (already resolved, no JSON read).
-            active_model_path = runtime.model_path
-            active_model_is_present = False
-            try:
-                active_model_is_present = active_model_path.exists() and active_model_path.stat().st_size > 0
-            except OSError:
-                active_model_is_present = False
+            # Llama process management: delegated to inferno orchestrator.
+            installed_family = _detect_installed_runtime_family(runtime)
+            switch_lock = getattr(app.state, "llama_runtime_switch_lock", None)
 
-            if active_model_is_present:
-                # Reset failure counter when the active model changes (user switched models).
-                current_model_key = str(active_model_path)
-                if getattr(app.state, "_llama_failure_model", None) != current_model_key:
-                    app.state.llama_consecutive_failures = 0
-                    app.state._llama_failure_model = current_model_key
+            async def _launch_llama() -> Any | None:
+                if not runtime.start_llama_script.exists():
+                    logger.warning("start script missing for family=%s", installed_family)
+                    return None
+                await terminate_stray_llama_processes(runtime)
+                launch_args = await _build_llama_launch_args(runtime)
+                if launch_args is None:
+                    logger.warning("Skipping llama-server launch — required projector unavailable (will retry)")
+                    return None
+                return await asyncio.create_subprocess_exec(
+                    str(runtime.start_llama_script), *launch_args, env=_runtime_env(runtime),
+                )
 
-                llama_process = app.state.llama_process
-                if llama_process is None or llama_process.returncode is not None:
-                    # Count the previous process's failure BEFORE starting a new one.
-                    # Null out the reference so the same dead process isn't re-counted.
-                    if llama_process is not None and llama_process.returncode is not None and llama_process.returncode != 0:
-                        app.state.llama_consecutive_failures += 1
-                        app.state.llama_process = None
-                        if app.state.llama_consecutive_failures == LLAMA_MAX_CONSECUTIVE_FAILURES:
-                            logger.error(
-                                "llama-server failed %d times in a row — stopping restart attempts (model may be corrupt)",
-                                app.state.llama_consecutive_failures,
-                            )
+            async def _launch_litert() -> Any:
+                await terminate_stray_litert_processes(runtime)
+                return await asyncio.create_subprocess_exec(
+                    str(runtime.start_litert_script), env=_runtime_env(runtime),
+                )
 
-                    if app.state.llama_consecutive_failures >= LLAMA_MAX_CONSECUTIVE_FAILURES:
-                        pass  # Limit reached — don't restart.
-                    else:
-                        installed_family = _detect_installed_runtime_family(runtime)
-                        if installed_family == "litert" and runtime.start_litert_script and runtime.start_litert_script.exists():
-                            await terminate_stray_litert_processes(runtime)
-                            app.state.llama_process = await asyncio.create_subprocess_exec(
-                                str(runtime.start_litert_script),
-                                env=_runtime_env(runtime),
-                            )
-                            logger.info("Started litert adapter process")
-                        elif runtime.start_llama_script.exists():
-                            await terminate_stray_llama_processes(runtime)
-                            launch_args = await _build_llama_launch_args(runtime)
-                            if launch_args is None:
-                                logger.warning("Skipping llama-server launch — required projector unavailable (will retry)")
-                            else:
-                                app.state.llama_process = await asyncio.create_subprocess_exec(
-                                    str(runtime.start_llama_script),
-                                    *launch_args,
-                                    env=_runtime_env(runtime),
-                                )
-                                logger.info("Started llama-server process")
-                        else:
-                            logger.warning("start script missing for family=%s", installed_family)
+            launch_litert = None
+            if installed_family == "litert" and runtime.start_litert_script and runtime.start_litert_script.exists():
+                launch_litert = _launch_litert
 
-                readiness = await refresh_llama_readiness(app, runtime, active_model_path=active_model_path)
-                if readiness.get("ready"):
-                    app.state.llama_consecutive_failures = 0
-            else:
-                reset_llama_readiness_state(app, reason="model_missing")
-                app.state.llama_consecutive_failures = 0
+            tick_result = await _orchestrator.run_inference_tick(
+                process=app.state.llama_process,
+                consecutive_failures=app.state.llama_consecutive_failures,
+                failure_model_key=getattr(app.state, "_llama_failure_model", None),
+                failure_runtime_key=getattr(app.state, "_llama_failure_runtime", None),
+                readiness=getattr(app.state, "llama_readiness_state", None) or {},
+                model_path=runtime.model_path,
+                base_url=runtime.llama_base_url,
+                installed_family=installed_family,
+                launch_llama_fn=_launch_llama,
+                launch_litert_fn=launch_litert,
+                switch_in_progress=bool(switch_lock and switch_lock.locked()),
+            )
+            app.state.llama_process = tick_result.process
+            app.state.llama_consecutive_failures = tick_result.consecutive_failures
+            app.state._llama_failure_model = tick_result.failure_model_key
+            app.state._llama_failure_runtime = tick_result.failure_runtime_key
+            app.state.llama_readiness_state = tick_result.readiness
 
             # First-boot auto-update: check once, apply if available, then never again.
             # Gated on llama READY — won't fire until the model is loaded and healthy.
