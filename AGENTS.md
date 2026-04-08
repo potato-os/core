@@ -6,7 +6,7 @@ Core application code lives in `core/`:
 - `core/main.py`: FastAPI entrypoint, API routes, orchestrator loop, lifespan.
 - `core/model_state.py`: Model registry, settings persistence, projector helpers.
 - `core/runtime_state.py`: Runtime config, dual-runtime slot discovery, system metrics, power calibration.
-- `core/inferno/`: Inference layer — backend proxy, model family classification, LiteRT adapter, launch config builder. See `core/inferno/__init__.py` for boundary contract.
+- `inferno` (external package, [`potato-os/inferno`](https://github.com/potato-os/inferno)): Inference layer — backend proxy, model family classification, LiteRT adapter, launch config builder, model registry, runtime management, orchestration. Installed via `requirements.txt`.
 - `core/assets/`: Frontend — `index.html`, `shell.css`, `shell.js` (platform shell), vendor libs.
 - `core/rig_envelope.py`: RIG step envelope validation (MS/TS contract checks).
 
@@ -66,6 +66,8 @@ These commands are written for a **macOS dev environment**. `COPYFILE_DISABLE=1`
     --rsync-path="SUDO_ASKPASS=/opt/potato/bin/askpass.sh sudo -A rsync" \
     -e "ssh -o StrictHostKeyChecking=accept-new" \
     core/ pi@potato.local:/opt/potato/core/
+  sshpass -e ssh pi@potato.local \
+    "echo raspberry | sudo -S /opt/potato/venv/bin/pip install -r /opt/potato/core/requirements.txt"
   ```
 - Fast apps deploy:
   ```

@@ -17,32 +17,20 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-try:
-    from core.inferno import (
-        BackendProxyError,
-        ChatRepositoryManager,
-        FakeLlamaRepository,
-        LlamaCppRepository,
-        build_llama_server_args,
-    )
-    from core.inferno import orchestrator as _orchestrator
-except ModuleNotFoundError:
-    from inferno import (  # type: ignore[no-redef]
-        BackendProxyError,
-        ChatRepositoryManager,
-        FakeLlamaRepository,
-        LlamaCppRepository,
-        build_llama_server_args,
-    )
-    from inferno import orchestrator as _orchestrator  # type: ignore[no-redef]
+from inferno import (
+    BackendProxyError,
+    ChatRepositoryManager,
+    FakeLlamaRepository,
+    LlamaCppRepository,
+    build_llama_server_args,
+    is_gemma4_filename,
+    is_qwen35_filename,
+    projector_repo_for_model,
+    recommended_runtime_for_model,
+)
+from inferno import orchestrator as _orchestrator
 
 try:
-    from core.inferno import (
-        is_gemma4_filename,
-        is_qwen35_filename,
-        projector_repo_for_model,
-        recommended_runtime_for_model,
-    )
     from core.model_state import (
         DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,
@@ -167,12 +155,6 @@ try:
         _run_vcgencmd,
     )
 except ModuleNotFoundError:
-    from inferno import (  # type: ignore[no-redef]
-        is_gemma4_filename,
-        is_qwen35_filename,
-        projector_repo_for_model,
-        recommended_runtime_for_model,
-    )
     from model_state import (  # type: ignore[no-redef]
         DEFAULT_MODEL_CHAT_SETTINGS,
         MODEL_FILENAME,

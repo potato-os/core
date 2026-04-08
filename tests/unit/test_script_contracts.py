@@ -8,7 +8,7 @@ from pathlib import Path
 
 def test_start_llama_is_thin_wrapper():
     """start_llama.sh must be a thin wrapper that execs $@ — all business
-    logic lives in core.inferno.launch_config (tested in test_launch_config.py)."""
+    logic lives in inferno.launch_config (tested in test_launch_config.py)."""
     script = Path("bin/start_llama.sh").read_text(encoding="utf-8")
 
     assert 'exec "$@"' in script
@@ -19,7 +19,7 @@ def test_start_llama_is_thin_wrapper():
 def test_start_llama_launch_config_has_required_defaults():
     """The Python launch config builder must use the same defaults that the
     old shell script used (q8_0 KV cache, 16384 ctx, etc.)."""
-    from core.inferno.launch_config import build_llama_server_args
+    from inferno.launch_config import build_llama_server_args
 
     args = build_llama_server_args(
         llama_server_bin="/bin/llama-server",
