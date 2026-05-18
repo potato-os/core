@@ -80,6 +80,7 @@ try:
         apply_staged_update,
         is_update_safe,
         mark_first_boot_update_done,
+        provision_litert_runtime,
         read_first_boot_update_done,
         signal_service_restart,
         staging_dir,
@@ -204,6 +205,7 @@ except ModuleNotFoundError:
         apply_staged_update,
         is_update_safe,
         mark_first_boot_update_done,
+        provision_litert_runtime,
         read_first_boot_update_done,
         signal_service_restart,
         staging_dir,
@@ -1804,7 +1806,8 @@ def create_app(runtime: RuntimeConfig | None = None, enable_orchestrator: bool |
         switched, reason = await ensure_compatible_runtime(app.state.runtime)
         if switched:
             logger.info("Runtime auto-switched at startup: %s", reason)
-        detect_post_update_state(app.state.runtime)
+        if detect_post_update_state(app.state.runtime):
+            await provision_litert_runtime(app.state.runtime)
         ensure_models_state(app.state.runtime)
         prime_system_metrics_counters()
         app.state.system_metrics_snapshot = collect_system_metrics_snapshot()

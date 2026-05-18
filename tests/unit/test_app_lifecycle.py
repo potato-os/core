@@ -89,6 +89,14 @@ def test_app_lifespan_runs_startup_and_shutdown_hooks(
         startup_events.append("ensure_models_state")
         return {}
 
+    def _detect_post_update_state(_runtime: main.RuntimeConfig) -> bool:
+        startup_events.append("detect_post_update_state")
+        return False
+
+    async def _provision_litert_runtime(_runtime: main.RuntimeConfig) -> dict[str, Any]:
+        startup_events.append("provision_litert_runtime")
+        return {"provisioned": True}
+
     def _prime_system_metrics_counters() -> None:
         startup_events.append("prime_system_metrics_counters")
 
@@ -103,6 +111,8 @@ def test_app_lifespan_runs_startup_and_shutdown_hooks(
         return task
 
     monkeypatch.setattr(main, "ensure_models_state", _ensure_models_state)
+    monkeypatch.setattr(main, "detect_post_update_state", _detect_post_update_state)
+    monkeypatch.setattr(main, "provision_litert_runtime", _provision_litert_runtime)
     monkeypatch.setattr(main, "prime_system_metrics_counters", _prime_system_metrics_counters)
     monkeypatch.setattr(main, "collect_system_metrics_snapshot", _collect_system_metrics_snapshot)
     monkeypatch.setattr(main, "get_monotonic_time", lambda: 123.0)
@@ -117,6 +127,7 @@ def test_app_lifespan_runs_startup_and_shutdown_hooks(
         assert app.state.startup_monotonic == 123.0
         assert app.state.system_metrics_snapshot == {"cpu_percent": 12.5}
         assert startup_events == [
+            "detect_post_update_state",
             "ensure_models_state",
             "prime_system_metrics_counters",
             "collect_system_metrics_snapshot",
@@ -132,6 +143,40 @@ def test_app_lifespan_runs_startup_and_shutdown_hooks(
     assert download_task.awaited is True
     assert llama_process.terminated is True
     assert llama_process.waited is True
+
+
+def test_app_lifespan_runs_litert_provisioning_after_post_update(
+    runtime: main.RuntimeConfig,
+    monkeypatch,
+) -> None:
+    startup_events: list[str] = []
+    created_tasks: list[_FakeTask] = []
+
+    def _create_task(coro: Any, *, name: str | None = None) -> _FakeTask:
+        coro.close()
+        task = _FakeTask(name or "unnamed")
+        created_tasks.append(task)
+        return task
+
+    async def _provision_litert_runtime(_runtime: main.RuntimeConfig) -> dict[str, Any]:
+        startup_events.append("provision_litert_runtime")
+        return {"provisioned": True}
+
+    async def _ensure_compatible_runtime(_runtime: main.RuntimeConfig) -> tuple[bool, str]:
+        return False, "ok"
+
+    monkeypatch.setattr(main, "ensure_compatible_runtime", _ensure_compatible_runtime)
+    monkeypatch.setattr(main, "detect_post_update_state", lambda _runtime: True)
+    monkeypatch.setattr(main, "provision_litert_runtime", _provision_litert_runtime)
+    monkeypatch.setattr(main, "ensure_models_state", lambda _runtime: {})
+    monkeypatch.setattr(main, "prime_system_metrics_counters", lambda: None)
+    monkeypatch.setattr(main, "collect_system_metrics_snapshot", lambda: {})
+    monkeypatch.setattr(main.asyncio, "create_task", _create_task)
+
+    app = main.create_app(runtime=runtime, enable_orchestrator=False)
+
+    with TestClient(app):
+        assert startup_events == ["provision_litert_runtime"]
 
 
 def test_lifespan_shutdown_escalates_to_kill_on_timeout(monkeypatch) -> None:

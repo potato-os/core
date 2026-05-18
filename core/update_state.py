@@ -10,6 +10,7 @@ import stat
 import subprocess
 import tarfile
 import time
+from ctypes.util import find_library
 from pathlib import Path
 from typing import Any, Callable
 
@@ -265,6 +266,7 @@ async def check_for_update(runtime: RuntimeConfig) -> dict[str, Any]:
 UPDATE_DOWNLOAD_TIMEOUT_SECONDS = 600
 UPDATE_STAGING_DIR_NAME = ".update_staging"
 UPDATE_APPLY_DIRS = ("core", "bin", "apps")
+LITERT_PIP_PACKAGE = "litert-lm-api"
 
 EXECUTION_ACTIVE_STATES = frozenset({"downloading", "staging", "applying", "restart_pending"})
 
@@ -505,6 +507,7 @@ async def apply_staged_update(runtime: RuntimeConfig, staged_dir: Path) -> None:
     try:
         await asyncio.to_thread(_apply)
         await install_requirements(runtime)
+        await provision_litert_runtime(runtime)
     except Exception:
         logger.warning("Apply failed, restoring backup", exc_info=True)
         try:
@@ -532,6 +535,105 @@ async def install_requirements(runtime: RuntimeConfig) -> None:
         raise RuntimeError(
             f"pip install failed (exit {proc.returncode}): {stderr.decode(errors='replace').strip()}"
         )
+
+
+async def _run_update_command(*args: str) -> tuple[int, str, str]:
+    import asyncio
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return proc.returncode, stdout.decode(errors="replace"), stderr.decode(errors="replace")
+
+
+def _litert_runtime_json_path(runtime: RuntimeConfig) -> Path:
+    return runtime.base_dir / "runtimes" / "litert" / "runtime.json"
+
+
+def _has_litert_native_dependency() -> bool:
+    return bool(find_library("vulkan"))
+
+
+async def provision_litert_runtime(runtime: RuntimeConfig) -> dict[str, Any]:
+    """Best-effort provisioning for LiteRT on devices upgraded via OTA.
+
+    Full installs run install_dev.sh, but OTA applies only core/bin/apps plus
+    Python requirements. Keep this non-fatal so missing apt privileges or
+    unavailable wheels never roll back an otherwise valid update.
+    """
+    machine = os.uname().machine.lower() if hasattr(os, "uname") else ""
+    if machine not in {"aarch64", "arm64"}:
+        return {"provisioned": False, "reason": "unsupported_arch", "arch": machine}
+
+    venv_pip = runtime.base_dir / "venv" / "bin" / "pip"
+    if not venv_pip.exists():
+        return {"provisioned": False, "reason": "missing_pip"}
+
+    result: dict[str, Any] = {
+        "provisioned": False,
+        "reason": None,
+        "apt": "skipped",
+        "native_dependency": "missing",
+        "pip": "skipped",
+        "version": None,
+    }
+
+    # libvulkan1 is required by litert-lm-api's native library. OTA may not have
+    # permission to install apt packages, so treat this as a best-effort repair.
+    native_ready = _has_litert_native_dependency()
+    result["native_dependency"] = "present" if native_ready else "missing"
+    if not native_ready and shutil.which("sudo") and shutil.which("apt-get"):
+        code, _stdout, stderr = await _run_update_command(
+            "sudo", "-n", "apt-get", "install", "-y", "libvulkan1"
+        )
+        result["apt"] = "installed" if code == 0 else "failed"
+        if code != 0:
+            logger.warning("LiteRT apt dependency provisioning failed: %s", stderr.strip())
+        native_ready = code == 0 and _has_litert_native_dependency()
+        result["native_dependency"] = "present" if native_ready else "missing"
+
+    if not native_ready:
+        result["reason"] = "native_dependency_missing"
+        logger.warning("LiteRT runtime slot not provisioned because libvulkan is unavailable")
+        return result
+
+    code, _stdout, stderr = await _run_update_command(str(venv_pip), "install", LITERT_PIP_PACKAGE)
+    result["pip"] = "installed" if code == 0 else "failed"
+    if code != 0:
+        result["reason"] = "pip_install_failed"
+        logger.warning("LiteRT Python dependency provisioning failed: %s", stderr.strip())
+        return result
+
+    code, stdout, stderr = await _run_update_command(str(venv_pip), "show", LITERT_PIP_PACKAGE)
+    if code != 0:
+        result["reason"] = "package_not_found_after_install"
+        logger.warning("LiteRT package not found after install: %s", stderr.strip())
+        return result
+
+    version = ""
+    for line in stdout.splitlines():
+        if line.startswith("Version:"):
+            version = line.split(":", 1)[1].strip()
+            break
+    if not version:
+        result["reason"] = "missing_package_version"
+        return result
+
+    runtime_json = _litert_runtime_json_path(runtime)
+    runtime_json.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(
+        runtime_json,
+        {
+            "family": "litert",
+            "runtime_type": "litert_adapter",
+            "version": version,
+        },
+    )
+    result.update({"provisioned": True, "reason": "provisioned", "version": version})
+    return result
 
 
 async def signal_service_restart(runtime: RuntimeConfig) -> None:
