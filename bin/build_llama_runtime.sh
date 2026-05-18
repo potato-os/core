@@ -277,14 +277,20 @@ for so in "${build_dir}/lib/"*.so* "${build_dir}/bin/"*.so*; do
 done
 shopt -u nullglob
 
-# Universal profile: cmake MODULE libraries (ggml-cpu-armv8*.so) may land in
-# subdirectories of the build tree instead of bin/ or lib/. Copy any we missed.
-if [ "${BUILD_PROFILE}" = "universal" ]; then
-  while IFS= read -r so; do
-    base="$(basename "${so}")"
-    [ ! -e "${slot_dir}/lib/${base}" ] && cp -P "${so}" "${slot_dir}/lib/"
-  done < <(find "${build_dir}" -name 'libggml*.so*' -type f 2>/dev/null)
-fi
+# Upstream layout shifts over time. Required shared libs can land outside the
+# top-level build lib/bin dirs (for example examples/mtmd/libmtmd.so). Include
+# both real files and SONAME symlinks, and dereference symlinks so every loader
+# name (for example libmtmd.so.0) exists in the packaged lib/ directory.
+while IFS= read -r so; do
+  base="$(basename "${so}")"
+  [ ! -e "${slot_dir}/lib/${base}" ] && cp -L "${so}" "${slot_dir}/lib/${base}"
+done < <(
+  find "${build_dir}" \( -type f -o -type l \) \( \
+    -name 'libmtmd*.so*' -o \
+    -name 'libllama*.so*' -o \
+    -name 'libggml*.so*' \
+  \) 2>/dev/null
+)
 
 copy_runtime_deps "${slot_dir}/lib" "${slot_dir}/bin/llama-server" "${slot_dir}/bin/llama-bench" "${slot_dir}/lib/"*.so*
 

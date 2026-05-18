@@ -81,6 +81,32 @@ def test_ensure_model_script_keeps_shell_functions_outside_python_heredoc():
     assert "free_space_bytes()" not in python_block
 
 
+def test_build_llama_runtime_collects_nested_shared_libraries():
+    """Upstream may place required .so files outside top-level build lib/bin dirs."""
+    script = (REPO_ROOT / "bin" / "build_llama_runtime.sh").read_text(encoding="utf-8")
+
+    assert "find \"${build_dir}\"" in script
+    assert "\\( -type f -o -type l \\)" in script
+    assert "cp -L \"${so}\" \"${slot_dir}/lib/${base}\"" in script
+    assert "libmtmd*.so*" in script
+    assert "libllama*.so*" in script
+    assert "libggml*.so*" in script
+
+
+def test_remote_runtime_build_syncs_install_requirements():
+    """The remote build checkout must be complete enough to run install_dev.sh."""
+    script = (REPO_ROOT / "bin" / "build_and_publish_remote.sh").read_text(encoding="utf-8")
+
+    assert "--include 'requirements.txt'" in script
+
+
+def test_install_dev_installs_litert_native_runtime_dependencies():
+    """LiteRT-LM 0.12 needs libvulkan.so.1 available even for CPU startup."""
+    script = (REPO_ROOT / "bin" / "install_dev.sh").read_text(encoding="utf-8")
+
+    assert "libvulkan1" in script
+
+
 def test_uninstall_script_executes_pi_cleanup_without_package_removal(tmp_path: Path):
     fakebin = tmp_path / "fakebin"
     fakebin.mkdir()
@@ -393,4 +419,3 @@ def test_prepare_imager_aborts_on_missing_app():
     script = (REPO_ROOT / "bin" / "prepare_imager_bundle.sh").read_text(encoding="utf-8")
     assert "ERROR: selected app missing from payload" in script
     assert "exit 1" in script
-

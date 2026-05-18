@@ -116,7 +116,8 @@ run_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
   wget \
   curl \
   jq \
-  rsync
+  rsync \
+  libvulkan1
 
 if [ "${POTATO_ENFORCE_HOSTNAME}" = "1" ]; then
   current_hostname="$(hostnamectl --static 2>/dev/null || hostname)"
