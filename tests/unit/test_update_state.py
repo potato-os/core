@@ -31,6 +31,7 @@ from core.update_state import (
     is_newer,
     is_update_safe,
     parse_version,
+    provision_litert_runtime,
     read_execution_state,
     read_update_state,
     signal_service_restart,
@@ -1046,6 +1047,25 @@ async def test_apply_staged_update_copies_requirements_txt(runtime):
 
 
 @pytest.mark.anyio
+async def test_apply_staged_update_runs_litert_provisioning(runtime, monkeypatch):
+    staged = staging_dir(runtime) / "extracted" / "potato-os-0.5.0"
+    (staged / "core").mkdir(parents=True)
+    (staged / "core" / "main.py").write_text("# new")
+    calls = 0
+
+    async def _mock_provision(_runtime):
+        nonlocal calls
+        calls += 1
+        return {"provisioned": True}
+
+    monkeypatch.setattr("core.update_state.provision_litert_runtime", _mock_provision)
+
+    await apply_staged_update(runtime, staged)
+
+    assert calls == 1
+
+
+@pytest.mark.anyio
 async def test_apply_staged_update_restores_on_pip_failure(runtime, monkeypatch):
     """If pip install fails after file copy, the old tree is restored."""
     # Set up old content
@@ -1104,6 +1124,117 @@ async def test_apply_staged_update_restores_on_copy_failure(runtime, monkeypatch
         await apply_staged_update(runtime, staged)
 
     assert (runtime.base_dir / "core" / "main.py").read_text() == "# old version"
+
+
+@pytest.mark.anyio
+async def test_provision_litert_runtime_creates_runtime_slot(runtime, monkeypatch):
+    (runtime.base_dir / "venv" / "bin").mkdir(parents=True)
+    (runtime.base_dir / "venv" / "bin" / "pip").write_text("#!/bin/sh\n")
+    calls: list[tuple[str, ...]] = []
+    native_checks = 0
+
+    class _Uname:
+        machine = "aarch64"
+
+    async def _mock_subprocess_exec(*args, **kwargs):
+        calls.append(tuple(str(a) for a in args))
+
+        class _MockProc:
+            returncode = 0
+
+            async def communicate(self):
+                if "show" in args:
+                    return b"Name: litert-lm-api\nVersion: 0.12.0\n", b""
+                return b"", b""
+
+        return _MockProc()
+
+    monkeypatch.setattr("core.update_state.os.uname", lambda: _Uname())
+    monkeypatch.setattr("core.update_state.shutil.which", lambda name: f"/usr/bin/{name}")
+
+    def _mock_native_dependency():
+        nonlocal native_checks
+        native_checks += 1
+        return native_checks > 1
+
+    monkeypatch.setattr("core.update_state._has_litert_native_dependency", _mock_native_dependency)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _mock_subprocess_exec)
+
+    result = await provision_litert_runtime(runtime)
+
+    runtime_json = runtime.base_dir / "runtimes" / "litert" / "runtime.json"
+    assert result["provisioned"] is True
+    assert json.loads(runtime_json.read_text()) == {
+        "family": "litert",
+        "runtime_type": "litert_adapter",
+        "version": "0.12.0",
+    }
+    assert any(call[:5] == ("sudo", "-n", "apt-get", "install", "-y") for call in calls)
+    assert any(call[-2:] == ("install", "litert-lm-api") for call in calls)
+
+
+@pytest.mark.anyio
+async def test_provision_litert_runtime_skips_slot_when_native_dependency_missing(runtime, monkeypatch):
+    (runtime.base_dir / "venv" / "bin").mkdir(parents=True)
+    (runtime.base_dir / "venv" / "bin" / "pip").write_text("#!/bin/sh\n")
+    calls: list[tuple[str, ...]] = []
+
+    class _Uname:
+        machine = "aarch64"
+
+    async def _mock_subprocess_exec(*args, **kwargs):
+        calls.append(tuple(str(a) for a in args))
+
+        class _MockProc:
+            returncode = 1
+
+            async def communicate(self):
+                return b"", b"sudo password required"
+
+        return _MockProc()
+
+    monkeypatch.setattr("core.update_state.os.uname", lambda: _Uname())
+    monkeypatch.setattr("core.update_state.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("core.update_state._has_litert_native_dependency", lambda: False)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _mock_subprocess_exec)
+
+    result = await provision_litert_runtime(runtime)
+
+    assert result["provisioned"] is False
+    assert result["reason"] == "native_dependency_missing"
+    assert result["apt"] == "failed"
+    assert result["pip"] == "skipped"
+    assert not (runtime.base_dir / "runtimes" / "litert" / "runtime.json").exists()
+    assert any(call[:5] == ("sudo", "-n", "apt-get", "install", "-y") for call in calls)
+
+
+@pytest.mark.anyio
+async def test_provision_litert_runtime_is_nonfatal_when_pip_install_fails(runtime, monkeypatch):
+    (runtime.base_dir / "venv" / "bin").mkdir(parents=True)
+    (runtime.base_dir / "venv" / "bin" / "pip").write_text("#!/bin/sh\n")
+
+    class _Uname:
+        machine = "aarch64"
+
+    async def _mock_subprocess_exec(*args, **kwargs):
+        class _MockProc:
+            returncode = 1 if "install" in args else 0
+
+            async def communicate(self):
+                return b"", b"no matching distribution"
+
+        return _MockProc()
+
+    monkeypatch.setattr("core.update_state.os.uname", lambda: _Uname())
+    monkeypatch.setattr("core.update_state.shutil.which", lambda name: None)
+    monkeypatch.setattr("core.update_state._has_litert_native_dependency", lambda: True)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _mock_subprocess_exec)
+
+    result = await provision_litert_runtime(runtime)
+
+    assert result["provisioned"] is False
+    assert result["reason"] == "pip_install_failed"
+    assert not (runtime.base_dir / "runtimes" / "litert" / "runtime.json").exists()
 
 
 # ---------------------------------------------------------------------------
