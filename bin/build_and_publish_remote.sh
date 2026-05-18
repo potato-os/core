@@ -130,6 +130,8 @@ _rsync --delete \
   --include 'systemd/***' \
   --include 'nginx/***' \
   --include 'tests/***' \
+  --include 'requirements.txt' \
+  --include 'requirements-dev.txt' \
   --include 'pyproject.toml' \
   --include 'playwright.config.js' \
   --include 'package.json' \
